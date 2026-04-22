@@ -1,0 +1,138 @@
+import { ThemedText } from '@/components/themed-text';
+import { ThemedView } from '@/components/themed-view';
+import { usePinStore } from '@/store/use-new-pin-store';
+import { router } from 'expo-router';
+import React, { useEffect, useRef } from 'react';
+import { StyleSheet, TextInput, useColorScheme, View } from 'react-native';
+import { Button } from 'react-native-paper';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
+
+const PIN_LENGTH = 6
+
+const COLORS = {
+    dark: { dotFilled: '#FFFFFF', dotEmpty: '#3A3A3C' },
+    light: { dotFilled: '#000000', dotEmpty: '#E5E5EA' },
+}
+
+const NewUserPage = () => {
+    const insets = useSafeAreaInsets();
+    const scheme = useColorScheme();
+    const isDark = scheme === 'dark'
+    const dotsColors = isDark ? COLORS.dark : COLORS.light
+
+    const { pin, setPin, isPinComplete } = usePinStore()
+    const inputRef = useRef<TextInput>(null)
+
+    useEffect(() => {
+        const timer = setTimeout(() => inputRef.current?.focus(), 100)
+        return () => clearTimeout(timer)
+    }, []);
+
+    return (
+        <ThemedView style={[styles.main, { paddingTop: insets.top * 2, paddingBottom: insets.bottom }]}>
+            <ThemedView style={styles.topContainer}>
+                <ThemedView style={styles.contextContainer}>
+                    <ThemedText style={styles.title}>
+                        Create your PIN
+                    </ThemedText>
+                    <ThemedText style={styles.description}>
+                        PINs can help you restore your account and keep your data encrypted with YaaHalaa.
+                    </ThemedText>
+                </ThemedView>
+                <View style={styles.dots}>
+                    {Array(PIN_LENGTH).fill(0).map((_, i) => (
+                        <View
+                            key={i}
+                            style={[
+                                styles.dot,
+                                { backgroundColor: i < pin.length ? dotsColors.dotFilled : dotsColors.dotEmpty },
+                                i < pin.length && styles.dotFilled,
+                            ]}
+                        />
+                    ))}
+                </View>
+                <TextInput
+                    ref={inputRef}
+                    value={pin}
+                    onChangeText={setPin}
+                    keyboardType="number-pad"
+                    autoFocus
+                    maxLength={PIN_LENGTH}
+                    secureTextEntry
+                    style={styles.hiddenInput}
+                    caretHidden
+                />
+            </ThemedView>
+            <ThemedView style={styles.bottomContainer}>
+                <Button
+                    mode="contained"
+                    disabled={!isPinComplete}
+                    onPress={() => router.push('/(newUser)/verify-new-pin-code')}
+                    buttonColor='#25D366'
+                    textColor='#ffffff'
+                >
+                    Next
+                </Button>
+            </ThemedView>
+        </ThemedView>
+    )
+}
+
+export default NewUserPage
+
+const styles = StyleSheet.create({
+    main: {
+        flex: 1,
+        paddingHorizontal: 16,
+        justifyContent: 'space-between'
+    },
+    topContainer: {
+        flex: 1,
+        flexDirection: 'column',
+        gap: 24
+    },
+    contextContainer: {
+        flexDirection: 'column',
+        justifyContent: 'flex-start',
+        alignItems: 'flex-start',
+        gap: 12
+    },
+    title: {
+        fontSize: 28,
+        fontWeight: '600',
+        lineHeight: 28
+    },
+    description: {
+        fontSize: 16,
+        lineHeight: 16,
+        color: 'gray'
+    },
+    bottomContainer: {
+        flexDirection: 'row',
+        alignItems: 'flex-end',
+        justifyContent: 'flex-end'
+    },
+    dots: {
+        flexDirection: 'row',
+        justifyContent: 'center',
+        gap: 16,
+        marginTop: 32
+    },
+    dot: {
+        width: 14,
+        height: 14,
+        borderRadius: 7
+    },
+    dotFilled: {
+        transform:
+            [
+                { scale: 1.1 }
+            ]
+    },
+    hiddenInput: {
+        position: 'absolute',
+        opacity: 0,
+        width: 0,
+        height: 0
+    },
+})

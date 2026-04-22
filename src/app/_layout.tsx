@@ -1,16 +1,29 @@
 import { DarkTheme, DefaultTheme, ThemeProvider } from '@react-navigation/native';
+import { Stack } from 'expo-router';
 import React from 'react';
 import { useColorScheme } from 'react-native';
+import { GestureHandlerRootView } from 'react-native-gesture-handler';
+import { PaperProvider } from 'react-native-paper';
 
-import { AnimatedSplashOverlay } from '@/components/animated-icon';
-import AppTabs from '@/components/app-tabs';
+const AppLayout = () => {
+    const colorScheme = useColorScheme();
 
-export default function TabLayout() {
-  const colorScheme = useColorScheme();
-  return (
-    <ThemeProvider value={colorScheme === 'dark' ? DarkTheme : DefaultTheme}>
-      <AnimatedSplashOverlay />
-      <AppTabs />
-    </ThemeProvider>
-  );
+    return (
+        <GestureHandlerRootView>
+            <PaperProvider>
+                <ThemeProvider value={colorScheme === 'dark' ? DarkTheme : DefaultTheme}>
+                    <Stack screenOptions={{ headerShown: false }}>
+                        {/* <Stack.Screen name="(auth)" options={{ animation: 'none', gestureEnabled: false }} />
+                        <Stack.Screen name="(complete-profile)" options={{ animation: 'none', gestureEnabled: false }} />
+                        <Stack.Screen name="(newUser)" options={{ animation: 'none', gestureEnabled: false }} />
+                        <Stack.Screen name="(oldUser)" options={{ animation: 'none', gestureEnabled: false }} /> */}
+                        <Stack.Screen name='(tabs)' options={{ headerShown: false }} />
+                        <Stack.Screen name='chatId' options={{ headerShown: false }} />
+                    </Stack>
+                </ThemeProvider>
+            </PaperProvider>
+        </GestureHandlerRootView>
+    )
 }
+
+export default AppLayout
