@@ -23,7 +23,10 @@ export default function AppTabs() {
 
       <NativeTabs.Trigger name="chats">
         <NativeTabs.Trigger.Label>Chats</NativeTabs.Trigger.Label>
-        <NativeTabs.Trigger.Icon md="chat" sf="message.fill" />
+        <NativeTabs.Trigger.Icon
+          src={require('@/assets/expo.icon/Assets/chats_icon.png')}
+          renderingMode="template"
+        />
       </NativeTabs.Trigger>
 
       <NativeTabs.Trigger name="archive">

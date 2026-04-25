@@ -1,9 +1,13 @@
 import { Colors } from "@/constants/theme";
 import { Message } from "@/types/messages";
+import * as Haptics from 'expo-haptics';
 import { Image } from "expo-image";
 import { StyleSheet, Text, TouchableWithoutFeedback, useColorScheme, View } from "react-native";
+import { Gesture, GestureDetector } from "react-native-gesture-handler";
 import { Icon, IconButton, TouchableRipple } from "react-native-paper";
+import Animated, { Extrapolation, interpolate, SlideInLeft, SlideInRight, SlideOutLeft, SlideOutRight, useAnimatedStyle, useSharedValue, withSpring, ZoomIn, ZoomOut } from "react-native-reanimated";
 import { Path, Svg } from 'react-native-svg';
+import { runOnJS } from "react-native-worklets";
 import PollComponent from "./poll-item";
 import { ThemedText } from "./themed-text";
 import { ThemedView } from "./themed-view";
@@ -16,6 +20,8 @@ type BubbleProps = {
     isSelected: boolean;
     onLongPress: () => void;
     onPress: () => void;
+    handleReply: (replyTo: string, replyMsg: string) => void;
+    selectedMessageIds: Set<string>;
 };
 
 const DARK = {
@@ -47,6 +53,10 @@ const LIGHT = {
 };
 
 const TAIL_PATH = "M1.533,2.568L8,11.193V0L2.812,0C1.042,0,0.474,1.156,1.533,2.568z";
+const MAX_SWIPE_TRANSLATION = 56;
+const SWIPE_HARD_LIMIT = 72;
+const SWIPE_RESISTANCE = 0.18;
+const AnimatedIconButton = Animated.createAnimatedComponent(IconButton);
 
 function Tail({ color, sent }: { color: string; sent: boolean }) {
     return (
@@ -66,7 +76,7 @@ function Tail({ color, sent }: { color: string; sent: boolean }) {
     );
 }
 
-function Bubble({ message, isDark, showTail = true, isSelected, onLongPress, onPress }: BubbleProps) {
+function Bubble({ message, isDark, showTail = true, isSelected, onLongPress, onPress, handleReply, selectedMessageIds }: BubbleProps) {
     const {
         message_id,
         sender_user_id,
@@ -87,6 +97,90 @@ function Bubble({ message, isDark, showTail = true, isSelected, onLongPress, onP
     const colors = Colors[scheme === 'unspecified' ? 'light' : scheme ?? 'light']
     const sent = sender_user_id === 'user_123';
     const bubbleColor = sent ? theme.sentBubble : theme.receivedBubble;
+    const swipeX = useSharedValue(0);
+
+    const reactionEmojis = ["👍", "❤️", "😂", "😮", "😢", "🙏"];
+
+    const swipeProgress = useAnimatedStyle(() => {
+        const progress = interpolate(
+            swipeX.value,
+            [0, MAX_SWIPE_TRANSLATION],
+            [0, 1],
+            Extrapolation.CLAMP
+        );
+
+        return {
+            opacity: progress,
+            transform: [
+                { translateX: interpolate(progress, [0, 1], [-18, 0], Extrapolation.CLAMP) },
+            ],
+        };
+    });
+
+    const replyButtonAnimatedStyle = useAnimatedStyle(() => {
+        const progress = interpolate(
+            swipeX.value,
+            [0, MAX_SWIPE_TRANSLATION],
+            [0, 1],
+            Extrapolation.CLAMP
+        );
+
+        return {
+            borderWidth: interpolate(progress, [0, 1], [0, 2], Extrapolation.CLAMP),
+            borderRadius: 999,
+        };
+    });
+
+    const bubbleAndTailAnimatedStyle = useAnimatedStyle(() => ({
+        transform: [{ translateX: swipeX.value }],
+    }));
+
+
+    const hasTriggered = useSharedValue(false);
+
+    const panGesture = Gesture.Pan()
+        .activeOffsetX([-12, 12])
+        .failOffsetY([-10, 10])
+        .onUpdate((event) => {
+            const nextTranslation = Math.max(0, event.translationX);
+            const resistedTranslation = nextTranslation <= MAX_SWIPE_TRANSLATION
+                ? nextTranslation
+                : MAX_SWIPE_TRANSLATION + (nextTranslation - MAX_SWIPE_TRANSLATION) * SWIPE_RESISTANCE;
+
+            swipeX.value = Math.min(SWIPE_HARD_LIMIT, resistedTranslation);
+
+            if (!hasTriggered.value && resistedTranslation >= MAX_SWIPE_TRANSLATION) {
+                hasTriggered.value = true;
+                runOnJS(Haptics.impactAsync)(Haptics.ImpactFeedbackStyle.Medium);
+            }
+        })
+        .onEnd((event) => {
+            const finalTranslation = Math.max(0, event.translationX);
+            const finalResistedTranslation = finalTranslation <= MAX_SWIPE_TRANSLATION
+                ? finalTranslation
+                : MAX_SWIPE_TRANSLATION + (finalTranslation - MAX_SWIPE_TRANSLATION) * SWIPE_RESISTANCE;
+
+            if (finalResistedTranslation >= MAX_SWIPE_TRANSLATION) {
+                runOnJS(handleReply)(sender_user_id, message_text_content || '');
+            }
+
+            hasTriggered.value = false;
+            swipeX.value = withSpring(0, {
+                damping: 22,
+                stiffness: 240,
+                mass: 0.7,
+            });
+        })
+        .onFinalize(() => {
+            if (hasTriggered.value) {
+                hasTriggered.value = false;
+            }
+            swipeX.value = withSpring(0, {
+                damping: 22,
+                stiffness: 240,
+                mass: 0.7,
+            });
+        });
 
     return (
         <TouchableWithoutFeedback
@@ -100,190 +194,188 @@ function Bubble({ message, isDark, showTail = true, isSelected, onLongPress, onP
                     sent ? styles.rowSent : styles.rowReceived,
                 ]}
             >
-                {/* this is the icon to animate from left to right */}
-                <ThemedView style={styles.swipeReplyButton}>
-                    <IconButton
+                {isSelected && selectedMessageIds.size < 2 && (
+                    <Animated.View 
+                    key={'animated-emojis-container'} 
+                    entering={sent ? SlideInRight.duration(100) : SlideInLeft.duration(100)} 
+                    exiting={sent ? SlideOutRight.duration(100) : SlideOutLeft.duration(100)}
+                    style={[styles.reactionContainer, { backgroundColor: theme.cardReceived, left: sent ? undefined : 30, right: sent ? 30 : undefined }]}>
+                        {reactionEmojis.map((item, index) => (
+                            <Animated.View key={`animated-emoji-${index}`} entering={ZoomIn.delay(index * 20).duration(100)} exiting={ZoomOut.delay(index * 20).duration(100)}>
+                                <TouchableRipple>
+                                    <ThemedText style={styles.emojis}>{item}</ThemedText>
+                                </TouchableRipple>
+                            </Animated.View>
+                        ))}
+                    </Animated.View>
+                )}
+                {isSelected && (
+                    <ThemedView style={styles.selectOverlayer} />
+                )}
+                <Animated.View pointerEvents="none" style={[styles.swipeReplyButton, swipeProgress]}>
+                    <AnimatedIconButton
                         icon="arrow-left-top"
                         iconColor={isDark ? '#ffffff' : '#000000'}
                         size={20}
                         mode="contained"
                         containerColor={isDark ? 'rgba(255,255,255,0.07)' : 'rgba(0,0,0,0.07)'}
                         onPress={() => console.log('Forward Pressed')}
-                        style={{ borderWidth: 2, borderColor: colors.card }}
+                        style={[styles.replySwipeIcon, { borderColor: colors.card }, replyButtonAnimatedStyle]}
                     />
-                </ThemedView>
-                {isSelected && (
-                    <ThemedView style={styles.selectOverlayer} />
-                )}
-                {sent && attached_media && (
-                    <IconButton
-                        icon="arrow-right-top"
-                        iconColor={isDark ? '#ffffff' : '#000000'}
-                        size={20}
-                        mode="contained"
-                        containerColor={isDark ? 'rgba(255,255,255,0.07)' : 'rgba(0,0,0,0.07)'}
-                        onPress={() => console.log('Forward Pressed')}
-                        style={{ marginVertical: 'auto', marginRight: 10 }}
-                    />
-                )}
-                {!sent && (showTail
-                    ? <Tail color={bubbleColor} sent={false} />
-                    : <View style={styles.tailSpacer} />
-                )}
-                <View style={[
-                    styles.bubble,
-                    { backgroundColor: bubbleColor, paddingHorizontal: attached_media ? 4 : 10 },
-                    !sent && showTail && styles.receivedBubbleWithTail,
-                    sent && showTail && styles.sentBubbleWithTail,
-                ]}>
-                    {is_forward_message && (
-                        <ThemedView style={styles.forwardContainer}>
-                            <Icon
-                                source="arrow-right-top"
-                                color={colors.textSecondary}
-                                size={16}
-                            />
-                            <ThemedText style={[styles.forwardText, { color: colors.textSecondary }]}>Forwarded</ThemedText>
-                        </ThemedView>
-                    )}
-                    {reply_message && (
-                        <ThemedView style={[styles.replyContainer, { backgroundColor: sent ? theme.cardSent : theme.cardReceived, borderLeftColor: '#25D366', marginHorizontal: attached_media ? 0 : -4 }]}>
-                            <ThemedText style={{ fontSize: 14 }}>{reply_message.original_sender_user_id}</ThemedText>
-                            <ThemedText numberOfLines={2} ellipsizeMode='tail' style={{ fontSize: 12, color: colors.textSecondary, minWidth: 0, lineHeight: 16 }}>
-                                {reply_message.original_message_text}
-                            </ThemedText>
-                        </ThemedView>
-                    )}
-                    {open_graph_data && (
-                        <ThemedView style={[styles.openGraphContainer, { backgroundColor: sent ? theme.cardSent : theme.cardReceived }]}>
-                            <ThemedText style={styles.openGraphTitle}>{open_graph_data.og_title}</ThemedText>
-                            <ThemedText numberOfLines={3} ellipsizeMode="tail" style={[styles.openGraphDescription, { color: colors.textSecondary }]}>{open_graph_data.og_description}</ThemedText>
-                            <ThemedView style={styles.openGraphLinkContainer}>
-                                <Icon
-                                    source="link"
-                                    color={colors.textSecondary}
-                                    size={13}
-                                />
-                                <ThemedText style={[styles.openGraphLink, { color: colors.textSecondary }]}>{open_graph_data.og_url}</ThemedText>
-                            </ThemedView>
-                        </ThemedView>
-                    )}
-                    {poll && (
-                        <ThemedView style={styles.pollContentContainer}>
-                            <ThemedView style={styles.pollHeader}>
-                                <Icon
-                                    source={poll.poll_multiple_answers ? "checkbox-multiple-marked-circle" : "checkbox-marked-circle"}
-                                    color={colors.textSecondary}
-                                    size={13}
-                                />
-                                <ThemedText style={[styles.pollHeaderText, { color: colors.textSecondary }]}>{poll.poll_multiple_answers ? 'Select one or more' : 'Select one only'}</ThemedText>
-                            </ThemedView>
-                            <PollComponent
-                                poll={{
-                                    poll_id: poll.poll_id,
-                                    poll_question: poll.poll_question,
-                                    poll_options: poll.poll_options.map(opt =>
-                                        typeof opt === 'string'
-                                            ? { text: opt, votes: 0, user_voted: false }
-                                            : opt
-                                    ),
-                                    poll_multiple_answers: poll.poll_multiple_answers,
-                                    total_votes: poll.total_votes || 0,
-                                    user_has_voted: poll.user_has_voted || false
-                                }}
-                                onVote={(selectedOptions) => {
-                                    console.log('User voted for options:', selectedOptions);
-                                }}
-                                isDark={isDark}
-                                isSent={sent}
-                            />
-                        </ThemedView>
-                    )}
-                    {attached_media === 'contact' && (
-                        <ThemedView style={[styles.contactCard, { backgroundColor: sent ? theme.cardSent : theme.cardReceived }]}>
-                            <ThemedView style={styles.contactContentContainer}>
-                                <View style={[styles.avatar, { backgroundColor: scheme === 'dark' ? '#052e16' : '#dcfce7' }]}>
-                                    <Text style={[styles.avatarText, { color: scheme === 'dark' ? '#4ade80' : '#15803d' }]}>M</Text>
+                </Animated.View>
+                <View style={styles.messageContentRow}>
+                    <GestureDetector gesture={panGesture}>
+                        <Animated.View style={[styles.bubbleAndTailWrapper, bubbleAndTailAnimatedStyle]}>
+                            {!sent && (showTail
+                                ? <Tail color={bubbleColor} sent={false} />
+                                : <View style={styles.tailSpacer} />
+                            )}
+                            <View style={[
+                                styles.bubble,
+                                { backgroundColor: bubbleColor, paddingHorizontal: attached_media ? 4 : 10 },
+                                !sent && showTail && styles.receivedBubbleWithTail,
+                                sent && showTail && styles.sentBubbleWithTail,
+                            ]}>
+                                {is_forward_message && (
+                                    <ThemedView style={styles.forwardContainer}>
+                                        <Icon
+                                            source="arrow-right-top"
+                                            color={colors.textSecondary}
+                                            size={16}
+                                        />
+                                        <ThemedText style={[styles.forwardText, { color: colors.textSecondary }]}>Forwarded</ThemedText>
+                                    </ThemedView>
+                                )}
+                                {reply_message && (
+                                    <ThemedView style={[styles.replyContainer, { backgroundColor: sent ? theme.cardSent : theme.cardReceived, borderLeftColor: '#25D366', marginHorizontal: attached_media ? 0 : -4 }]}>
+                                        <ThemedText style={{ fontSize: 14 }}>{reply_message.original_sender_user_id}</ThemedText>
+                                        <ThemedText numberOfLines={2} ellipsizeMode='tail' style={{ fontSize: 12, color: colors.textSecondary, minWidth: 0, lineHeight: 16 }}>
+                                            {reply_message.original_message_text}
+                                        </ThemedText>
+                                    </ThemedView>
+                                )}
+                                {open_graph_data && (
+                                    <ThemedView style={[styles.openGraphContainer, { backgroundColor: sent ? theme.cardSent : theme.cardReceived }]}>
+                                        <ThemedText style={styles.openGraphTitle}>{open_graph_data.og_title}</ThemedText>
+                                        <ThemedText numberOfLines={3} ellipsizeMode="tail" style={[styles.openGraphDescription, { color: colors.textSecondary }]}>{open_graph_data.og_description}</ThemedText>
+                                        <ThemedView style={styles.openGraphLinkContainer}>
+                                            <Icon
+                                                source="link"
+                                                color={colors.textSecondary}
+                                                size={13}
+                                            />
+                                            <ThemedText style={[styles.openGraphLink, { color: colors.textSecondary }]}>{open_graph_data.og_url}</ThemedText>
+                                        </ThemedView>
+                                    </ThemedView>
+                                )}
+                                {poll && (
+                                    <ThemedView style={styles.pollContentContainer}>
+                                        <ThemedView style={styles.pollHeader}>
+                                            <Icon
+                                                source={poll.poll_multiple_answers ? "checkbox-multiple-marked-circle" : "checkbox-marked-circle"}
+                                                color={colors.textSecondary}
+                                                size={13}
+                                            />
+                                            <ThemedText style={[styles.pollHeaderText, { color: colors.textSecondary }]}>{poll.poll_multiple_answers ? 'Select one or more' : 'Select one only'}</ThemedText>
+                                        </ThemedView>
+                                        <PollComponent
+                                            poll={{
+                                                poll_id: poll.poll_id,
+                                                poll_question: poll.poll_question,
+                                                poll_options: poll.poll_options.map(opt =>
+                                                    typeof opt === 'string'
+                                                        ? { text: opt, votes: 0, user_voted: false }
+                                                        : opt
+                                                ),
+                                                poll_multiple_answers: poll.poll_multiple_answers,
+                                                total_votes: poll.total_votes || 0,
+                                                user_has_voted: poll.user_has_voted || false
+                                            }}
+                                            onVote={(selectedOptions) => {
+                                                console.log('User voted for options:', selectedOptions);
+                                            }}
+                                            isDark={isDark}
+                                            isSent={sent}
+                                        />
+                                    </ThemedView>
+                                )}
+                                {attached_media === 'contact' && (
+                                    <ThemedView style={[styles.contactCard, { backgroundColor: sent ? theme.cardSent : theme.cardReceived }]}>
+                                        <ThemedView style={styles.contactContentContainer}>
+                                            <View style={[styles.avatar, { backgroundColor: scheme === 'dark' ? '#052e16' : '#dcfce7' }]}>
+                                                <Text style={[styles.avatarText, { color: scheme === 'dark' ? '#4ade80' : '#15803d' }]}>M</Text>
+                                            </View>
+                                            <ThemedText>Mohammed</ThemedText>
+                                        </ThemedView>
+                                    </ThemedView>
+                                )}
+                                {attached_media === 'file' && (
+                                    <ThemedView style={[styles.fileCard, { backgroundColor: sent ? theme.cardSent : theme.cardReceived }]}>
+                                        {isDark ? <DarkFileIcon /> : <LightFileIcon />}
+                                        <ThemedView style={styles.innerFileCardContent}>
+                                            <ThemedText style={styles.fileName}>app-release.apk</ThemedText>
+                                            <ThemedText style={[styles.fileDetails, { color: isDark ? '#6C757C' : 'gray' }]}>104MB - BIN</ThemedText>
+                                        </ThemedView>
+                                    </ThemedView>
+                                )}
+                                {attached_media === 'photo' && (
+                                    <Image
+                                        source={{ uri: media_url || '' }}
+                                        contentFit="cover"
+                                        style={[styles.mediaPhoto, { aspectRatio: media_aspect_ratio }]}
+                                    />
+                                )}
+                                {attached_media === 'video' && (
+                                    <Image
+                                        source={{ uri: video_thumbnail || '' }}
+                                        contentFit="cover"
+                                        style={[styles.mediaPhoto, { aspectRatio: media_aspect_ratio }]}
+                                    />
+                                )}
+                                <Text style={[
+                                    styles.messageText,
+                                    { color: sent ? theme.sentText : theme.receivedText },
+                                ]}>
+                                    {message_text_content}
+                                </Text>
+                                <View style={styles.metaRow}>
+                                    <Text style={[
+                                        styles.timeText,
+                                        { color: sent ? theme.sentTime : theme.receivedTime },
+                                    ]}>
+                                        {created_at.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                                    </Text>
+                                    {sent && (
+                                        <Icon
+                                            source={'check-all'}
+                                            color={theme.check}
+                                            size={14}
+                                        />
+                                    )}
                                 </View>
-                                <ThemedText>Mohammed</ThemedText>
-                            </ThemedView>
-                        </ThemedView>
-                    )}
-                    {attached_media === 'file' && (
-                        <ThemedView style={[styles.fileCard, { backgroundColor: sent ? theme.cardSent : theme.cardReceived }]}>
-                            {isDark ? <DarkFileIcon /> : <LightFileIcon />}
-                            <ThemedView style={styles.innerFileCardContent}>
-                                <ThemedText style={styles.fileName}>app-release.apk</ThemedText>
-                                <ThemedText style={[styles.fileDetails, { color: isDark ? '#6C757C' : 'gray' }]}>104MB - BIN</ThemedText>
-                            </ThemedView>
-                        </ThemedView>
-                    )}
-                    {attached_media === 'photo' && (
-                        <Image
-                            source={{ uri: media_url || '' }}
-                            contentFit="cover"
-                            style={[styles.mediaPhoto, { aspectRatio: media_aspect_ratio }]}
-                        />
-                    )}
-                    {attached_media === 'video' && (
-                        <Image
-                            source={{ uri: video_thumbnail || '' }}
-                            contentFit="cover"
-                            style={[styles.mediaPhoto, { aspectRatio: media_aspect_ratio }]}
-                        />
-                    )}
-                    <Text style={[
-                        styles.messageText,
-                        { color: sent ? theme.sentText : theme.receivedText },
-                    ]}>
-                        {message_text_content}
-                    </Text>
-                    <View style={styles.metaRow}>
-                        <Text style={[
-                            styles.timeText,
-                            { color: sent ? theme.sentTime : theme.receivedTime },
-                        ]}>
-                            {created_at.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
-                        </Text>
-                        {sent && (
-                            <Icon
-                                source={'check-all'}
-                                color={theme.check}
-                                size={14}
-                            />
-                        )}
-                    </View>
-                    {attached_media === 'contact' && (
-                        <ThemedView style={[styles.contactActionContainer, { borderTopColor: sent ? theme.borderSent : theme.borderReceive }]}>
-                            <TouchableRipple style={[styles.contactActionButton, { borderRightColor: sent ? theme.borderSent : theme.borderReceive, borderRightWidth: 1 }]}>
-                                <ThemedText style={{ color: scheme === 'dark' ? '#4ade80' : '#15803d' }}>Add contact</ThemedText>
-                            </TouchableRipple>
-                            <TouchableRipple style={styles.contactActionButton}>
-                                <ThemedText style={{ color: scheme === 'dark' ? '#4ade80' : '#15803d' }}>Message</ThemedText>
-                            </TouchableRipple>
-                        </ThemedView>
-                    )}
-                    {poll && (
-                        <TouchableRipple style={[styles.pollActionContainer, { borderTopColor: sent ? theme.borderSent : theme.borderReceive }]}>
-                            <ThemedText style={{ color: scheme === 'dark' ? '#4ade80' : '#15803d' }}>View votes</ThemedText>
-                        </TouchableRipple>
-                    )}
+                                {attached_media === 'contact' && (
+                                    <ThemedView style={[styles.contactActionContainer, { borderTopColor: sent ? theme.borderSent : theme.borderReceive }]}>
+                                        <TouchableRipple style={[styles.contactActionButton, { borderRightColor: sent ? theme.borderSent : theme.borderReceive, borderRightWidth: 1 }]}>
+                                            <ThemedText style={{ color: scheme === 'dark' ? '#4ade80' : '#15803d' }}>Add contact</ThemedText>
+                                        </TouchableRipple>
+                                        <TouchableRipple style={styles.contactActionButton}>
+                                            <ThemedText style={{ color: scheme === 'dark' ? '#4ade80' : '#15803d' }}>Message</ThemedText>
+                                        </TouchableRipple>
+                                    </ThemedView>
+                                )}
+                                {poll && (
+                                    <TouchableRipple style={[styles.pollActionContainer, { borderTopColor: sent ? theme.borderSent : theme.borderReceive }]}>
+                                        <ThemedText style={{ color: scheme === 'dark' ? '#4ade80' : '#15803d' }}>View votes</ThemedText>
+                                    </TouchableRipple>
+                                )}
+                            </View>
+                            {sent && (showTail
+                                ? <Tail color={bubbleColor} sent={true} />
+                                : <View style={styles.tailSpacer} />
+                            )}
+                        </Animated.View>
+                    </GestureDetector>
                 </View>
-                {sent && (showTail
-                    ? <Tail color={bubbleColor} sent={true} />
-                    : <View style={styles.tailSpacer} />
-                )}
-                {!sent && attached_media && (
-                    <IconButton
-                        icon="arrow-right-top"
-                        iconColor={isDark ? '#ffffff' : '#000000'}
-                        mode="contained"
-                        containerColor={isDark ? 'rgba(255,255,255,0.07)' : 'rgba(0,0,0,0.07)'}
-                        size={20}
-                        onPress={() => console.log('Forward Pressed')}
-                        style={{ marginVertical: 'auto', marginLeft: 10 }}
-                    />
-                )}
             </View>
         </TouchableWithoutFeedback>
     );
@@ -301,7 +393,12 @@ const styles = StyleSheet.create({
         alignItems: 'flex-start',
         paddingHorizontal: 16,
         paddingVertical: 10,
-        overflow: 'visible'
+        overflow: 'visible',
+    },
+    bubbleAndTailWrapper: {
+        flexDirection: 'row',
+        alignItems: 'flex-start',
+        overflow: 'visible',
     },
     rowSent: {
         justifyContent: 'flex-end',
@@ -309,14 +406,40 @@ const styles = StyleSheet.create({
     rowReceived: {
         justifyContent: 'flex-start',
     },
+    reactionContainer: {
+        position: 'absolute',
+        top: -60,
+        zIndex: 99,
+        flexDirection: 'row',
+        alignItems: 'center',
+        gap: 6,
+        paddingHorizontal: 16,
+        paddingVertical: 10,
+        borderRadius: 99,
+        elevation: 3
+    },
+    emojis: {
+        fontSize: 28,
+        lineHeight: 32
+    },
     swipeReplyButton: {
         position: 'absolute',
-        left: 0,
+        left: 20,
         bottom: 0,
         top: 0,
         flex: 1,
         backgroundColor: 'transparent',
         justifyContent: 'center'
+    },
+    replySwipeIcon: {
+        borderWidth: 0,
+    },
+    messageContentRow: {
+        flexDirection: 'row',
+        alignItems: 'flex-start',
+        position: 'relative',
+        overflow: 'visible',
+        maxWidth: '75%'
     },
     selectOverlayer: {
         ...StyleSheet.absoluteFill,
@@ -338,7 +461,7 @@ const styles = StyleSheet.create({
         width: 16,
     },
     bubble: {
-        maxWidth: '75%',
+        maxWidth: '100%',
         paddingVertical: 4,
         minWidth: 80,
         borderRadius: BORDER_RADIUS,

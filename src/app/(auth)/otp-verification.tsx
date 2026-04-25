@@ -3,7 +3,7 @@ import { ThemedView } from '@/components/themed-view';
 import { Colors } from '@/constants/theme';
 import { router } from 'expo-router';
 import React, { useEffect, useRef, useState } from 'react';
-import { TextInput as RNTextInput, StyleSheet, useColorScheme, View } from 'react-native';
+import { Keyboard, KeyboardAvoidingView, TextInput as RNTextInput, StyleSheet, useColorScheme, View } from 'react-native';
 import { Button } from 'react-native-paper';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
@@ -13,6 +13,8 @@ const OtpVerificationPage = () => {
     const colors = Colors[scheme === 'unspecified' ? 'light' : scheme ?? 'light']
 
     const [otp, setOtp] = useState(['', '', '', '', '', '']);
+    const [keyboardOffset, setKeyboardOffset] = useState(0);
+
     const inputRefs = useRef<(RNTextInput | null)[]>([]);
 
     const handleOtpChange = (text: string, index: number) => {
@@ -64,55 +66,74 @@ const OtpVerificationPage = () => {
         }
     }, []);
 
+    useEffect(() => {
+        const keyboardDidShowListener = Keyboard.addListener('keyboardDidShow', () => {
+            setKeyboardOffset(0);
+        });
+        const keyboardDidHideListener = Keyboard.addListener('keyboardDidHide', () => {
+            setKeyboardOffset(-100);
+        });
+
+        return () => {
+            keyboardDidShowListener.remove();
+            keyboardDidHideListener.remove();
+        };
+    }, []);
+
     return (
-        <ThemedView style={[styles.main, { paddingTop: insets.top * 2, paddingBottom: insets.bottom }]}>
-            <ThemedView style={styles.topContainer}>
-                <ThemedView style={styles.contextContainer}>
-                    <ThemedText style={styles.title}>
-                        Verification Code
-                    </ThemedText>
-                    <ThemedText style={styles.description}>
-                        Enter the 6-digit code we sent to you by SMS.
-                    </ThemedText>
+        <KeyboardAvoidingView
+            behavior={'height'}
+            keyboardVerticalOffset={keyboardOffset}
+            style={{ flex: 1 }}>
+            <ThemedView style={[styles.main, { paddingTop: insets.top * 2, paddingBottom: insets.bottom }]}>
+                <ThemedView style={styles.topContainer}>
+                    <ThemedView style={styles.contextContainer}>
+                        <ThemedText style={styles.title}>
+                            Verification Code
+                        </ThemedText>
+                        <ThemedText style={styles.description}>
+                            Enter the 6-digit code we sent to you by SMS.
+                        </ThemedText>
+                    </ThemedView>
+
+                    <View style={styles.otpContainer}>
+                        {otp.map((digit, index) => (
+                            <RNTextInput
+                                key={index}
+                                ref={(ref) => { inputRefs.current[index] = ref; }}
+                                value={digit}
+                                onChangeText={(text) => handleOtpChange(text, index)}
+                                onKeyPress={(e) => handleKeyPress(e, index)}
+                                keyboardType="number-pad"
+                                maxLength={6}
+                                style={[
+                                    styles.otpInput,
+                                    {
+                                        backgroundColor: colors.card,
+                                        borderColor: otp[index] ? '#25D366' : colors.indicator,
+                                        color: colors.text,
+                                    }
+                                ]}
+                                selectionColor="#25D366"
+                                textAlign="center"
+                            />
+                        ))}
+                    </View>
                 </ThemedView>
 
-                <View style={styles.otpContainer}>
-                    {otp.map((digit, index) => (
-                        <RNTextInput
-                            key={index}
-                            ref={(ref) => { inputRefs.current[index] = ref; }}
-                            value={digit}
-                            onChangeText={(text) => handleOtpChange(text, index)}
-                            onKeyPress={(e) => handleKeyPress(e, index)}
-                            keyboardType="number-pad"
-                            maxLength={6}
-                            style={[
-                                styles.otpInput,
-                                {
-                                    backgroundColor: colors.card,
-                                    borderColor: otp[index] ? '#25D366' : colors.indicator,
-                                    color: colors.text,
-                                }
-                            ]}
-                            selectionColor="#25D366"
-                            textAlign="center"
-                        />
-                    ))}
-                </View>
+                <ThemedView style={styles.bottomContainer}>
+                    <Button
+                        mode="contained"
+                        disabled={otp.some(digit => digit === '')}
+                        onPress={handleVerify}
+                        buttonColor='#25D366'
+                        textColor='#ffffff'
+                    >
+                        Verify
+                    </Button>
+                </ThemedView>
             </ThemedView>
-
-            <ThemedView style={styles.bottomContainer}>
-                <Button
-                    mode="contained"
-                    disabled={otp.some(digit => digit === '')}
-                    onPress={handleVerify}
-                    buttonColor='#25D366'
-                    textColor='#ffffff'
-                >
-                    Verify
-                </Button>
-            </ThemedView>
-        </ThemedView>
+        </KeyboardAvoidingView>
     )
 }
 

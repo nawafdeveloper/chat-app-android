@@ -2,8 +2,8 @@ import { ThemedText } from '@/components/themed-text'
 import { ThemedView } from '@/components/themed-view'
 import { Colors } from '@/constants/theme'
 import { router } from 'expo-router'
-import React, { useState } from 'react'
-import { StyleSheet, useColorScheme } from 'react-native'
+import React, { useEffect, useState } from 'react'
+import { Keyboard, KeyboardAvoidingView, StyleSheet, useColorScheme } from 'react-native'
 import { Button, Icon, TextInput, TouchableRipple } from 'react-native-paper'
 import { useSafeAreaInsets } from 'react-native-safe-area-context'
 
@@ -13,70 +13,90 @@ const PhoneLoginPage = () => {
     const colors = Colors[scheme === 'unspecified' ? 'light' : scheme ?? 'light']
 
     const [phone, setPhone] = useState('');
+    const [keyboardOffset, setKeyboardOffset] = useState(0);
+
+    useEffect(() => {
+        const keyboardDidShowListener = Keyboard.addListener('keyboardDidShow', () => {
+            setKeyboardOffset(0);
+        });
+        const keyboardDidHideListener = Keyboard.addListener('keyboardDidHide', () => {
+            setKeyboardOffset(-100);
+        });
+
+        return () => {
+            keyboardDidShowListener.remove();
+            keyboardDidHideListener.remove();
+        };
+    }, []);
 
     return (
-        <ThemedView style={[styles.main, { paddingTop: insets.top * 2, paddingBottom: insets.bottom }]}>
-            <ThemedView style={styles.topContainer}>
-                <ThemedView style={styles.contextContainer}>
-                    <ThemedText style={styles.title}>
-                        Phone number
-                    </ThemedText>
-                    <ThemedText style={styles.description}>
-                        You will receive a verification code. Enter your phone number.
-                    </ThemedText>
-                </ThemedView>
-                <TouchableRipple
-                    onPress={() => router.push('/(auth)/select-country')}
-                >
-                    <ThemedView style={[styles.countrySelectorButton, { backgroundColor: colors.card, borderBottomColor: colors.indicator }]}>
-                        <ThemedText>Saudi Arabia</ThemedText>
-                        <Icon
-                            source="unfold-more-horizontal"
-                            color={colors.text}
-                            size={20}
+        <KeyboardAvoidingView
+            behavior={'height'}
+            keyboardVerticalOffset={keyboardOffset}
+            style={{ flex: 1 }}>
+            <ThemedView style={[styles.main, { paddingTop: insets.top * 2, paddingBottom: insets.bottom }]}>
+                <ThemedView style={styles.topContainer}>
+                    <ThemedView style={styles.contextContainer}>
+                        <ThemedText style={styles.title}>
+                            Phone number
+                        </ThemedText>
+                        <ThemedText style={styles.description}>
+                            You will receive a verification code. Enter your phone number.
+                        </ThemedText>
+                    </ThemedView>
+                    <TouchableRipple
+                        onPress={() => router.push('/(auth)/select-country')}
+                    >
+                        <ThemedView style={[styles.countrySelectorButton, { backgroundColor: colors.card, borderBottomColor: colors.indicator }]}>
+                            <ThemedText>Saudi Arabia</ThemedText>
+                            <Icon
+                                source="unfold-more-horizontal"
+                                color={colors.text}
+                                size={20}
+                            />
+                        </ThemedView>
+                    </TouchableRipple>
+                    <ThemedView style={styles.inputsContainer}>
+                        <TextInput
+                            value={'+966'}
+                            keyboardType='numeric'
+                            cursorColor='#25D366'
+                            underlineColor={colors.background}
+                            underlineColorAndroid={colors.background}
+                            activeUnderlineColor={colors.background}
+                            style={{
+                                backgroundColor: colors.card
+                            }}
+                            editable={false}
+                        />
+                        <TextInput
+                            label="Phone number"
+                            value={phone}
+                            onChangeText={text => setPhone(text)}
+                            keyboardType='numeric'
+                            cursorColor='#25D366'
+                            underlineColor={colors.indicator}
+                            activeUnderlineColor='#25D366'
+                            style={{
+                                backgroundColor: colors.card,
+                                flex: 1
+                            }}
                         />
                     </ThemedView>
-                </TouchableRipple>
-                <ThemedView style={styles.inputsContainer}>
-                    <TextInput
-                        value={'+966'}
-                        keyboardType='numeric'
-                        cursorColor='#25D366'
-                        underlineColor={colors.background}
-                        underlineColorAndroid={colors.background}
-                        activeUnderlineColor={colors.background}
-                        style={{
-                            backgroundColor: colors.card
-                        }}
-                        editable={false}
-                    />
-                    <TextInput
-                        label="Phone number"
-                        value={phone}
-                        onChangeText={text => setPhone(text)}
-                        keyboardType='numeric'
-                        cursorColor='#25D366'
-                        underlineColor={colors.indicator}
-                        activeUnderlineColor='#25D366'
-                        style={{
-                            backgroundColor: colors.card,
-                            flex: 1
-                        }}
-                    />
+                </ThemedView>
+                <ThemedView style={styles.bottomContainer}>
+                    <Button
+                        mode="contained"
+                        disabled={!phone}
+                        onPress={() => router.push('/(auth)/otp-verification')}
+                        buttonColor='#25D366'
+                        textColor='#ffffff'
+                    >
+                        Next
+                    </Button>
                 </ThemedView>
             </ThemedView>
-            <ThemedView style={styles.bottomContainer}>
-                <Button
-                    mode="contained"
-                    disabled={!phone}
-                    onPress={() => router.push('/(auth)/otp-verification')}
-                    buttonColor='#25D366'
-                    textColor='#ffffff'
-                >
-                    Next
-                </Button>
-            </ThemedView>
-        </ThemedView>
+        </KeyboardAvoidingView>
     )
 }
 

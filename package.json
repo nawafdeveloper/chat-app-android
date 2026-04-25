@@ -12,14 +12,15 @@
   },
   "dependencies": {
     "@react-native-vector-icons/material-design-icons": "^13.1.0",
-    "@react-navigation/bottom-tabs": "^7.15.5",
+    "@react-navigation/bottom-tabs": "^7.15.10",
     "@react-navigation/elements": "^2.9.10",
-    "@react-navigation/native": "^7.1.33",
+    "@react-navigation/native": "^7.2.2",
     "expo": "~55.0.16",
     "expo-constants": "~55.0.14",
     "expo-device": "~55.0.15",
     "expo-font": "~55.0.6",
     "expo-glass-effect": "~55.0.10",
+    "expo-haptics": "~55.0.14",
     "expo-image": "~55.0.9",
     "expo-linking": "~55.0.14",
     "expo-router": "~55.0.13",
@@ -43,6 +44,8 @@
   },
   "devDependencies": {
     "@types/react": "~19.2.2",
+    "eslint": "^9.0.0",
+    "eslint-config-expo": "~55.0.0",
     "typescript": "~5.9.2"
   },
   "private": true

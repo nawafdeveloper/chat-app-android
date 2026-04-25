@@ -2,8 +2,8 @@ import { ThemedText } from '@/components/themed-text';
 import { ThemedView } from '@/components/themed-view';
 import { usePinStore } from '@/store/use-new-pin-store';
 import { router } from 'expo-router';
-import React, { useEffect, useRef } from 'react';
-import { StyleSheet, TextInput, useColorScheme, View } from 'react-native';
+import React, { useEffect, useRef, useState } from 'react';
+import { Keyboard, KeyboardAvoidingView, StyleSheet, TextInput, useColorScheme, View } from 'react-native';
 import { Button } from 'react-native-paper';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
@@ -23,58 +23,79 @@ const NewUserPage = () => {
     const { pin, setPin, isPinComplete } = usePinStore()
     const inputRef = useRef<TextInput>(null)
 
+    const [keyboardOffset, setKeyboardOffset] = useState(0);
+
     useEffect(() => {
         const timer = setTimeout(() => inputRef.current?.focus(), 100)
         return () => clearTimeout(timer)
     }, []);
 
+    useEffect(() => {
+        const keyboardDidShowListener = Keyboard.addListener('keyboardDidShow', () => {
+            setKeyboardOffset(0);
+        });
+        const keyboardDidHideListener = Keyboard.addListener('keyboardDidHide', () => {
+            setKeyboardOffset(-100);
+        });
+
+        return () => {
+            keyboardDidShowListener.remove();
+            keyboardDidHideListener.remove();
+        };
+    }, []);
+
     return (
-        <ThemedView style={[styles.main, { paddingTop: insets.top * 2, paddingBottom: insets.bottom }]}>
-            <ThemedView style={styles.topContainer}>
-                <ThemedView style={styles.contextContainer}>
-                    <ThemedText style={styles.title}>
-                        Create your PIN
-                    </ThemedText>
-                    <ThemedText style={styles.description}>
-                        PINs can help you restore your account and keep your data encrypted with YaaHalaa.
-                    </ThemedText>
+        <KeyboardAvoidingView
+            behavior={'height'}
+            keyboardVerticalOffset={keyboardOffset}
+            style={{ flex: 1 }}>
+            <ThemedView style={[styles.main, { paddingTop: insets.top * 2, paddingBottom: insets.bottom }]}>
+                <ThemedView style={styles.topContainer}>
+                    <ThemedView style={styles.contextContainer}>
+                        <ThemedText style={styles.title}>
+                            Create your PIN
+                        </ThemedText>
+                        <ThemedText style={styles.description}>
+                            PINs can help you restore your account and keep your data encrypted with YaaHalaa.
+                        </ThemedText>
+                    </ThemedView>
+                    <View style={styles.dots}>
+                        {Array(PIN_LENGTH).fill(0).map((_, i) => (
+                            <View
+                                key={i}
+                                style={[
+                                    styles.dot,
+                                    { backgroundColor: i < pin.length ? dotsColors.dotFilled : dotsColors.dotEmpty },
+                                    i < pin.length && styles.dotFilled,
+                                ]}
+                            />
+                        ))}
+                    </View>
+                    <TextInput
+                        ref={inputRef}
+                        value={pin}
+                        onChangeText={setPin}
+                        keyboardType="number-pad"
+                        autoFocus
+                        maxLength={PIN_LENGTH}
+                        secureTextEntry
+                        style={styles.hiddenInput}
+                        caretHidden
+                    />
                 </ThemedView>
-                <View style={styles.dots}>
-                    {Array(PIN_LENGTH).fill(0).map((_, i) => (
-                        <View
-                            key={i}
-                            style={[
-                                styles.dot,
-                                { backgroundColor: i < pin.length ? dotsColors.dotFilled : dotsColors.dotEmpty },
-                                i < pin.length && styles.dotFilled,
-                            ]}
-                        />
-                    ))}
-                </View>
-                <TextInput
-                    ref={inputRef}
-                    value={pin}
-                    onChangeText={setPin}
-                    keyboardType="number-pad"
-                    autoFocus
-                    maxLength={PIN_LENGTH}
-                    secureTextEntry
-                    style={styles.hiddenInput}
-                    caretHidden
-                />
+                <ThemedView style={styles.bottomContainer}>
+                    <Button
+                        mode="contained"
+                        disabled={!isPinComplete}
+                        onPress={() => router.push('/(newUser)/verify-new-pin-code')}
+                        buttonColor='#25D366'
+                        textColor='#ffffff'
+                    >
+                        Next
+                    </Button>
+                </ThemedView>
             </ThemedView>
-            <ThemedView style={styles.bottomContainer}>
-                <Button
-                    mode="contained"
-                    disabled={!isPinComplete}
-                    onPress={() => router.push('/(newUser)/verify-new-pin-code')}
-                    buttonColor='#25D366'
-                    textColor='#ffffff'
-                >
-                    Next
-                </Button>
-            </ThemedView>
-        </ThemedView>
+        </KeyboardAvoidingView>
     )
 }
 

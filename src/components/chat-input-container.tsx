@@ -3,64 +3,89 @@ import React, { useState } from 'react'
 import { StyleSheet, TextInput, useColorScheme } from 'react-native'
 import { IconButton } from 'react-native-paper'
 import { useSafeAreaInsets } from 'react-native-safe-area-context'
+import AttachmentContainer from './attachment-container'
 import { ThemedText } from './themed-text'
 import { ThemedView } from './themed-view'
 
-const ChatInputContainer = () => {
+type Props = {
+    isReply: boolean;
+    handleClearReply: () => void;
+    replyToUser: string;
+    replyMessage: string;
+    inputRef: React.RefObject<TextInput | null>;
+}
+
+const ChatInputContainer = ({ isReply, handleClearReply, replyMessage, replyToUser, inputRef }: Props) => {
     const insets = useSafeAreaInsets();
     const scheme = useColorScheme();
     const colors = Colors[scheme === 'unspecified' ? 'light' : scheme ?? 'light']
 
     const [message, setMessage] = useState('');
-    const [isReply, setIsReply] = useState(false);
+    const [attachmentVisible, setAttachmentVisible] = useState(false);
+
+    const handleToggleAttachment = () => setAttachmentVisible(prev => !prev);
 
     return (
-        <ThemedView style={[styles.main, { paddingBottom: insets.bottom + 10 }]}>
-            <ThemedView style={[styles.mainInputContainer, { backgroundColor: colors.card, borderRadius: isReply ? 18 : 23 }]}>
-                {isReply && (
-                    <ThemedView style={[styles.replyContainer, { backgroundColor: colors.indicator, borderLeftColor: '#25D366' }]}>
-                        <ThemedView style={styles.topContainer}>
-                            <ThemedText style={{ fontSize: 14 }}>Mohammed</ThemedText>
-                            <IconButton
-                                icon={"close"}
-                                iconColor={colors.text}
-                                size={16}
-                                style={{ margin: 0, height: 'auto' }}
-                                onPress={() => setIsReply(false)}
-                            />
+        <ThemedView style={styles.container}>
+            <AttachmentContainer visible={attachmentVisible} />
+            <ThemedView style={[styles.main, { paddingBottom: insets.bottom + 10 }]}>
+                <ThemedView style={[styles.mainInputContainer, { backgroundColor: scheme === 'dark' ? colors.card : colors.background, borderRadius: isReply ? 18 : 24 }]}>
+                    {isReply && (
+                        <ThemedView style={[styles.replyContainer, { backgroundColor: colors.indicator, borderLeftColor: '#25D366' }]}>
+                            <ThemedView style={styles.topContainer}>
+                                <ThemedText style={{ fontSize: 14 }}>{replyToUser}</ThemedText>
+                                <IconButton
+                                    icon={"close"}
+                                    iconColor={colors.text}
+                                    size={16}
+                                    style={{ margin: 0, height: 'auto' }}
+                                    onPress={handleClearReply}
+                                />
+                            </ThemedView>
+                            <ThemedText numberOfLines={2} ellipsizeMode='tail' style={{ fontSize: 12, color: colors.textSecondary, minWidth: 0, lineHeight: 16 }}>
+                                {replyMessage}
+                            </ThemedText>
                         </ThemedView>
-                        <ThemedText numberOfLines={2} ellipsizeMode='tail' style={{ fontSize: 12, color: colors.textSecondary, minWidth: 0, lineHeight: 16 }}>
-                            {'Yes!! It was insane 🔥 Can\'t believe that last minute goal. Yes!! It was insane 🔥 Can\'t believe that last minute goal'}
-                        </ThemedText>
+                    )}
+                    <ThemedView style={[styles.inputContainer, { backgroundColor: scheme === 'dark' ? colors.card : colors.background, }]}>
+                        <TextInput
+                            ref={inputRef}
+                            value={message}
+                            onChangeText={(text) => setMessage(text)}
+                            placeholder='Message'
+                            multiline
+                            style={[styles.input, { color: colors.text }]}
+                            placeholderTextColor={colors.textSecondary}
+                            enablesReturnKeyAutomatically={true}
+                            selectionColor='#25D366'
+                        />
+                        <IconButton
+                            icon={message.length > 0 ? "plus" : "microphone-outline"}
+                            iconColor={colors.text}
+                            size={28}
+                            style={{ margin: 0, marginBottom: 2 }}
+                            onPress={() => {
+                                if (message.length > 0) {
+                                    handleToggleAttachment();
+                                }
+                            }}
+                        />
                     </ThemedView>
-                )}
-                <ThemedView style={[styles.inputContainer, { backgroundColor: colors.card }]}>
-                    <TextInput
-                        value={message}
-                        onChangeText={(text) => setMessage(text)}
-                        placeholder='Message'
-                        multiline
-                        style={[styles.input, { color: colors.text }]}
-                        placeholderTextColor={colors.textSecondary}
-                    />
-                    <IconButton
-                        icon={message.length > 0 ? "plus" : "microphone-outline"}
-                        iconColor={colors.text}
-                        size={28}
-                        style={{ margin: 0, marginBottom: 2 }}
-                        onPress={() => console.log('Mic Pressed')}
-                    />
                 </ThemedView>
+                <IconButton
+                    onPress={() => {
+                        if (message.length === 0) {
+                            handleToggleAttachment();
+                        }
+                    }}
+                    icon={message.length > 0 ? "send" : "plus"}
+                    mode='contained'
+                    iconColor={colors.background}
+                    containerColor='#25D366'
+                    size={28}
+                    style={{ margin: 0, marginBottom: 2 }}
+                />
             </ThemedView>
-            <IconButton
-                icon={message.length > 0 ? "send" : "plus"}
-                mode='contained'
-                iconColor={colors.background}
-                containerColor='#25D366'
-                size={28}
-                style={{ margin: 0, marginBottom: 2 }}
-                onPress={() => setIsReply(true)}
-            />
         </ThemedView>
     )
 }
@@ -68,6 +93,21 @@ const ChatInputContainer = () => {
 export default ChatInputContainer
 
 const styles = StyleSheet.create({
+    container: {
+        position: 'relative',
+        backgroundColor: 'transparent',
+        overflow: 'visible'
+    },
+    attachmentContainer: {
+        position: 'absolute',
+        left: 10,
+        right: 10,
+        top: -210,
+        zIndex: 999,
+        height: 200,
+        borderRadius: 12,
+        elevation: 1
+    },
     main: {
         flexDirection: 'row',
         alignItems: 'flex-end',

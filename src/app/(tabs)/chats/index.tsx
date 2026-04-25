@@ -1,5 +1,6 @@
 import { ThemedView } from '@/components/themed-view'
 import { Colors } from '@/constants/theme'
+import { rightNavRef } from '@/store/right-nav-ref'
 import { MaterialIcons } from '@expo/vector-icons'
 import { router } from 'expo-router'
 import React, { useState } from 'react'
@@ -222,7 +223,6 @@ const MessageStatusIcon = ({ status }: { status: MessageStatus }) => {
     }
 }
 
-// Component to render media type icons
 const MediaTypeIcon = ({ mediaType, size = 16, color = '#9ca3af' }: { mediaType: MediaType | undefined; size?: number; color?: string }) => {
     switch (mediaType) {
         case 'image':
@@ -242,7 +242,6 @@ const MediaTypeIcon = ({ mediaType, size = 16, color = '#9ca3af' }: { mediaType:
     }
 }
 
-// Component to render media preview text
 const MediaPreviewText = ({ mediaType, mediaDuration, fileName, fileSize }: ChatMessage) => {
     if (!mediaType) return null
 
@@ -271,13 +270,25 @@ const MediaPreviewText = ({ mediaType, mediaDuration, fileName, fileSize }: Chat
     return <Text style={{ marginLeft: 4 }}>{text}</Text>
 }
 
+const openChat = (chatId: string) => {
+    if (rightNavRef.isReady()) {
+        rightNavRef.navigate('chatId', { chatId })
+        return
+    }
+
+    router.push({
+        pathname: '/chatId',
+        params: { chatId },
+    })
+}
+
 const ChatItem = ({ item, colors, scheme }: { item: Chat; colors: any; scheme: 'light' | 'dark' }) => {
     const av = item.avatarColor[scheme]
     const hasMedia = item.lastMessage.mediaType !== null
     const hasText = item.lastMessage.text && !hasMedia
 
     return (
-        <TouchableRipple rippleColor={colors.card} key={item.id} onPress={() => router.push('/chatId')}>
+        <TouchableRipple rippleColor={colors.card} key={item.id} onPress={() => openChat(item.id)}>
             <View style={styles.chatItem}>
                 <View style={[styles.avatar, { backgroundColor: av.bg }]}>
                     <Text style={[styles.avatarText, { color: av.text }]}>{item.name[0]}</Text>

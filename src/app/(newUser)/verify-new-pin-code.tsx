@@ -3,7 +3,7 @@ import { ThemedView } from '@/components/themed-view';
 import { usePinStore } from '@/store/use-new-pin-store';
 import { router } from 'expo-router';
 import React, { useEffect, useRef, useState } from 'react';
-import { StyleSheet, TextInput, useColorScheme, View } from 'react-native';
+import { Keyboard, KeyboardAvoidingView, StyleSheet, TextInput, useColorScheme, View } from 'react-native';
 import { Button } from 'react-native-paper';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
@@ -23,6 +23,7 @@ const VerifyNewPinCode = () => {
     const { confirmPin, setConfirmPin, isConfirmMatch, reset } = usePinStore()
     const inputRef = useRef<TextInput>(null)
     const [error, setError] = useState(false)
+    const [keyboardOffset, setKeyboardOffset] = useState(0);
     const isProcessing = useRef(false)
 
     useEffect(() => {
@@ -31,6 +32,20 @@ const VerifyNewPinCode = () => {
         const timer = setTimeout(() => inputRef.current?.focus(), 100)
         return () => clearTimeout(timer)
     }, [])
+
+    useEffect(() => {
+        const keyboardDidShowListener = Keyboard.addListener('keyboardDidShow', () => {
+            setKeyboardOffset(0);
+        });
+        const keyboardDidHideListener = Keyboard.addListener('keyboardDidHide', () => {
+            setKeyboardOffset(-100);
+        });
+
+        return () => {
+            keyboardDidShowListener.remove();
+            keyboardDidHideListener.remove();
+        };
+    }, []);
 
     useEffect(() => {
         if (confirmPin.length !== PIN_LENGTH || isProcessing.current) return
@@ -68,52 +83,57 @@ const VerifyNewPinCode = () => {
     }
 
     return (
-        <ThemedView style={[styles.main, { paddingTop: insets.top * 2, paddingBottom: insets.bottom }]}>
-            <ThemedView style={styles.topContainer}>
-                <ThemedView style={styles.contextContainer}>
-                    <ThemedText style={styles.title}>Confirm your PIN</ThemedText>
-                    <ThemedText style={styles.description}>
-                        Enter your PIN again to confirm.
-                    </ThemedText>
-                </ThemedView>
-                <View style={styles.dots}>
-                    {Array(PIN_LENGTH).fill(0).map((_, i) => (
-                        <View
-                            key={i}
-                            style={[
-                                styles.dot,
-                                { backgroundColor: dotColor(i) },
-                                i < confirmPin.length && !error && styles.dotFilled,
-                            ]}
-                        />
-                    ))}
-                </View>
+        <KeyboardAvoidingView
+            behavior={'height'}
+            keyboardVerticalOffset={keyboardOffset}
+            style={{ flex: 1 }}>
+            <ThemedView style={[styles.main, { paddingTop: insets.top * 2, paddingBottom: insets.bottom }]}>
+                <ThemedView style={styles.topContainer}>
+                    <ThemedView style={styles.contextContainer}>
+                        <ThemedText style={styles.title}>Confirm your PIN</ThemedText>
+                        <ThemedText style={styles.description}>
+                            Enter your PIN again to confirm.
+                        </ThemedText>
+                    </ThemedView>
+                    <View style={styles.dots}>
+                        {Array(PIN_LENGTH).fill(0).map((_, i) => (
+                            <View
+                                key={i}
+                                style={[
+                                    styles.dot,
+                                    { backgroundColor: dotColor(i) },
+                                    i < confirmPin.length && !error && styles.dotFilled,
+                                ]}
+                            />
+                        ))}
+                    </View>
 
-                <TextInput
-                    ref={inputRef}
-                    value={confirmPin}
-                    onChangeText={(text) => {
-                        if (!error && !isProcessing.current) setConfirmPin(text)
-                    }}
-                    keyboardType="number-pad"
-                    maxLength={PIN_LENGTH}
-                    secureTextEntry
-                    style={styles.hiddenInput}
-                    caretHidden
-                />
+                    <TextInput
+                        ref={inputRef}
+                        value={confirmPin}
+                        onChangeText={(text) => {
+                            if (!error && !isProcessing.current) setConfirmPin(text)
+                        }}
+                        keyboardType="number-pad"
+                        maxLength={PIN_LENGTH}
+                        secureTextEntry
+                        style={styles.hiddenInput}
+                        caretHidden
+                    />
+                </ThemedView>
+                <ThemedView style={styles.bottomContainer}>
+                    <Button
+                        mode="contained"
+                        disabled={!confirmPin}
+                        onPress={() => router.push('/(newUser)/verify-new-pin-code')}
+                        buttonColor='#25D366'
+                        textColor='#ffffff'
+                    >
+                        Next
+                    </Button>
+                </ThemedView>
             </ThemedView>
-            <ThemedView style={styles.bottomContainer}>
-                <Button
-                    mode="contained"
-                    disabled={!confirmPin}
-                    onPress={() => router.push('/(newUser)/verify-new-pin-code')}
-                    buttonColor='#25D366'
-                    textColor='#ffffff'
-                >
-                    Next
-                </Button>
-            </ThemedView>
-        </ThemedView>
+        </KeyboardAvoidingView>
     )
 }
 

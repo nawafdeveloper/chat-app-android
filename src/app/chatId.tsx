@@ -4,21 +4,42 @@ import { ThemedText } from '@/components/themed-text';
 import { ThemedView } from '@/components/themed-view';
 import { Colors } from '@/constants/theme';
 import { messages } from '@/mocks/chats-messages';
+import * as Haptics from 'expo-haptics';
 import { router } from 'expo-router';
-import React, { useRef, useState } from 'react';
-import { FlatList, ImageBackground, StyleSheet, Text, useColorScheme, View } from 'react-native';
+import React, { useEffect, useRef, useState } from 'react';
+import { FlatList, ImageBackground, Keyboard, KeyboardAvoidingView, StyleSheet, Text, TextInput, useColorScheme, View } from 'react-native';
 import { Appbar, TouchableRipple } from 'react-native-paper';
 
 const ChatId = () => {
     const listRef = useRef<FlatList>(null);
+    const inputRef = useRef<TextInput>(null);
     const scheme = useColorScheme();
     const isDark = scheme === 'dark';
     const colors = Colors[scheme === 'unspecified' ? 'light' : scheme ?? 'light']
 
     const [selectionMode, setSelectionMode] = useState(false);
     const [selectedMessageIds, setSelectedMessageIds] = useState<Set<string>>(new Set());
+    const [isReply, setIsReply] = useState(false);
+    const [replyToUser, setReplyToUser] = useState('');
+    const [replyMessage, setReplyMessage] = useState('');
+    const [keyboardOffset, setKeyboardOffset] = useState(-30);
+
+    useEffect(() => {
+        const keyboardDidShowListener = Keyboard.addListener('keyboardDidShow', () => {
+            setKeyboardOffset(-30);
+        });
+        const keyboardDidHideListener = Keyboard.addListener('keyboardDidHide', () => {
+            setKeyboardOffset(-100);
+        });
+
+        return () => {
+            keyboardDidShowListener.remove();
+            keyboardDidHideListener.remove();
+        };
+    }, []);
 
     const handleLongPress = (messageId: string) => {
+        Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
         setSelectionMode(true);
         setSelectedMessageIds(new Set([messageId]));
     };
@@ -38,17 +59,35 @@ const ChatId = () => {
         }
     };
 
+    const handleReply = (replyTo: string, replyMsg: string) => {
+        setIsReply(true);
+        setReplyToUser(replyTo);
+        setReplyMessage(replyMsg);
+        inputRef.current?.focus();
+    };
+
+    const handleClearReply = () => {
+        setIsReply(false);
+        setReplyToUser('');
+        setReplyMessage('');
+    };
+
     const handleCancelSelectionMode = () => {
         setSelectionMode(false);
         setSelectedMessageIds(new Set());
     };
 
     return (
-        <ThemedView style={{ flex: 1 }}>
+        <KeyboardAvoidingView
+            behavior={'height'}
+            keyboardVerticalOffset={keyboardOffset}
+            style={{ flex: 1 }}>
             <Appbar.Header
                 style={{
                     backgroundColor: colors.background,
                     paddingHorizontal: 16,
+                    borderBottomWidth: 1,
+                    borderBottomColor: colors.indicator + '33'
                 }}
             >
                 {selectionMode ? (
@@ -105,15 +144,23 @@ const ChatId = () => {
                             isSelected={selectedMessageIds.has(item.message_id)}
                             onLongPress={() => handleLongPress(item.message_id)}
                             onPress={() => handleBubblePress(item.message_id)}
+                            handleReply={handleReply}
+                            selectedMessageIds={selectedMessageIds}
                         />
                     )}
                     contentInsetAdjustmentBehavior="automatic"
                     onLayout={() => listRef.current?.scrollToEnd({ animated: false })}
                     onContentSizeChange={() => listRef.current?.scrollToEnd({ animated: false })}
                 />
-                <ChatInputContainer />
+                <ChatInputContainer
+                    isReply={isReply}
+                    handleClearReply={handleClearReply}
+                    replyMessage={replyMessage}
+                    replyToUser={replyToUser}
+                    inputRef={inputRef}
+                />
             </ImageBackground>
-        </ThemedView>
+        </KeyboardAvoidingView>
     );
 };
 
