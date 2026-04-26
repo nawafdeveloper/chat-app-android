@@ -1,3 +1,4 @@
+import ChatFilledIcon, { ChatIcon } from '@/components/chat-icon'
 import { ThemedView } from '@/components/themed-view'
 import { Colors } from '@/constants/theme'
 import { rightNavRef } from '@/store/right-nav-ref'
@@ -9,25 +10,24 @@ import {
     StyleSheet,
     Text,
     useColorScheme,
-    View
+    View,
 } from 'react-native'
-import { Appbar, Searchbar, TouchableRipple } from 'react-native-paper'
+import { Appbar, Checkbox, FAB, Searchbar, TouchableRipple } from 'react-native-paper'
 
 const SCROLL_THRESHOLD = 10
+const APP_GREEN = '#25D366'
 
-// Message status types
 type MessageStatus = 'sending' | 'sent' | 'delivered' | 'read' | 'error'
-
-// Media types
 type MediaType = 'image' | 'video' | 'audio' | 'document' | 'location' | 'contact' | null
+type ThemeColors = typeof Colors.light | typeof Colors.dark
 
 interface ChatMessage {
     text: string
     status: MessageStatus
     mediaType?: MediaType
     mediaUrl?: string
-    mediaDuration?: string // for audio/video
-    fileName?: string // for documents
+    mediaDuration?: string
+    fileName?: string
     fileSize?: string
 }
 
@@ -39,20 +39,21 @@ interface Chat {
     unread: number
     pinned: boolean
     muted: boolean
+    archived?: boolean
     avatarColor: { light: { bg: string; text: string }; dark: { bg: string; text: string } }
     phoneNumber?: string
     isGroup?: boolean
     participants?: string[]
 }
 
-const CHATS: Chat[] = [
+const INITIAL_CHATS: Chat[] = [
     {
         id: '1',
         name: 'Family',
         lastMessage: {
             text: 'Dinner at 7 tonight?',
             status: 'read',
-            mediaType: null
+            mediaType: null,
         },
         time: '10:32 AM',
         unread: 0,
@@ -67,7 +68,7 @@ const CHATS: Chat[] = [
         lastMessage: {
             text: 'Deployment done',
             status: 'delivered',
-            mediaType: null
+            mediaType: null,
         },
         time: '9:58 AM',
         unread: 3,
@@ -83,7 +84,7 @@ const CHATS: Chat[] = [
         lastMessage: {
             text: 'Sounds good, see you there!',
             status: 'read',
-            mediaType: null
+            mediaType: null,
         },
         time: '9:14 AM',
         unread: 0,
@@ -100,7 +101,7 @@ const CHATS: Chat[] = [
             status: 'sent',
             mediaType: 'document',
             fileName: 'Project_Proposal.pdf',
-            fileSize: '2.4 MB'
+            fileSize: '2.4 MB',
         },
         time: 'Yesterday',
         unread: 1,
@@ -116,7 +117,7 @@ const CHATS: Chat[] = [
             text: 'Watch this video',
             status: 'read',
             mediaType: 'video',
-            mediaDuration: '1:23'
+            mediaDuration: '1:23',
         },
         time: 'Mon',
         unread: 0,
@@ -131,7 +132,7 @@ const CHATS: Chat[] = [
         lastMessage: {
             text: 'Anyone tried the new Expo SDK?',
             status: 'sending',
-            mediaType: null
+            mediaType: null,
         },
         time: 'Sat',
         unread: 7,
@@ -148,7 +149,7 @@ const CHATS: Chat[] = [
             text: 'Voice message',
             status: 'delivered',
             mediaType: 'audio',
-            mediaDuration: '0:24'
+            mediaDuration: '0:24',
         },
         time: 'Mon',
         unread: 0,
@@ -164,7 +165,7 @@ const CHATS: Chat[] = [
             text: 'New design assets',
             status: 'read',
             mediaType: 'image',
-            mediaUrl: 'https://example.com/image.jpg'
+            mediaUrl: 'https://example.com/image.jpg',
         },
         time: 'Mon',
         unread: 0,
@@ -180,7 +181,7 @@ const CHATS: Chat[] = [
         lastMessage: {
             text: 'Im here',
             status: 'read',
-            mediaType: 'location'
+            mediaType: 'location',
         },
         time: 'Tue',
         unread: 0,
@@ -195,7 +196,7 @@ const CHATS: Chat[] = [
         lastMessage: {
             text: 'Contact shared',
             status: 'sent',
-            mediaType: 'contact'
+            mediaType: 'contact',
         },
         time: 'Wed',
         unread: 2,
@@ -205,7 +206,6 @@ const CHATS: Chat[] = [
     },
 ]
 
-// Component to render message status icons
 const MessageStatusIcon = ({ status }: { status: MessageStatus }) => {
     switch (status) {
         case 'sending':
@@ -215,7 +215,7 @@ const MessageStatusIcon = ({ status }: { status: MessageStatus }) => {
         case 'delivered':
             return <MaterialIcons name="done-all" size={14} color="#9ca3af" />
         case 'read':
-            return <MaterialIcons name="done-all" size={14} color="#25D366" />
+            return <MaterialIcons name="done-all" size={14} color={APP_GREEN} />
         case 'error':
             return <MaterialIcons name="error-outline" size={14} color="#ef4444" />
         default:
@@ -223,7 +223,15 @@ const MessageStatusIcon = ({ status }: { status: MessageStatus }) => {
     }
 }
 
-const MediaTypeIcon = ({ mediaType, size = 16, color = '#9ca3af' }: { mediaType: MediaType | undefined; size?: number; color?: string }) => {
+const MediaTypeIcon = ({
+    mediaType,
+    size = 16,
+    color = '#9ca3af',
+}: {
+    mediaType: MediaType | undefined
+    size?: number
+    color?: string
+}) => {
     switch (mediaType) {
         case 'image':
             return <MaterialIcons name="image" size={size} color={color} />
@@ -250,11 +258,11 @@ const MediaPreviewText = ({ mediaType, mediaDuration, fileName, fileSize }: Chat
             case 'image':
                 return 'Photo'
             case 'video':
-                return `Video ${mediaDuration ? `· ${mediaDuration}` : ''}`
+                return `Video ${mediaDuration ? `- ${mediaDuration}` : ''}`
             case 'audio':
-                return `Voice message ${mediaDuration ? `· ${mediaDuration}` : ''}`
+                return `Voice message ${mediaDuration ? `- ${mediaDuration}` : ''}`
             case 'document':
-                return `${fileName || 'Document'}${fileSize ? ` · ${fileSize}` : ''}`
+                return `${fileName || 'Document'}${fileSize ? ` - ${fileSize}` : ''}`
             case 'location':
                 return 'Location'
             case 'contact':
@@ -267,7 +275,7 @@ const MediaPreviewText = ({ mediaType, mediaDuration, fileName, fileSize }: Chat
     const text = getText()
     if (!text) return null
 
-    return <Text style={{ marginLeft: 4 }}>{text}</Text>
+    return <Text style={styles.mediaPreviewText}>{text}</Text>
 }
 
 const openChat = (chatId: string) => {
@@ -282,33 +290,117 @@ const openChat = (chatId: string) => {
     })
 }
 
-const ChatItem = ({ item, colors, scheme }: { item: Chat; colors: any; scheme: 'light' | 'dark' }) => {
+type AppbarIconProps = {
+    color: string
+    size: number
+}
+
+const createAppbarIcon = (
+    name: React.ComponentProps<typeof MaterialIcons>['name'],
+    displayName: string
+) => {
+    const Icon = ({ color, size }: AppbarIconProps) => (
+        <MaterialIcons name={name} color={color} size={size} />
+    )
+
+    Icon.displayName = displayName
+
+    return Icon
+}
+
+const CloseAppbarIcon = createAppbarIcon('close', 'CloseAppbarIcon')
+const DeleteAppbarIcon = createAppbarIcon('delete', 'DeleteAppbarIcon')
+const ReadAllAppbarIcon = createAppbarIcon('done-all', 'ReadAllAppbarIcon')
+const ArchiveAppbarIcon = createAppbarIcon('archive', 'ArchiveAppbarIcon')
+const PinAppbarIcon = createAppbarIcon('push-pin', 'PinAppbarIcon')
+
+const toggleSelection = (currentSelection: Set<string>, chatId: string) => {
+    const nextSelection = new Set(currentSelection)
+
+    if (nextSelection.has(chatId)) {
+        nextSelection.delete(chatId)
+    } else {
+        nextSelection.add(chatId)
+    }
+
+    return nextSelection
+}
+
+type ChatItemProps = {
+    item: Chat
+    colors: ThemeColors
+    scheme: 'light' | 'dark'
+    isSelected: boolean
+    isSelectionMode: boolean
+    onPress: () => void
+    onLongPress: () => void
+}
+
+const ChatItem = ({
+    item,
+    colors,
+    scheme,
+    isSelected,
+    isSelectionMode,
+    onPress,
+    onLongPress,
+}: ChatItemProps) => {
     const av = item.avatarColor[scheme]
     const hasMedia = item.lastMessage.mediaType !== null
     const hasText = item.lastMessage.text && !hasMedia
 
     return (
-        <TouchableRipple rippleColor={colors.card} key={item.id} onPress={() => openChat(item.id)}>
+        <TouchableRipple
+            rippleColor={colors.indicator}
+            onPress={onPress}
+            onLongPress={onLongPress}
+            style={[
+                styles.chatRipple,
+                isSelected && { backgroundColor: colors.card },
+            ]}>
             <View style={styles.chatItem}>
+                {isSelectionMode && (
+                    <Checkbox.Android
+                        status={isSelected ? 'checked' : 'unchecked'}
+                        onPress={onPress}
+                        color={APP_GREEN}
+                        uncheckedColor={colors.textSecondary}
+                        style={styles.selectionCheckbox}
+                    />
+                )}
+
                 <View style={[styles.avatar, { backgroundColor: av.bg }]}>
                     <Text style={[styles.avatarText, { color: av.text }]}>{item.name[0]}</Text>
                 </View>
+
                 <View style={styles.chatBody}>
                     <View style={styles.chatTop}>
                         <View style={styles.chatNameContainer}>
                             <Text style={[styles.chatName, { color: colors.text }]} numberOfLines={1}>
                                 {item.name}
                             </Text>
-                            {item.muted && <MaterialIcons name="volume-off" size={12} color={colors.textSecondary} style={styles.mutedIcon} />}
+                            {item.muted && (
+                                <MaterialIcons
+                                    name="volume-off"
+                                    size={12}
+                                    color={colors.textSecondary}
+                                    style={styles.mutedIcon}
+                                />
+                            )}
                         </View>
-                        <Text style={[styles.chatTime, { color: item.unread ? '#25D366' : colors.textSecondary }]}>
+                        <Text style={[styles.chatTime, { color: item.unread ? APP_GREEN : colors.textSecondary }]}>
                             {item.time}
                         </Text>
                     </View>
+
                     <View style={styles.chatBottom}>
                         <View style={styles.previewContainer}>
                             {hasMedia && (
-                                <MediaTypeIcon mediaType={item.lastMessage.mediaType} size={16} color={colors.textSecondary} />
+                                <MediaTypeIcon
+                                    mediaType={item.lastMessage.mediaType}
+                                    size={16}
+                                    color={colors.textSecondary}
+                                />
                             )}
                             {hasText && <MessageStatusIcon status={item.lastMessage.status} />}
                             <Text style={[styles.chatPreview, { color: colors.textSecondary }]} numberOfLines={1}>
@@ -319,11 +411,12 @@ const ChatItem = ({ item, colors, scheme }: { item: Chat; colors: any; scheme: '
                                 )}
                             </Text>
                         </View>
+
                         <View style={styles.rightContainer}>
                             {!hasText && !hasMedia && <MessageStatusIcon status={item.lastMessage.status} />}
                             {item.unread > 0 && (
                                 <View style={styles.badge}>
-                                    <Text style={styles.badgeText}>{item.unread}</Text>
+                                    <Text style={[styles.badgeText, { color: colors.background }]}>{item.unread}</Text>
                                 </View>
                             )}
                         </View>
@@ -336,26 +429,98 @@ const ChatItem = ({ item, colors, scheme }: { item: Chat; colors: any; scheme: '
 
 const ChatsPage = () => {
     const scheme = useColorScheme()
-    const colors = Colors[scheme === 'unspecified' ? 'light' : scheme ?? 'light']
+    const resolvedScheme = scheme === 'unspecified' ? 'light' : scheme ?? 'light'
+    const colors = Colors[resolvedScheme]
 
+    const [chats, setChats] = useState(INITIAL_CHATS)
     const [isSearchFocus, setIsSearchFocus] = useState(false)
     const [searchQuery, setSearchQuery] = useState('')
     const [appbarBg, setAppbarBg] = useState<string>(colors.background)
+    const [selectedChatIds, setSelectedChatIds] = useState<Set<string>>(new Set())
+
+    const isSelectionMode = selectedChatIds.size > 0
 
     const handleScroll = (e: any) => {
         const offsetY = e.nativeEvent.contentOffset.y
         setAppbarBg(offsetY > SCROLL_THRESHOLD ? colors.card : colors.background)
     }
 
-    const filteredChats = CHATS.filter(chat =>
-        chat.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
-        (chat.lastMessage.text && chat.lastMessage.text.toLowerCase().includes(searchQuery.toLowerCase()))
-    )
+    const clearSelection = () => {
+        setSelectedChatIds(new Set())
+    }
 
-    const pinnedChats = filteredChats.filter((c) => c.pinned)
-    const recentChats = filteredChats.filter((c) => !c.pinned)
+    const handleChatPress = (chatId: string) => {
+        if (isSelectionMode) {
+            setSelectedChatIds((currentSelection) => toggleSelection(currentSelection, chatId))
+            return
+        }
 
-    const resolvedScheme = scheme === 'unspecified' ? 'light' : scheme ?? 'light'
+        openChat(chatId)
+    }
+
+    const handleChatLongPress = (chatId: string) => {
+        setIsSearchFocus(false)
+        setSelectedChatIds((currentSelection) => {
+            if (currentSelection.size === 0) {
+                return new Set([chatId])
+            }
+
+            return toggleSelection(currentSelection, chatId)
+        })
+    }
+
+    const handleDeleteSelectedChats = () => {
+        setChats((currentChats) => currentChats.filter((chat) => !selectedChatIds.has(chat.id)))
+        clearSelection()
+    }
+
+    const handleMarkSelectedAsRead = () => {
+        setChats((currentChats) =>
+            currentChats.map((chat) =>
+                selectedChatIds.has(chat.id)
+                    ? { ...chat, unread: 0 }
+                    : chat
+            )
+        )
+        clearSelection()
+    }
+
+    const handleArchiveSelectedChats = () => {
+        setChats((currentChats) =>
+            currentChats.map((chat) =>
+                selectedChatIds.has(chat.id)
+                    ? { ...chat, archived: true }
+                    : chat
+            )
+        )
+        clearSelection()
+    }
+
+    const handleTogglePinSelectedChats = () => {
+        const shouldPin = chats.some(
+            (chat) => selectedChatIds.has(chat.id) && !chat.pinned
+        )
+
+        setChats((currentChats) =>
+            currentChats.map((chat) =>
+                selectedChatIds.has(chat.id)
+                    ? { ...chat, pinned: shouldPin }
+                    : chat
+            )
+        )
+        clearSelection()
+    }
+
+    const filteredChats = chats.filter((chat) => {
+        const matchesSearch =
+            chat.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
+            chat.lastMessage.text.toLowerCase().includes(searchQuery.toLowerCase())
+
+        return !chat.archived && matchesSearch
+    })
+
+    const pinnedChats = filteredChats.filter((chat) => chat.pinned)
+    const recentChats = filteredChats.filter((chat) => !chat.pinned)
 
     const renderHeader = () => (
         <>
@@ -363,10 +528,20 @@ const ChatsPage = () => {
                 <>
                     <Text style={[styles.sectionLabel, { color: colors.textSecondary }]}>Pinned</Text>
                     {pinnedChats.map((item) => (
-                        <ChatItem key={item.id} item={item} colors={colors} scheme={resolvedScheme} />
+                        <ChatItem
+                            key={item.id}
+                            item={item}
+                            colors={colors}
+                            scheme={resolvedScheme}
+                            isSelected={selectedChatIds.has(item.id)}
+                            isSelectionMode={isSelectionMode}
+                            onPress={() => handleChatPress(item.id)}
+                            onLongPress={() => handleChatLongPress(item.id)}
+                        />
                     ))}
                 </>
             )}
+
             {recentChats.length > 0 && (
                 <Text style={[styles.sectionLabel, { color: colors.textSecondary }]}>
                     {pinnedChats.length > 0 ? 'Recent' : 'Chats'}
@@ -378,13 +553,38 @@ const ChatsPage = () => {
     return (
         <ThemedView style={styles.main}>
             <Appbar.Header
-                style={{
-                    backgroundColor: appbarBg,
-                    paddingLeft: 16,
-                    paddingRight: isSearchFocus ? 16 : 0,
-                }}
-            >
-                {isSearchFocus ? (
+                style={[
+                    styles.appbar,
+                    {
+                        backgroundColor: isSelectionMode ? colors.card : appbarBg,
+                        paddingRight: isSearchFocus && !isSelectionMode ? 16 : 0,
+                    },
+                ]}>
+                {isSelectionMode ? (
+                    <>
+                        <Appbar.Action icon={CloseAppbarIcon} onPress={clearSelection} />
+                        <Appbar.Content
+                            title={String(selectedChatIds.size)}
+                            titleStyle={styles.selectionCount}
+                        />
+                        <Appbar.Action
+                            icon={ReadAllAppbarIcon}
+                            onPress={handleMarkSelectedAsRead}
+                        />
+                        <Appbar.Action
+                            icon={DeleteAppbarIcon}
+                            onPress={handleDeleteSelectedChats}
+                        />
+                        <Appbar.Action
+                            icon={ArchiveAppbarIcon}
+                            onPress={handleArchiveSelectedChats}
+                        />
+                        <Appbar.Action
+                            icon={PinAppbarIcon}
+                            onPress={handleTogglePinSelectedChats}
+                        />
+                    </>
+                ) : isSearchFocus ? (
                     <Searchbar
                         placeholder="Search"
                         onChangeText={setSearchQuery}
@@ -393,14 +593,14 @@ const ChatsPage = () => {
                             setIsSearchFocus(false)
                             setSearchQuery('')
                         }}
-                        icon={'arrow-left'}
+                        icon="arrow-left"
                         autoFocus
                         style={{ backgroundColor: colors.card, flex: 1 }}
-                        cursorColor={'#25D366'}
+                        cursorColor={APP_GREEN}
                     />
                 ) : (
                     <>
-                        <Appbar.Content title="YaaHalaa" titleStyle={{ fontWeight: '700' }} />
+                        <Appbar.Content title="YaaHalaa" titleStyle={styles.appbarTitle} />
                         <Appbar.Action icon="magnify" onPress={() => setIsSearchFocus(true)} />
                         <Appbar.Action icon="dots-vertical" onPress={() => { }} />
                     </>
@@ -411,19 +611,35 @@ const ChatsPage = () => {
                 data={recentChats}
                 keyExtractor={(item) => item.id}
                 ListHeaderComponent={renderHeader}
-                renderItem={({ item }) => <ChatItem item={item} colors={colors} scheme={resolvedScheme} />}
+                renderItem={({ item }) => (
+                    <ChatItem
+                        item={item}
+                        colors={colors}
+                        scheme={resolvedScheme}
+                        isSelected={selectedChatIds.has(item.id)}
+                        isSelectionMode={isSelectionMode}
+                        onPress={() => handleChatPress(item.id)}
+                        onLongPress={() => handleChatLongPress(item.id)}
+                    />
+                )}
                 onScroll={handleScroll}
                 scrollEventThrottle={16}
-                contentContainerStyle={{ paddingBottom: 80 }}
+                contentContainerStyle={styles.listContent}
                 ListEmptyComponent={
                     <View style={styles.emptyContainer}>
-                        <MaterialIcons name="chat-bubble-outline" size={64} color={colors.textSecondary} />
+                        <ChatIcon color={colors.textSecondary} />
                         <Text style={[styles.emptyText, { color: colors.textSecondary }]}>
                             No chats found
                         </Text>
                     </View>
                 }
             />
+            {!isSelectionMode && (
+                <FAB
+                    icon={() => <ChatFilledIcon size={24} color={colors.text} />}
+                    style={styles.fab}
+                />
+            )}
         </ThemedView>
     )
 }
@@ -432,6 +648,18 @@ export default ChatsPage
 
 const styles = StyleSheet.create({
     main: { flex: 1 },
+    appbar: {
+        paddingLeft: 16,
+    },
+    appbarTitle: {
+        fontWeight: '700',
+    },
+    selectionCount: {
+        fontWeight: '700',
+    },
+    listContent: {
+        paddingBottom: 80,
+    },
     sectionLabel: {
         fontSize: 12,
         fontWeight: '600',
@@ -441,12 +669,19 @@ const styles = StyleSheet.create({
         textTransform: 'uppercase',
         letterSpacing: 0.4,
     },
+    chatRipple: {
+        borderRadius: 18,
+        marginHorizontal: 8,
+    },
     chatItem: {
         flexDirection: 'row',
         alignItems: 'center',
-        paddingLeft: 16,
+        paddingLeft: 8,
         paddingRight: 16,
         paddingVertical: 8,
+    },
+    selectionCheckbox: {
+        marginRight: 2,
     },
     avatar: {
         width: 50,
@@ -456,7 +691,11 @@ const styles = StyleSheet.create({
         justifyContent: 'center',
         marginRight: 12,
     },
-    avatarText: { color: '#fff', fontSize: 18, fontWeight: '500' },
+    avatarText: {
+        color: '#fff',
+        fontSize: 18,
+        fontWeight: '500',
+    },
     chatBody: {
         flex: 1,
         paddingVertical: 4,
@@ -473,9 +712,17 @@ const styles = StyleSheet.create({
         alignItems: 'center',
         marginRight: 8,
     },
-    chatName: { fontSize: 16, fontWeight: '500', flex: 1 },
-    mutedIcon: { marginLeft: 4 },
-    chatTime: { fontSize: 12 },
+    chatName: {
+        fontSize: 16,
+        fontWeight: '500',
+        flex: 1,
+    },
+    mutedIcon: {
+        marginLeft: 4,
+    },
+    chatTime: {
+        fontSize: 12,
+    },
     chatBottom: {
         flexDirection: 'row',
         justifyContent: 'space-between',
@@ -488,14 +735,20 @@ const styles = StyleSheet.create({
         marginRight: 8,
         gap: 4,
     },
-    chatPreview: { fontSize: 14, flex: 1 },
+    mediaPreviewText: {
+        marginLeft: 4,
+    },
+    chatPreview: {
+        fontSize: 14,
+        flex: 1,
+    },
     rightContainer: {
         flexDirection: 'row',
         alignItems: 'center',
         gap: 4,
     },
     badge: {
-        backgroundColor: '#25D366',
+        backgroundColor: APP_GREEN,
         borderRadius: 10,
         minWidth: 20,
         height: 20,
@@ -503,7 +756,10 @@ const styles = StyleSheet.create({
         justifyContent: 'center',
         paddingHorizontal: 5,
     },
-    badgeText: { color: '#fff', fontSize: 11, fontWeight: '700' },
+    badgeText: {
+        fontSize: 11,
+        fontWeight: '700',
+    },
     emptyContainer: {
         flex: 1,
         alignItems: 'center',
@@ -513,5 +769,12 @@ const styles = StyleSheet.create({
     emptyText: {
         fontSize: 16,
         marginTop: 16,
+    },
+    fab: {
+        position: 'absolute',
+        margin: 16,
+        right: 0,
+        bottom: 0,
+        backgroundColor: '#25D366'
     },
 })

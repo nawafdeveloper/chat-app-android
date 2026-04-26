@@ -148,7 +148,9 @@ const styles = StyleSheet.create({
     topContainer: {
         flex: 1,
         flexDirection: 'column',
-        gap: 32
+        gap: 32,
+        maxWidth: 400,
+        marginHorizontal: 'auto'
     },
     contextContainer: {
         flexDirection: 'column',

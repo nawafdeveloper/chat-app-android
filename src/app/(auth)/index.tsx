@@ -106,12 +106,14 @@ const styles = StyleSheet.create({
     main: {
         flex: 1,
         paddingHorizontal: 16,
-        justifyContent: 'space-between'
+        justifyContent: 'space-between',
     },
     topContainer: {
         flex: 1,
         flexDirection: 'column',
-        gap: 24
+        gap: 24,
+        maxWidth: 400,
+        marginHorizontal: 'auto'
     },
     contextContainer: {
         flexDirection: 'column',

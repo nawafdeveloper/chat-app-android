@@ -54,8 +54,7 @@ const VerifyNewPinCode = () => {
         if (isConfirmMatch) {
             const create = async () => {
                 try {
-                    reset()
-                    router.replace('/(tabs)')
+                    
                 } catch (error) {
                     console.log(error);
                     setError(true)
@@ -125,7 +124,7 @@ const VerifyNewPinCode = () => {
                     <Button
                         mode="contained"
                         disabled={!confirmPin}
-                        onPress={() => router.push('/(newUser)/verify-new-pin-code')}
+                        onPress={() => router.push('/(tabs)')}
                         buttonColor='#25D366'
                         textColor='#ffffff'
                     >
@@ -148,7 +147,10 @@ const styles = StyleSheet.create({
     topContainer: {
         flex: 1,
         flexDirection: 'column',
-        gap: 24
+        gap: 24,
+        maxWidth: 400,
+        marginHorizontal: 'auto',
+        width: '100%'
     },
     contextContainer: {
         flexDirection: 'column',

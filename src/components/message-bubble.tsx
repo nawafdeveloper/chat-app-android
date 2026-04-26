@@ -439,7 +439,7 @@ const styles = StyleSheet.create({
         alignItems: 'flex-start',
         position: 'relative',
         overflow: 'visible',
-        maxWidth: '75%'
+        maxWidth: 280
     },
     selectOverlayer: {
         ...StyleSheet.absoluteFill,

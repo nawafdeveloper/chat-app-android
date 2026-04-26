@@ -22,11 +22,15 @@ export default function AppTabs() {
       <TabSlot style={{ height: '100%' }} />
       <TabList asChild>
         <CustomTabList>
-          <TabTrigger name="home" href="/" asChild>
-            <TabButton>Home</TabButton>
+          <TabTrigger name="index" href="/(tabs)" style={styles.hiddenTrigger} />
+          <TabTrigger name="chats" href="/(tabs)/chats" asChild>
+            <TabButton>Chats</TabButton>
           </TabTrigger>
-          <TabTrigger name="explore" href="/explore" asChild>
-            <TabButton>Explore</TabButton>
+          <TabTrigger name="archive" href="/(tabs)/archive" asChild>
+            <TabButton>Archive</TabButton>
+          </TabTrigger>
+          <TabTrigger name="settings" href="/(tabs)/settings" asChild>
+            <TabButton>Settings</TabButton>
           </TabTrigger>
         </CustomTabList>
       </TabList>
@@ -112,5 +116,11 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     gap: Spacing.one,
     marginLeft: Spacing.three,
+  },
+  hiddenTrigger: {
+    width: 0,
+    height: 0,
+    opacity: 0,
+    position: 'absolute',
   },
 });

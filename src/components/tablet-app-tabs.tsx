@@ -5,7 +5,8 @@ import { Colors } from '@/constants/theme';
 import { rightNavRef, type RightNavParamList } from '@/store/right-nav-ref';
 import { NavigationContainer, NavigationIndependentTree } from '@react-navigation/native';
 import { createNativeStackNavigator } from '@react-navigation/native-stack';
-import React from 'react';
+import { router } from 'expo-router';
+import React, { useCallback, useEffect } from 'react';
 import { Dimensions, StyleSheet, useColorScheme } from 'react-native';
 import EmptyState from './empty-state';
 
@@ -15,6 +16,23 @@ const Stack = createNativeStackNavigator<RightNavParamList>();
 export default function TabletAppTabs() {
     const scheme = useColorScheme();
     const colors = Colors[scheme === 'unspecified' ? 'light' : scheme];
+    
+    const dismissActiveNavigations = useCallback(() => {
+        if (router.canDismiss()) {
+            router.dismissAll();
+        }
+
+        if (rightNavRef.isReady()) {
+            rightNavRef.resetRoot({
+                index: 0,
+                routes: [{ name: 'empty' }],
+            });
+        }
+    }, []);
+
+    useEffect(() => {
+        dismissActiveNavigations();
+    }, [dismissActiveNavigations]);
 
     return (
         <ThemedView style={styles.container}>
@@ -25,7 +43,7 @@ export default function TabletAppTabs() {
             </ThemedView>
             <ThemedView style={styles.stacksContainer}>
                 <NavigationIndependentTree>
-                    <NavigationContainer ref={rightNavRef}>
+                    <NavigationContainer ref={rightNavRef} onReady={dismissActiveNavigations}>
                         <Stack.Navigator screenOptions={{ headerShown: false }}>
                             <Stack.Screen
                                 name='empty'
@@ -53,7 +71,8 @@ const styles = StyleSheet.create({
         borderRightWidth: 1
     },
     stacksContainer: {
-        flex: 1
+        flex: 1,
+        overflow: 'hidden'
     },
     emptyContainer: {
         flex: 1

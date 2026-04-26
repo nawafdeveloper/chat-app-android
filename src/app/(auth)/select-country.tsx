@@ -94,7 +94,10 @@ const styles = StyleSheet.create({
     },
     contentContainer: {
         flex: 1,
-        paddingHorizontal: 16
+        paddingHorizontal: 16,
+        maxWidth: 400,
+        marginHorizontal: 'auto',
+        width: '100%'
     },
     countryItem: {
         flexDirection: 'row',

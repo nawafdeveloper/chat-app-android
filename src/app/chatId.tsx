@@ -4,6 +4,7 @@ import { ThemedText } from '@/components/themed-text';
 import { ThemedView } from '@/components/themed-view';
 import { Colors } from '@/constants/theme';
 import { messages } from '@/mocks/chats-messages';
+import { rightNavRef } from '@/store/right-nav-ref';
 import * as Haptics from 'expo-haptics';
 import { router } from 'expo-router';
 import React, { useEffect, useRef, useState } from 'react';
@@ -77,6 +78,15 @@ const ChatId = () => {
         setSelectedMessageIds(new Set());
     };
 
+    const handleExitFromChat = () => {
+        if (rightNavRef.isReady()) {
+            rightNavRef.goBack();
+            return
+        }
+
+        router.back();
+    };
+
     return (
         <KeyboardAvoidingView
             behavior={'height'}
@@ -106,7 +116,7 @@ const ChatId = () => {
                     </>
                 ) : (
                     <>
-                        <Appbar.BackAction onPress={() => router.back()} />
+                        <Appbar.BackAction onPress={handleExitFromChat} />
                         <Appbar.Content
                             title={
                                 <TouchableRipple>
