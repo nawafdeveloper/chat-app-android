@@ -158,9 +158,9 @@ const ChatId = () => {
                             selectedMessageIds={selectedMessageIds}
                         />
                     )}
+                    inverted
+                    contentContainerStyle={{ flexDirection: 'column-reverse' }}
                     contentInsetAdjustmentBehavior="automatic"
-                    onLayout={() => listRef.current?.scrollToEnd({ animated: false })}
-                    onContentSizeChange={() => listRef.current?.scrollToEnd({ animated: false })}
                 />
                 <ChatInputContainer
                     isReply={isReply}

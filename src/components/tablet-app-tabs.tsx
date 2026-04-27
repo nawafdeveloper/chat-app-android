@@ -1,12 +1,12 @@
 import ChatId from '@/app/chatId';
+import SubSettingPage from '@/app/(tabs)/settings/sub-setting';
 import AppTabs from '@/components/app-tabs';
 import { ThemedView } from '@/components/themed-view';
 import { Colors } from '@/constants/theme';
 import { rightNavRef, type RightNavParamList } from '@/store/right-nav-ref';
 import { NavigationContainer, NavigationIndependentTree } from '@react-navigation/native';
 import { createNativeStackNavigator } from '@react-navigation/native-stack';
-import { router } from 'expo-router';
-import React, { useCallback, useEffect } from 'react';
+import React from 'react';
 import { Dimensions, StyleSheet, useColorScheme } from 'react-native';
 import EmptyState from './empty-state';
 
@@ -16,23 +16,6 @@ const Stack = createNativeStackNavigator<RightNavParamList>();
 export default function TabletAppTabs() {
     const scheme = useColorScheme();
     const colors = Colors[scheme === 'unspecified' ? 'light' : scheme];
-    
-    const dismissActiveNavigations = useCallback(() => {
-        if (router.canDismiss()) {
-            router.dismissAll();
-        }
-
-        if (rightNavRef.isReady()) {
-            rightNavRef.resetRoot({
-                index: 0,
-                routes: [{ name: 'empty' }],
-            });
-        }
-    }, []);
-
-    useEffect(() => {
-        dismissActiveNavigations();
-    }, [dismissActiveNavigations]);
 
     return (
         <ThemedView style={styles.container}>
@@ -43,7 +26,7 @@ export default function TabletAppTabs() {
             </ThemedView>
             <ThemedView style={styles.stacksContainer}>
                 <NavigationIndependentTree>
-                    <NavigationContainer ref={rightNavRef} onReady={dismissActiveNavigations}>
+                    <NavigationContainer ref={rightNavRef}>
                         <Stack.Navigator screenOptions={{ headerShown: false }}>
                             <Stack.Screen
                                 name='empty'
@@ -52,6 +35,10 @@ export default function TabletAppTabs() {
                             <Stack.Screen
                                 name='chatId'
                                 component={ChatId}
+                            />
+                            <Stack.Screen
+                                name='subSetting'
+                                component={SubSettingPage}
                             />
                         </Stack.Navigator>
                     </NavigationContainer>

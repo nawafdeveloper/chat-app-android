@@ -1,27 +1,29 @@
 import { ThemedText } from '@/components/themed-text';
 import { ThemedView } from '@/components/themed-view';
+import { Colors } from '@/constants/theme';
 import { usePinStore } from '@/store/use-new-pin-store';
 import { router } from 'expo-router';
 import React, { useEffect, useRef, useState } from 'react';
-import { Keyboard, KeyboardAvoidingView, StyleSheet, TextInput, useColorScheme, View } from 'react-native';
+import { Keyboard, KeyboardAvoidingView, StyleSheet, TextInput as RNTextInput, useColorScheme, View } from 'react-native';
 import { Button } from 'react-native-paper';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 const PIN_LENGTH = 6
 
 const COLORS = {
-    dark: { dotFilled: '#FFFFFF', dotEmpty: '#3A3A3C', dotError: '#FF453A' },
-    light: { dotFilled: '#000000', dotEmpty: '#E5E5EA', dotError: '#FF3B30' },
+    dark: { dotFilled: '#FFFFFF', dotError: '#FF453A' },
+    light: { dotFilled: '#000000', dotError: '#FF3B30' },
 }
 
 const VerifyNewPinCode = () => {
     const insets = useSafeAreaInsets();
     const scheme = useColorScheme();
     const isDark = scheme === 'dark'
-    const colors = isDark ? COLORS.dark : COLORS.light
+    const pinColors = isDark ? COLORS.dark : COLORS.light
+    const colors = Colors[scheme === 'unspecified' ? 'light' : scheme ?? 'light']
 
-    const { confirmPin, setConfirmPin, isConfirmMatch, reset } = usePinStore()
-    const inputRef = useRef<TextInput>(null)
+    const { confirmPin, setConfirmPin, isConfirmMatch } = usePinStore()
+    const inputRefs = useRef<(RNTextInput | null)[]>([])
     const [error, setError] = useState(false)
     const [keyboardOffset, setKeyboardOffset] = useState(0);
     const isProcessing = useRef(false)
@@ -29,9 +31,11 @@ const VerifyNewPinCode = () => {
     useEffect(() => {
         setConfirmPin('')
         isProcessing.current = false
-        const timer = setTimeout(() => inputRef.current?.focus(), 100)
+        const timer = setTimeout(() => inputRefs.current[0]?.focus(), 100)
         return () => clearTimeout(timer)
-    }, [])
+    }, [setConfirmPin])
+
+    const pinDigits = Array.from({ length: PIN_LENGTH }, (_, index) => confirmPin[index] ?? '')
 
     useEffect(() => {
         const keyboardDidShowListener = Keyboard.addListener('keyboardDidShow', () => {
@@ -74,11 +78,49 @@ const VerifyNewPinCode = () => {
                 isProcessing.current = false
             }, 600)
         }
-    }, [confirmPin])
+    }, [confirmPin, isConfirmMatch, setConfirmPin])
 
-    const dotColor = (i: number) => {
-        if (error) return colors.dotError
-        return i < confirmPin.length ? colors.dotFilled : colors.dotEmpty
+    const handlePinChange = (text: string, index: number) => {
+        if (error || isProcessing.current) return
+
+        const sanitized = text.replace(/[^0-9]/g, '')
+
+        if (sanitized.length > 1) {
+            const newDigits = [...pinDigits]
+            sanitized.slice(0, PIN_LENGTH - index).split('').forEach((digit, offset) => {
+                newDigits[index + offset] = digit
+            })
+            setConfirmPin(newDigits.join(''))
+
+            const nextEmptyIndex = newDigits.findIndex((digit, currentIndex) => currentIndex >= index && !digit)
+            if (nextEmptyIndex !== -1 && nextEmptyIndex < PIN_LENGTH) {
+                inputRefs.current[nextEmptyIndex]?.focus()
+            } else {
+                inputRefs.current[PIN_LENGTH - 1]?.blur()
+            }
+            return
+        }
+
+        const newDigits = [...pinDigits]
+        newDigits[index] = sanitized
+        setConfirmPin(newDigits.join(''))
+
+        if (sanitized && index < PIN_LENGTH - 1) {
+            inputRefs.current[index + 1]?.focus()
+        }
+    }
+
+    const handleKeyPress = (key: string, index: number) => {
+        if (error || isProcessing.current) return
+
+        if (key === 'Backspace' && !pinDigits[index] && index > 0) {
+            inputRefs.current[index - 1]?.focus()
+        }
+    }
+
+    const borderColor = (index: number) => {
+        if (error) return pinColors.dotError
+        return pinDigits[index] ? '#25D366' : colors.indicator
     }
 
     return (
@@ -94,31 +136,30 @@ const VerifyNewPinCode = () => {
                             Enter your PIN again to confirm.
                         </ThemedText>
                     </ThemedView>
-                    <View style={styles.dots}>
-                        {Array(PIN_LENGTH).fill(0).map((_, i) => (
-                            <View
-                                key={i}
+                    <View style={styles.otpContainer}>
+                        {pinDigits.map((digit, index) => (
+                            <RNTextInput
+                                key={index}
+                                ref={(ref) => { inputRefs.current[index] = ref }}
+                                value={digit}
+                                onChangeText={(text) => handlePinChange(text, index)}
+                                onKeyPress={(e) => handleKeyPress(e.nativeEvent.key, index)}
+                                keyboardType="number-pad"
+                                maxLength={PIN_LENGTH}
                                 style={[
-                                    styles.dot,
-                                    { backgroundColor: dotColor(i) },
-                                    i < confirmPin.length && !error && styles.dotFilled,
+                                    styles.otpInput,
+                                    {
+                                        backgroundColor: colors.card,
+                                        borderColor: borderColor(index),
+                                        color: error ? pinColors.dotError : colors.text,
+                                    },
                                 ]}
+                                selectionColor="#25D366"
+                                textAlign="center"
+                                editable={!error && !isProcessing.current}
                             />
                         ))}
                     </View>
-
-                    <TextInput
-                        ref={inputRef}
-                        value={confirmPin}
-                        onChangeText={(text) => {
-                            if (!error && !isProcessing.current) setConfirmPin(text)
-                        }}
-                        keyboardType="number-pad"
-                        maxLength={PIN_LENGTH}
-                        secureTextEntry
-                        style={styles.hiddenInput}
-                        caretHidden
-                    />
                 </ThemedView>
                 <ThemedView style={styles.bottomContainer}>
                     <Button
@@ -173,27 +214,19 @@ const styles = StyleSheet.create({
         alignItems: 'flex-end',
         justifyContent: 'flex-end'
     },
-    dots: {
+    otpContainer: {
         flexDirection: 'row',
-        justifyContent: 'center',
-        gap: 16,
-        marginTop: 32
+        justifyContent: 'space-between',
+        gap: 12,
     },
-    dot: {
-        width: 14,
-        height: 14,
-        borderRadius: 7
-    },
-    dotFilled: {
-        transform:
-            [
-                { scale: 1.1 }
-            ]
-    },
-    hiddenInput: {
-        position: 'absolute',
-        opacity: 0,
-        width: 0,
-        height: 0
+    otpInput: {
+        flex: 1,
+        height: 60,
+        borderBottomWidth: 1.5,
+        borderTopRightRadius: 4,
+        borderTopLeftRadius: 4,
+        fontSize: 24,
+        fontWeight: '600',
+        textAlign: 'center',
     },
 })

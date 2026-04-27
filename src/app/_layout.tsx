@@ -16,9 +16,9 @@ const AppLayout = () => {
                     <ThemeProvider value={colorScheme === 'dark' ? DarkTheme : DefaultTheme}>
                         <Stack screenOptions={{ headerShown: false }}>
                             {/* <Stack.Screen name="(auth)" options={{ animation: 'none', gestureEnabled: false }} />
-                        <Stack.Screen name="(complete-profile)" options={{ animation: 'none', gestureEnabled: false }} />
-                        <Stack.Screen name="(newUser)" options={{ animation: 'none', gestureEnabled: false }} />
-                        <Stack.Screen name="(oldUser)" options={{ animation: 'none', gestureEnabled: false }} /> */}
+                            <Stack.Screen name="(complete-profile)" options={{ animation: 'none', gestureEnabled: false }} />
+                            <Stack.Screen name="(newUser)" options={{ animation: 'none', gestureEnabled: false }} />
+                            <Stack.Screen name="(oldUser)" options={{ animation: 'none', gestureEnabled: false }} /> */}
                             <Stack.Screen name='(tabs)' options={{ headerShown: false }} />
                             <Stack.Screen name='chatId' options={{ headerShown: false }} />
                         </Stack>

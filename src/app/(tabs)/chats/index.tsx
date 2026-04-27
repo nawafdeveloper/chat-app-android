@@ -3,6 +3,7 @@ import { ThemedView } from '@/components/themed-view'
 import { Colors } from '@/constants/theme'
 import { rightNavRef } from '@/store/right-nav-ref'
 import { MaterialIcons } from '@expo/vector-icons'
+import * as Haptics from 'expo-haptics'
 import { router } from 'expo-router'
 import React, { useState } from 'react'
 import {
@@ -459,6 +460,7 @@ const ChatsPage = () => {
     }
 
     const handleChatLongPress = (chatId: string) => {
+        Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
         setIsSearchFocus(false)
         setSelectedChatIds((currentSelection) => {
             if (currentSelection.size === 0) {
@@ -624,6 +626,7 @@ const ChatsPage = () => {
                 )}
                 onScroll={handleScroll}
                 scrollEventThrottle={16}
+                ListHeaderComponentStyle={{ gap: 6 }}
                 contentContainerStyle={styles.listContent}
                 ListEmptyComponent={
                     <View style={styles.emptyContainer}>
@@ -636,7 +639,7 @@ const ChatsPage = () => {
             />
             {!isSelectionMode && (
                 <FAB
-                    icon={() => <ChatFilledIcon size={24} color={colors.text} />}
+                    icon={() => <ChatFilledIcon size={24} color={colors.background} />}
                     style={styles.fab}
                 />
             )}
@@ -659,6 +662,7 @@ const styles = StyleSheet.create({
     },
     listContent: {
         paddingBottom: 80,
+        gap: 6
     },
     sectionLabel: {
         fontSize: 12,

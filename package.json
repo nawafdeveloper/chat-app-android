@@ -11,6 +11,7 @@
     "lint": "expo lint"
   },
   "dependencies": {
+    "@expo/ui": "~55.0.12",
     "@react-native-vector-icons/material-design-icons": "^13.1.0",
     "@react-navigation/bottom-tabs": "^7.15.10",
     "@react-navigation/elements": "^2.9.10",

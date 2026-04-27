@@ -2,7 +2,7 @@ import { Colors } from "@/constants/theme";
 import { Message } from "@/types/messages";
 import * as Haptics from 'expo-haptics';
 import { Image } from "expo-image";
-import { StyleSheet, Text, TouchableWithoutFeedback, useColorScheme, View } from "react-native";
+import { Pressable, StyleSheet, Text, TouchableWithoutFeedback, useColorScheme, View } from "react-native";
 import { Gesture, GestureDetector } from "react-native-gesture-handler";
 import { Icon, IconButton, TouchableRipple } from "react-native-paper";
 import Animated, { Extrapolation, interpolate, SlideInLeft, SlideInRight, SlideOutLeft, SlideOutRight, useAnimatedStyle, useSharedValue, withSpring, ZoomIn, ZoomOut } from "react-native-reanimated";
@@ -89,7 +89,8 @@ function Bubble({ message, isDark, showTail = true, isSelected, onLongPress, onP
         video_thumbnail,
         poll,
         open_graph_data,
-        reply_message
+        reply_message,
+        message_raction
     } = message;
     const scheme = useColorScheme();
 
@@ -195,11 +196,11 @@ function Bubble({ message, isDark, showTail = true, isSelected, onLongPress, onP
                 ]}
             >
                 {isSelected && selectedMessageIds.size < 2 && (
-                    <Animated.View 
-                    key={'animated-emojis-container'} 
-                    entering={sent ? SlideInRight.duration(100) : SlideInLeft.duration(100)} 
-                    exiting={sent ? SlideOutRight.duration(100) : SlideOutLeft.duration(100)}
-                    style={[styles.reactionContainer, { backgroundColor: theme.cardReceived, left: sent ? undefined : 30, right: sent ? 30 : undefined }]}>
+                    <Animated.View
+                        key={'animated-emojis-container'}
+                        entering={sent ? SlideInRight.duration(100) : SlideInLeft.duration(100)}
+                        exiting={sent ? SlideOutRight.duration(100) : SlideOutLeft.duration(100)}
+                        style={[styles.reactionContainer, { backgroundColor: theme.cardReceived, left: sent ? undefined : 30, right: sent ? 30 : undefined }]}>
                         {reactionEmojis.map((item, index) => (
                             <Animated.View key={`animated-emoji-${index}`} entering={ZoomIn.delay(index * 20).duration(100)} exiting={ZoomOut.delay(index * 20).duration(100)}>
                                 <TouchableRipple>
@@ -332,12 +333,14 @@ function Bubble({ message, isDark, showTail = true, isSelected, onLongPress, onP
                                         style={[styles.mediaPhoto, { aspectRatio: media_aspect_ratio }]}
                                     />
                                 )}
-                                <Text style={[
-                                    styles.messageText,
-                                    { color: sent ? theme.sentText : theme.receivedText },
-                                ]}>
-                                    {message_text_content}
-                                </Text>
+                                {message_text_content && (
+                                    <Text style={[
+                                        styles.messageText,
+                                        { color: sent ? theme.sentText : theme.receivedText },
+                                    ]}>
+                                        {message_text_content}
+                                    </Text>
+                                )}
                                 <View style={styles.metaRow}>
                                     <Text style={[
                                         styles.timeText,
@@ -367,6 +370,11 @@ function Bubble({ message, isDark, showTail = true, isSelected, onLongPress, onP
                                     <TouchableRipple style={[styles.pollActionContainer, { borderTopColor: sent ? theme.borderSent : theme.borderReceive }]}>
                                         <ThemedText style={{ color: scheme === 'dark' ? '#4ade80' : '#15803d' }}>View votes</ThemedText>
                                     </TouchableRipple>
+                                )}
+                                {message_raction && (
+                                    <Pressable style={[styles.messageReactionContainer, { backgroundColor: sent ? theme.cardSent : theme.cardReceived, borderColor: sent ? theme.borderSent + '44' : theme.borderReceive + '44' }]}>
+                                        <ThemedText style={styles.messageReactionEmoji}>{message_raction.reaction_emoji}</ThemedText>
+                                    </Pressable>
                                 )}
                             </View>
                             {sent && (showTail
@@ -465,6 +473,8 @@ const styles = StyleSheet.create({
         paddingVertical: 4,
         minWidth: 80,
         borderRadius: BORDER_RADIUS,
+        position: 'relative',
+        overflow: 'visible'
     },
     receivedBubbleWithTail: {
         borderTopLeftRadius: 0,
@@ -562,7 +572,8 @@ const styles = StyleSheet.create({
         alignItems: 'center',
         justifyContent: 'flex-end',
         gap: 2,
-        marginTop: 6,
+        marginTop: 3,
+        paddingRight: 4
     },
     timeText: {
         fontSize: 11,
@@ -648,5 +659,22 @@ const styles = StyleSheet.create({
         marginTop: 4,
         marginHorizontal: -10,
         marginBottom: -4
+    },
+    messageReactionContainer: {
+        position: 'absolute',
+        bottom: -15,
+        left: 20,
+        paddingHorizontal: 10,
+        paddingVertical: 6,
+        borderRadius: 99,
+        flexDirection: 'row',
+        alignItems: 'center',
+        gap: 4,
+        elevation: 1,
+        borderWidth: 1
+    },
+    messageReactionEmoji: {
+        fontSize: 10,
+        lineHeight: 11
     }
 });

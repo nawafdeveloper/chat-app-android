@@ -10,6 +10,12 @@ const SettingsLayout = () => {
                     headerShown: false
                 }}
             />
+            <Stack.Screen
+                name='sub-setting'
+                options={{
+                    headerShown: false
+                }}
+            />
         </Stack>
     )
 }
