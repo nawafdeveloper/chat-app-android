@@ -4,7 +4,7 @@ import { Colors } from '@/constants/theme';
 import { usePinStore } from '@/store/use-new-pin-store';
 import { router } from 'expo-router';
 import React, { useEffect, useRef, useState } from 'react';
-import { Keyboard, KeyboardAvoidingView, StyleSheet, TextInput as RNTextInput, useColorScheme, View } from 'react-native';
+import { Keyboard, KeyboardAvoidingView, TextInput as RNTextInput, StyleSheet, useColorScheme, View } from 'react-native';
 import { Button } from 'react-native-paper';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 

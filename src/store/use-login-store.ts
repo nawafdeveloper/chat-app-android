@@ -1,4 +1,5 @@
 import { countryCodes } from "@/constants/country-code";
+import { saveToken } from "@/helper/user-session";
 import { authClient } from "@/lib/auth-client";
 import { router } from "expo-router";
 import { create } from "zustand";
@@ -357,7 +358,16 @@ export const useLoginStore = create<LoginState>((set, get) => ({
                 return;
             }
 
-            router.push('/(newUser)');
+            if (data.token) {
+                await saveToken(data.token);
+            }
+
+            if (data.user.isNewUser) {
+                router.push('/(newUser)');
+                return;
+            }
+
+            router.reload();
         } catch {
             set({ error: "Invalid OTP. Please try again." });
         } finally {

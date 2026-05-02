@@ -99,8 +99,9 @@ const PhoneLoginPage = () => {
                         onPress={handleNext}
                         buttonColor='#25D366'
                         textColor='#ffffff'
+                        style={{ height: 45, width: 90, borderRadius: 99 }}
                     >
-                        {isLoading ? <ActivityIndicator size={'small'} /> : 'Next'}
+                        {isLoading ? <ActivityIndicator color='#25D366' size={'small'} /> : <ThemedText>Next</ThemedText>}
                     </Button>
                 </ThemedView>
             </ThemedView>
