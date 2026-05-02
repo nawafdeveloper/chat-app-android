@@ -1,6 +1,7 @@
 import { ThemedView } from '@/components/themed-view'
 import { CountryCodeData, countryCodes } from '@/constants/country-code'
 import { Colors } from '@/constants/theme'
+import { useLoginStore } from '@/store/use-login-store'
 import { router } from 'expo-router'
 import React, { useMemo, useState } from 'react'
 import { FlatList, StyleSheet, Text, TouchableOpacity, useColorScheme } from 'react-native'
@@ -9,6 +10,7 @@ import { Appbar, List, Searchbar } from 'react-native-paper'
 const SelectCountryPage = () => {
     const scheme = useColorScheme()
     const colors = Colors[scheme === 'unspecified' ? 'light' : scheme ?? 'light']
+    const { setSelectedCountry } = useLoginStore();
 
     const [searchQuery, setSearchQuery] = useState('')
 
@@ -29,7 +31,8 @@ const SelectCountryPage = () => {
         <TouchableOpacity
             style={[styles.countryItem]}
             onPress={() => {
-                router.back()
+                router.back();
+                setSelectedCountry(item);
             }}
         >
             <Text style={styles.flagEmoji}>{item.flag}</Text>

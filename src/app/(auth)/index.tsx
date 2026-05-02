@@ -1,18 +1,26 @@
 import { ThemedText } from '@/components/themed-text'
 import { ThemedView } from '@/components/themed-view'
 import { Colors } from '@/constants/theme'
+import { useLoginStore } from '@/store/use-login-store'
 import { router } from 'expo-router'
 import React, { useEffect, useState } from 'react'
 import { Keyboard, KeyboardAvoidingView, StyleSheet, useColorScheme } from 'react-native'
-import { Button, Icon, TextInput, TouchableRipple } from 'react-native-paper'
+import { ActivityIndicator, Button, Icon, TextInput, TouchableRipple } from 'react-native-paper'
 import { useSafeAreaInsets } from 'react-native-safe-area-context'
 
 const PhoneLoginPage = () => {
     const insets = useSafeAreaInsets();
     const scheme = useColorScheme()
     const colors = Colors[scheme === 'unspecified' ? 'light' : scheme ?? 'light']
+    const {
+        selectedCountry,
+        phoneNumber,
+        setPhoneNumber,
+        isNextEnabled,
+        handleNext,
+        isLoading
+    } = useLoginStore();
 
-    const [phone, setPhone] = useState('');
     const [keyboardOffset, setKeyboardOffset] = useState(0);
 
     useEffect(() => {
@@ -48,7 +56,7 @@ const PhoneLoginPage = () => {
                         onPress={() => router.push('/(auth)/select-country')}
                     >
                         <ThemedView style={[styles.countrySelectorButton, { backgroundColor: colors.card, borderBottomColor: colors.indicator }]}>
-                            <ThemedText>Saudi Arabia</ThemedText>
+                            <ThemedText>{selectedCountry.label}</ThemedText>
                             <Icon
                                 source="unfold-more-horizontal"
                                 color={colors.text}
@@ -58,7 +66,7 @@ const PhoneLoginPage = () => {
                     </TouchableRipple>
                     <ThemedView style={styles.inputsContainer}>
                         <TextInput
-                            value={'+966'}
+                            value={selectedCountry.code}
                             keyboardType='numeric'
                             cursorColor='#25D366'
                             underlineColor={colors.background}
@@ -71,8 +79,8 @@ const PhoneLoginPage = () => {
                         />
                         <TextInput
                             label="Phone number"
-                            value={phone}
-                            onChangeText={text => setPhone(text)}
+                            value={phoneNumber}
+                            onChangeText={text => setPhoneNumber(text)}
                             keyboardType='numeric'
                             cursorColor='#25D366'
                             underlineColor={colors.indicator}
@@ -87,12 +95,12 @@ const PhoneLoginPage = () => {
                 <ThemedView style={styles.bottomContainer}>
                     <Button
                         mode="contained"
-                        disabled={!phone}
-                        onPress={() => router.push('/(auth)/otp-verification')}
+                        disabled={!isNextEnabled || isLoading}
+                        onPress={handleNext}
                         buttonColor='#25D366'
                         textColor='#ffffff'
                     >
-                        Next
+                        {isLoading ? <ActivityIndicator size={'small'} /> : 'Next'}
                     </Button>
                 </ThemedView>
             </ThemedView>

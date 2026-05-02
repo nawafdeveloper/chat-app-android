@@ -1,32 +1,34 @@
 import { ThemedText } from '@/components/themed-text';
 import { ThemedView } from '@/components/themed-view';
 import { Colors } from '@/constants/theme';
-import { router } from 'expo-router';
+import { useLoginStore } from '@/store/use-login-store';
 import React, { useEffect, useRef, useState } from 'react';
 import { Keyboard, KeyboardAvoidingView, TextInput as RNTextInput, StyleSheet, useColorScheme, View } from 'react-native';
-import { Button } from 'react-native-paper';
+import { ActivityIndicator, Button } from 'react-native-paper';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 const OtpVerificationPage = () => {
     const insets = useSafeAreaInsets();
     const scheme = useColorScheme()
     const colors = Colors[scheme === 'unspecified' ? 'light' : scheme ?? 'light']
+    const { otp, setOtp, isLoading, handleVerify } = useLoginStore()
 
-    const [otp, setOtp] = useState(['', '', '', '', '', '']);
     const [keyboardOffset, setKeyboardOffset] = useState(0);
 
     const inputRefs = useRef<(RNTextInput | null)[]>([]);
 
+    const otpArray = otp.split('');
+
     const handleOtpChange = (text: string, index: number) => {
         if (text.length > 1) {
             const pastedCode = text.slice(0, 6).split('');
-            const newOtp = [...otp];
+            let newOtp = [...otpArray];
             for (let i = 0; i < pastedCode.length; i++) {
                 if (i + index < 6) {
                     newOtp[i + index] = pastedCode[i];
                 }
             }
-            setOtp(newOtp);
+            setOtp(newOtp.join(''));
 
             const nextEmptyIndex = newOtp.findIndex((val, idx) => idx >= index && !val);
             if (nextEmptyIndex !== -1 && nextEmptyIndex < 6) {
@@ -35,9 +37,9 @@ const OtpVerificationPage = () => {
                 inputRefs.current[5]?.blur();
             }
         } else {
-            const newOtp = [...otp];
+            const newOtp = [...otpArray];
             newOtp[index] = text;
-            setOtp(newOtp);
+            setOtp(newOtp.join(''));
 
             if (text && index < 5) {
                 inputRefs.current[index + 1]?.focus();
@@ -46,17 +48,14 @@ const OtpVerificationPage = () => {
     };
 
     const handleKeyPress = (e: any, index: number) => {
-        if (e.nativeEvent.key === 'Backspace' && !otp[index] && index > 0) {
+        if (e.nativeEvent.key === 'Backspace' && !otpArray[index] && index > 0) {
             inputRefs.current[index - 1]?.focus();
         }
     };
 
-    const handleVerify = () => {
-        const otpString = otp.join('');
-        if (otpString.length === 6) {
-            console.log('Verifying OTP:', otpString);
-            // Add your verification logic here
-            router.push('../(complete-profile)');
+    const onVerify = () => {
+        if (otp.length === 6) {
+            handleVerify();
         }
     };
 
@@ -92,16 +91,16 @@ const OtpVerificationPage = () => {
                             Verification Code
                         </ThemedText>
                         <ThemedText style={styles.description}>
-                            Enter the 6-digit code we sent to you by SMS.
+                            Enter the 6-digit code we sent you by SMS.
                         </ThemedText>
                     </ThemedView>
 
                     <View style={styles.otpContainer}>
-                        {otp.map((digit, index) => (
+                        {Array(6).fill(0).map((_, index) => (
                             <RNTextInput
                                 key={index}
                                 ref={(ref) => { inputRefs.current[index] = ref; }}
-                                value={digit}
+                                value={otpArray[index] || ''}
                                 onChangeText={(text) => handleOtpChange(text, index)}
                                 onKeyPress={(e) => handleKeyPress(e, index)}
                                 keyboardType="number-pad"
@@ -110,7 +109,7 @@ const OtpVerificationPage = () => {
                                     styles.otpInput,
                                     {
                                         backgroundColor: colors.card,
-                                        borderColor: otp[index] ? '#25D366' : colors.indicator,
+                                        borderColor: otpArray[index] ? '#25D366' : colors.indicator,
                                         color: colors.text,
                                     }
                                 ]}
@@ -124,12 +123,13 @@ const OtpVerificationPage = () => {
                 <ThemedView style={styles.bottomContainer}>
                     <Button
                         mode="contained"
-                        disabled={otp.some(digit => digit === '')}
-                        onPress={handleVerify}
+                        disabled={otp.length !== 6 || isLoading}
+                        onPress={onVerify}
                         buttonColor='#25D366'
                         textColor='#ffffff'
+                        loading={isLoading}
                     >
-                        Verify
+                        {isLoading ? <ActivityIndicator size={'small'} /> : 'Verify'}
                     </Button>
                 </ThemedView>
             </ThemedView>
