@@ -1,6 +1,9 @@
 import { ThemedText } from '@/components/themed-text';
 import { ThemedView } from '@/components/themed-view';
 import { Colors } from '@/constants/theme';
+import { useCrypto } from '@/hooks/use-crypto';
+import { usePinOldUserStore } from '@/store/use-pin-old-user-store';
+import { triggerRefreshKeys } from '@/types/keys.module';
 import { router } from 'expo-router';
 import React, { useEffect, useRef, useState } from 'react';
 import { Keyboard, KeyboardAvoidingView, TextInput as RNTextInput, StyleSheet, useColorScheme, View } from 'react-native';
@@ -13,9 +16,16 @@ const OldUserPage = () => {
     const insets = useSafeAreaInsets();
     const scheme = useColorScheme();
     const colors = Colors[scheme === 'unspecified' ? 'light' : scheme ?? 'light']
+    const {
+        pin,
+        canGoNext,
+        setError,
+        setProcessing,
+        isProcessing,
+        setPin,
+    } = usePinOldUserStore()
+    const { unlock } = useCrypto()
 
-    const [pin, setPin] = useState('');
-    const [loading, setLoading] = useState(false);
     const [keyboardOffset, setKeyboardOffset] = useState(0);
     const inputRefs = useRef<(RNTextInput | null)[]>([])
 
@@ -68,9 +78,33 @@ const OldUserPage = () => {
         }
     }
 
-    const handleKeyPress = (key: string, index: number) => {
-        if (key === 'Backspace' && !pinDigits[index] && index > 0) {
-            inputRefs.current[index - 1]?.focus()
+    const verify = async () => {
+        if (!canGoNext) return
+
+        setProcessing(true)
+
+        try {
+            const ok = await unlock(pin)
+
+            if (!ok) {
+                setError(true)
+                console.log('not ok')
+                setPin('')
+                setProcessing(false)
+                setTimeout(() => setError(false), 600)
+                return
+            }
+
+            setProcessing(false)
+
+            triggerRefreshKeys()
+
+            router.replace('/(tabs)')
+        } catch {
+            setError(true)
+            setProcessing(false)
+            setPin('')
+            setTimeout(() => setError(false), 600)
         }
     }
 
@@ -83,10 +117,10 @@ const OldUserPage = () => {
                 <ThemedView style={styles.topContainer}>
                     <ThemedView style={styles.contextContainer}>
                         <ThemedText style={styles.title}>
-                            Create your PIN
+                            Enter your PIN
                         </ThemedText>
                         <ThemedText style={styles.description}>
-                            PINs can help you restore your account and keep your data encrypted with YaaHalaa.
+                            Type your 6-digit PIN to continue.
                         </ThemedText>
                     </ThemedView>
                     <View style={styles.otpContainer}>
@@ -96,7 +130,6 @@ const OldUserPage = () => {
                                 ref={(ref) => { inputRefs.current[index] = ref }}
                                 value={digit}
                                 onChangeText={(text) => handlePinChange(text, index)}
-                                onKeyPress={(e) => handleKeyPress(e.nativeEvent.key, index)}
                                 keyboardType="number-pad"
                                 maxLength={PIN_LENGTH}
                                 style={[
@@ -116,12 +149,12 @@ const OldUserPage = () => {
                 <ThemedView style={styles.bottomContainer}>
                     <Button
                         mode="contained"
-                        disabled={pin.length < 6 || loading}
-                        onPress={() => router.push('/(tabs)/chats')}
+                        disabled={!canGoNext || isProcessing}
+                        onPress={verify}
                         buttonColor='#25D366'
                         textColor='#ffffff'
                     >
-                        {loading ? <ActivityIndicator color='#25D366' size={'small'} /> : <ThemedText>Verify</ThemedText>}
+                        {isProcessing ? <ActivityIndicator color='#25D366' size={'small'} /> : <ThemedText>Verify</ThemedText>}
                     </Button>
                 </ThemedView>
             </ThemedView>

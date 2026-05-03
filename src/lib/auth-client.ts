@@ -148,7 +148,22 @@ export const authClient = createAuthClient({
                     type: "boolean",
                     input: true,
                     defaultValue: true
-                }
+                },
+                aboutCiphertext: {
+                    type: 'string',
+                    input: true,
+                    defaultValue: ''
+                },
+                aboutEncryptedAesKey: {
+                    type: 'string',
+                    input: true,
+                    defaultValue: ''
+                },
+                aboutIv: {
+                    type: 'string',
+                    input: true,
+                    defaultValue: ''
+                },
             },
         }),
     ]

@@ -8,7 +8,6 @@ import { Icon, IconButton, TouchableRipple } from "react-native-paper";
 import Animated, { Extrapolation, interpolate, SlideInLeft, SlideInRight, SlideOutLeft, SlideOutRight, useAnimatedStyle, useSharedValue, withSpring, ZoomIn, ZoomOut } from "react-native-reanimated";
 import { Path, Svg } from 'react-native-svg';
 import { runOnJS } from "react-native-worklets";
-import PollComponent from "./poll-item";
 import { ThemedText } from "./themed-text";
 import { ThemedView } from "./themed-view";
 import { DarkFileIcon, LightFileIcon } from "./ui/file-icons";
@@ -267,37 +266,6 @@ function Bubble({ message, isDark, showTail = true, isSelected, onLongPress, onP
                                             />
                                             <ThemedText style={[styles.openGraphLink, { color: colors.textSecondary }]}>{open_graph_data.og_url}</ThemedText>
                                         </ThemedView>
-                                    </ThemedView>
-                                )}
-                                {poll && (
-                                    <ThemedView style={styles.pollContentContainer}>
-                                        <ThemedView style={styles.pollHeader}>
-                                            <Icon
-                                                source={poll.poll_multiple_answers ? "checkbox-multiple-marked-circle" : "checkbox-marked-circle"}
-                                                color={colors.textSecondary}
-                                                size={13}
-                                            />
-                                            <ThemedText style={[styles.pollHeaderText, { color: colors.textSecondary }]}>{poll.poll_multiple_answers ? 'Select one or more' : 'Select one only'}</ThemedText>
-                                        </ThemedView>
-                                        <PollComponent
-                                            poll={{
-                                                poll_id: poll.poll_id,
-                                                poll_question: poll.poll_question,
-                                                poll_options: poll.poll_options.map(opt =>
-                                                    typeof opt === 'string'
-                                                        ? { text: opt, votes: 0, user_voted: false }
-                                                        : opt
-                                                ),
-                                                poll_multiple_answers: poll.poll_multiple_answers,
-                                                total_votes: poll.total_votes || 0,
-                                                user_has_voted: poll.user_has_voted || false
-                                            }}
-                                            onVote={(selectedOptions) => {
-                                                console.log('User voted for options:', selectedOptions);
-                                            }}
-                                            isDark={isDark}
-                                            isSent={sent}
-                                        />
                                     </ThemedView>
                                 )}
                                 {attached_media === 'contact' && (

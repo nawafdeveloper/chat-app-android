@@ -18,7 +18,10 @@
         "monochromeImage": "./assets/images/android-icon-monochrome.png"
       },
       "predictiveBackGestureEnabled": false,
-      "package": "com.nawafhq.chatappandroid"
+      "package": "com.nawafhq.chatappandroid",
+      "permissions": [
+        "android.permission.RECORD_AUDIO"
+      ]
     },
     "web": {
       "output": "static",
@@ -77,6 +80,12 @@
     "experiments": {
       "typedRoutes": true,
       "reactCompiler": true
+    },
+    "extra": {
+      "router": {},
+      "eas": {
+        "projectId": "74a7bc49-4d27-40eb-9093-b8be9f222c65"
+      }
     }
   }
 }

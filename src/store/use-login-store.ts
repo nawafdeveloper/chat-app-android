@@ -1,8 +1,11 @@
 import { countryCodes } from "@/constants/country-code";
+import { db } from "@/db/client";
+import { currentUser } from "@/db/schema";
 import { saveToken } from "@/helper/user-session";
 import { authClient } from "@/lib/auth-client";
 import { router } from "expo-router";
 import { create } from "zustand";
+import { useAuthStore } from "./auth-store";
 
 export type CountryCode = (typeof countryCodes)[number];
 
@@ -360,14 +363,41 @@ export const useLoginStore = create<LoginState>((set, get) => ({
 
             if (data.token) {
                 await saveToken(data.token);
+                useAuthStore.getState().setHasSession(true);
             }
 
+            await db.insert(currentUser).values({
+                id: data.user.id,
+                name: data.user.name,
+                phone_number: data.user.phoneNumber ?? null,
+                image: data.user.image ?? null,
+                about_ciphertext: data.user.aboutCiphertext ?? null,
+                about_iv: data.user.aboutIv ?? null,
+                yhla_public_key: data.user.yhlaPublicKey ?? null,
+                yhla_encrypted_private_key: data.user.yhlaEncryptedPrivateKey ?? null,
+                yhla_private_key_iv: data.user.yhlaPrivateKeyIv ?? null,
+                yhla_pin_salt: data.user.yhlaPinSalt ?? null,
+                yhla_pin_verification_tag: data.user.yhlaPinVerificationTag ?? null,
+                yhla_pin_verification_iv: data.user.yhlaPinVerificationIv ?? null,
+                chat_wallpaper: data.user.chatWallpaper ?? "wallpaper-1",
+                enable_read_receipts: data.user.enableReadReceipts ?? true,
+                last_seen: data.user.lastSeen?.toString() ?? null,
+                updated_at: data.user.updatedAt?.toString() ?? null,
+            }).onConflictDoUpdate({
+                target: currentUser.id,
+                set: {
+                    name: data.user.name,
+                    image: data.user.image ?? null,
+                    updated_at: data.user.updatedAt?.toString() ?? null,
+                }
+            });
+
             if (data.user.isNewUser) {
-                router.push('/(newUser)');
+                router.replace('/(newUser)');
                 return;
             }
 
-            router.reload();
+            router.replace('/(tabs)');
         } catch {
             set({ error: "Invalid OTP. Please try again." });
         } finally {

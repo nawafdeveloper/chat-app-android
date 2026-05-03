@@ -1,44 +1,76 @@
 import { TabletProvider } from '@/context/screen-checking-context';
 import { getToken } from '@/helper/user-session';
 import { authClient } from '@/lib/auth-client';
+import { retrieveSessionKeys } from '@/lib/crypto-storage';
+import { useAuthStore } from '@/store/auth-store';
+import { setRefreshKeysHandler } from '@/types/keys.module';
 import { DarkTheme, DefaultTheme, ThemeProvider } from '@react-navigation/native';
+import { useMigrations } from 'drizzle-orm/expo-sqlite/migrator';
 import { Stack } from 'expo-router';
 import * as SplashScreen from 'expo-splash-screen';
 import React, { useEffect, useState } from 'react';
-import { useColorScheme } from 'react-native';
+import { Text, useColorScheme, View } from 'react-native';
 import { GestureHandlerRootView } from 'react-native-gesture-handler';
 import { PaperProvider } from 'react-native-paper';
+import migrations from '../../drizzle/migrations';
+import { db } from '../db/client';
 
 SplashScreen.preventAutoHideAsync();
 
 const AppLayout = () => {
+    const { success, error } = useMigrations(db, migrations);
     const colorScheme = useColorScheme();
     const [isReady, setIsReady] = useState(false);
+    const [hasKeys, setHasKeys] = useState<boolean | null>(null)
+    const { hasSession, setHasSession } = useAuthStore();
     const { data: session } = authClient.useSession();
 
-    const [hasSession, setHasSession] = useState(false);
+    const refreshKeys = async () => {
+        const keys = await retrieveSessionKeys();
+        setHasKeys(!!keys);
+    };
+
+    useEffect(() => {
+        setRefreshKeysHandler(refreshKeys);
+    }, []);
 
     useEffect(() => {
         const bootstrap = async () => {
             const token = await getToken();
+            setHasSession(!!token);
+
             if (token) {
-                setHasSession(true);
+                await refreshKeys();
             } else {
-                setHasSession(false);
+                setHasKeys(false);
             }
+
             setIsReady(true);
-            await SplashScreen.hideAsync();
         };
 
         bootstrap();
     }, []);
 
+    useEffect(() => {
+        if (isReady && success && hasKeys !== null) {
+            SplashScreen.hideAsync();
+        }
+    }, [isReady, success, hasKeys]);
+
     const isNewUser = session?.user.isNewUser === true;
     const hasName = !!session?.user.name?.trim();
-    const hasNoPin = false;
-    const hasPin = true;
+    const hasPin = hasKeys === true;
+    const hasNoPin = hasKeys === false;
 
-    if (!isReady) return null;
+    if (error) {
+        return (
+            <View style={{ flex: 1, justifyContent: 'center', alignItems: 'center' }}>
+                <Text>DB Error: {error.message}</Text>
+            </View>
+        );
+    }
+
+    if (!isReady || !success || hasKeys === null) return null;
 
     return (
         <GestureHandlerRootView>
