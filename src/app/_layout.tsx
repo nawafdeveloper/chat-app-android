@@ -12,8 +12,10 @@ import React, { useEffect, useState } from 'react';
 import { Text, useColorScheme, View } from 'react-native';
 import { GestureHandlerRootView } from 'react-native-gesture-handler';
 import { PaperProvider } from 'react-native-paper';
+import { install } from 'react-native-quick-crypto';
 import migrations from '../../drizzle/migrations';
 import { db } from '../db/client';
+install()
 
 SplashScreen.preventAutoHideAsync();
 

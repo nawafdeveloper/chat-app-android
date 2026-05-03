@@ -51,51 +51,18 @@ const PrivacySettings = () => {
             description: 'Choose who can see your bio and information',
             href: 'about-seen-settings'
         },
-        {
-            key: 'status',
-            title: 'Status',
-            description: 'Select who can view your status updates',
-            href: 'status-seen-settings'
-        },
     ];
 
     const secondListItems: ListItem[] = [
-        {
-            key: 'message-timer',
-            title: 'Default message timer',
-            description: 'Set how long messages last before disappearing',
-            href: 'message-timer-settings'
-        },
         {
             key: 'blocked-contacts',
             title: 'Blocked contacts',
             description: 'View and manage blocked contacts',
             href: 'blocked-contacts-settings'
         },
-        {
-            key: 'app-lock',
-            title: 'App lock',
-            description: 'Required password to unlock YaaHalaa',
-            href: 'app-lock-settings'
-        }
     ];
 
     const switchsListItems: SwitchItem[] = [
-        {
-            key: 'read-receipts',
-            title: 'Read receipts',
-            description: `If turned off, you won't send or receive read receipts. Read receipts are always sent for group chats.`,
-            isEnabled: readReceipts,
-            setEnable: setReadReceipts
-        },
-
-        {
-            key: 'block-unknown',
-            title: 'Block unknown account messages',
-            description: `To protect your account and improve device performance, messages from unknown accounts will be blocked if they exceed a certain volume.`,
-            isEnabled: blockUnknown,
-            setEnable: setBlockUnknown
-        },
         {
             key: 'link-preview',
             title: 'Disable link previews',
@@ -131,7 +98,7 @@ const PrivacySettings = () => {
                     ))}
                 </ThemedView>
                 <ThemedView style={styles.sectionContainer}>
-                    <ThemedText style={[styles.sectionTitle, { color: colors.textSecondary }]}>Disappearing messages</ThemedText>
+                    <ThemedText style={[styles.sectionTitle, { color: colors.textSecondary }]}>Privacy and security</ThemedText>
                     {secondListItems.slice(0, 1).map((item) => (
                         <List.Item
                             key={item.key}

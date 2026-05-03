@@ -23,6 +23,8 @@ const OldUserPage = () => {
         setProcessing,
         isProcessing,
         setPin,
+        error,
+        reset
     } = usePinOldUserStore()
     const { unlock } = useCrypto()
 
@@ -88,7 +90,6 @@ const OldUserPage = () => {
 
             if (!ok) {
                 setError(true)
-                console.log('not ok')
                 setPin('')
                 setProcessing(false)
                 setTimeout(() => setError(false), 600)

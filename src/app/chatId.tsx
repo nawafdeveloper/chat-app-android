@@ -1,17 +1,20 @@
 import ChatInputContainer from '@/components/chat-input-container';
 import Bubble from '@/components/message-bubble';
+import { TiledBackground } from '@/components/tailed-wallpaper';
 import { ThemedText } from '@/components/themed-text';
 import { ThemedView } from '@/components/themed-view';
 import { Colors } from '@/constants/theme';
+import { authClient } from '@/lib/auth-client';
 import { messages } from '@/mocks/chats-messages';
 import { rightNavRef } from '@/store/right-nav-ref';
 import * as Haptics from 'expo-haptics';
 import { router } from 'expo-router';
 import React, { useEffect, useRef, useState } from 'react';
-import { FlatList, ImageBackground, Keyboard, KeyboardAvoidingView, StyleSheet, Text, TextInput, useColorScheme, View } from 'react-native';
+import { FlatList, Keyboard, KeyboardAvoidingView, StyleSheet, Text, TextInput, useColorScheme, View } from 'react-native';
 import { Appbar, TouchableRipple } from 'react-native-paper';
 
 const ChatId = () => {
+    const { data: session } = authClient.useSession()
     const listRef = useRef<FlatList>(null);
     const inputRef = useRef<TextInput>(null);
     const scheme = useColorScheme();
@@ -87,6 +90,30 @@ const ChatId = () => {
         router.back();
     };
 
+    const wallpapers: Record<string, { dark: any; light: any }> = {
+        'wallpaper-1': { dark: require('../../assets/dark-wallpaper-1.svg'), light: require('../../assets/light-wallpaper-1.svg') },
+        'wallpaper-2': { dark: require('../../assets/dark-wallpaper-2.svg'), light: require('../../assets/light-wallpaper-2.svg') },
+        'wallpaper-3': { dark: require('../../assets/dark-wallpaper-3.svg'), light: require('../../assets/light-wallpaper-3.svg') },
+        'wallpaper-4': { dark: require('../../assets/dark-wallpaper-4.svg'), light: require('../../assets/light-wallpaper-4.svg') },
+        'wallpaper-5': { dark: require('../../assets/dark-wallpaper-5.svg'), light: require('../../assets/light-wallpaper-5.svg') },
+        'wallpaper-6': { dark: require('../../assets/dark-wallpaper-6.svg'), light: require('../../assets/light-wallpaper-6.svg') },
+        'wallpaper-7': { dark: require('../../assets/dark-wallpaper-7.svg'), light: require('../../assets/light-wallpaper-7.svg') },
+        'wallpaper-8': { dark: require('../../assets/dark-wallpaper-8.svg'), light: require('../../assets/light-wallpaper-8.svg') },
+        'wallpaper-9': { dark: require('../../assets/dark-wallpaper-9.svg'), light: require('../../assets/light-wallpaper-9.svg') },
+        'wallpaper-10': { dark: require('../../assets/dark-wallpaper-10.svg'), light: require('../../assets/light-wallpaper-10.svg') },
+    }
+
+    const defaultWallpaper = {
+        dark: require('../../assets/dark-wallpaper-1.svg'),
+        light: require('../../assets/light-wallpaper-1.svg'),
+    }
+
+    const getWallpaper = (isDark: boolean) => {
+        const key = session?.user.chatWallpaper ?? ''
+        const pair = wallpapers[key] ?? defaultWallpaper
+        return isDark ? pair.dark : pair.light
+    }
+
     return (
         <KeyboardAvoidingView
             behavior={'height'}
@@ -133,15 +160,7 @@ const ChatId = () => {
                     </>
                 )}
             </Appbar.Header>
-            <ImageBackground
-                source={
-                    isDark
-                        ? require('../../assets/bg-pattern-dark.png')
-                        : require('../../assets/bg-pattern-light.png')
-                }
-                style={styles.background}
-                resizeMode="cover"
-            >
+            <TiledBackground source={getWallpaper(isDark)} style={styles.background}>
                 <FlatList
                     ref={listRef}
                     data={messages}
@@ -169,7 +188,7 @@ const ChatId = () => {
                     replyToUser={replyToUser}
                     inputRef={inputRef}
                 />
-            </ImageBackground>
+            </TiledBackground>
         </KeyboardAvoidingView>
     );
 };
