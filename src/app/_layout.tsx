@@ -1,3 +1,4 @@
+import { CryptoProvider, useCryptoKeys } from '@/context/crypto';
 import { TabletProvider } from '@/context/screen-checking-context';
 import { getToken } from '@/helper/user-session';
 import { authClient } from '@/lib/auth-client';
@@ -9,7 +10,7 @@ import { useMigrations } from 'drizzle-orm/expo-sqlite/migrator';
 import { Stack } from 'expo-router';
 import * as SplashScreen from 'expo-splash-screen';
 import React, { useEffect, useState } from 'react';
-import { Text, useColorScheme, View } from 'react-native';
+import { StatusBar, Text, useColorScheme, View } from 'react-native';
 import { GestureHandlerRootView } from 'react-native-gesture-handler';
 import { PaperProvider } from 'react-native-paper';
 import { install } from 'react-native-quick-crypto';
@@ -19,11 +20,50 @@ install()
 
 SplashScreen.preventAutoHideAsync();
 
+// ─── Outside AppLayout ───────────────────────────────────
+
+type AppStackProps = {
+    hasSession: boolean
+    isNewUser: boolean
+    hasPin: boolean
+    hasNoPin: boolean
+    hasName: boolean
+}
+
+const AppStack = ({ hasSession, isNewUser, hasPin, hasNoPin, hasName }: AppStackProps) => {
+    const { isHydrated: cryptoHydrated } = useCryptoKeys();
+
+    if (!cryptoHydrated) return null;
+
+    return (
+        <Stack screenOptions={{ headerShown: false }}>
+            <Stack.Protected guard={!hasSession}>
+                <Stack.Screen name="(auth)" options={{ animation: 'none', gestureEnabled: false }} />
+            </Stack.Protected>
+            <Stack.Protected guard={hasSession && isNewUser}>
+                <Stack.Screen name="(newUser)" options={{ animation: 'none', gestureEnabled: false }} />
+            </Stack.Protected>
+            <Stack.Protected guard={hasSession && !isNewUser && hasNoPin}>
+                <Stack.Screen name="(oldUser)" options={{ animation: 'none', gestureEnabled: false }} />
+            </Stack.Protected>
+            <Stack.Protected guard={hasSession && !isNewUser && hasPin && !hasName}>
+                <Stack.Screen name="(complete-profile)" options={{ animation: 'none', gestureEnabled: false }} />
+            </Stack.Protected>
+            <Stack.Protected guard={hasSession && !isNewUser && hasPin && hasName}>
+                <Stack.Screen name='(tabs)' options={{ headerShown: false }} />
+                <Stack.Screen name='chatId' options={{ headerShown: false }} />
+            </Stack.Protected>
+        </Stack>
+    );
+};
+
+// ─── AppLayout ───────────────────────────────────────────
+
 const AppLayout = () => {
     const { success, error } = useMigrations(db, migrations);
     const colorScheme = useColorScheme();
     const [isReady, setIsReady] = useState(false);
-    const [hasKeys, setHasKeys] = useState<boolean | null>(null)
+    const [hasKeys, setHasKeys] = useState<boolean | null>(null);
     const { hasSession, setHasSession } = useAuthStore();
     const { data: session } = authClient.useSession();
 
@@ -40,16 +80,13 @@ const AppLayout = () => {
         const bootstrap = async () => {
             const token = await getToken();
             setHasSession(!!token);
-
             if (token) {
                 await refreshKeys();
             } else {
                 setHasKeys(false);
             }
-
             setIsReady(true);
         };
-
         bootstrap();
     }, []);
 
@@ -58,11 +95,6 @@ const AppLayout = () => {
             SplashScreen.hideAsync();
         }
     }, [isReady, success, hasKeys]);
-
-    const isNewUser = session?.user.isNewUser === true;
-    const hasName = !!session?.user.name?.trim();
-    const hasPin = hasKeys === true;
-    const hasNoPin = hasKeys === false;
 
     if (error) {
         return (
@@ -74,29 +106,26 @@ const AppLayout = () => {
 
     if (!isReady || !success || hasKeys === null) return null;
 
+    const isNewUser = session?.user.isNewUser === true;
+    const hasName = !!session?.user.name?.trim();
+    const hasPin = hasKeys === true;
+    const hasNoPin = hasKeys === false;
+
     return (
         <GestureHandlerRootView>
             <TabletProvider>
                 <PaperProvider>
                     <ThemeProvider value={colorScheme === 'dark' ? DarkTheme : DefaultTheme}>
-                        <Stack screenOptions={{ headerShown: false }}>
-                            <Stack.Protected guard={!hasSession}>
-                                <Stack.Screen name="(auth)" options={{ animation: 'none', gestureEnabled: false }} />
-                            </Stack.Protected>
-                            <Stack.Protected guard={hasSession && isNewUser}>
-                                <Stack.Screen name="(newUser)" options={{ animation: 'none', gestureEnabled: false }} />
-                            </Stack.Protected>
-                            <Stack.Protected guard={hasSession && !isNewUser && hasNoPin}>
-                                <Stack.Screen name="(oldUser)" options={{ animation: 'none', gestureEnabled: false }} />
-                            </Stack.Protected>
-                            <Stack.Protected guard={hasSession && !isNewUser && hasPin && !hasName}>
-                                <Stack.Screen name="(complete-profile)" options={{ animation: 'none', gestureEnabled: false }} />
-                            </Stack.Protected>
-                            <Stack.Protected guard={hasSession && !isNewUser && hasPin && hasName}>
-                                <Stack.Screen name='(tabs)' options={{ headerShown: false }} />
-                                <Stack.Screen name='chatId' options={{ headerShown: false }} />
-                            </Stack.Protected>
-                        </Stack>
+                        <CryptoProvider>
+                            <AppStack
+                                hasSession={hasSession}
+                                isNewUser={isNewUser}
+                                hasPin={hasPin}
+                                hasNoPin={hasNoPin}
+                                hasName={hasName}
+                            />
+                        </CryptoProvider>
+                        <StatusBar barStyle={colorScheme === 'dark' ? 'light-content' : 'dark-content'} />
                     </ThemeProvider>
                 </PaperProvider>
             </TabletProvider>

@@ -1,4 +1,4 @@
-import { relations } from "drizzle-orm";
+import { InferInsertModel, InferSelectModel, relations } from "drizzle-orm";
 import {
     index,
     integer,
@@ -185,3 +185,6 @@ export const contactsRelations = relations(contacts, ({ one }) => ({
         references: [currentUser.id],
     }),
 }));
+
+export type DbChat = InferSelectModel<typeof chats>;
+export type DbChatInsert = InferInsertModel<typeof chats>;

@@ -180,3 +180,39 @@ export async function fetchAndDecryptProfileImage(objectKey: string): Promise<st
     imageFileCache.set(objectKey, tempUri)
     return tempUri
 }
+
+export const PROFILE_IMAGE_API_PATH = "/api/profile-image";
+
+export function parseManagedProfileImageUrl(imageUrl?: string | null): {
+    objectKey: string;
+} | null {
+    if (!imageUrl) {
+        return null;
+    }
+
+    try {
+        const parsed = new URL(imageUrl, "https://halabakk-web.nawaf-alhasosah.workers.dev/");
+
+        if (!parsed.pathname.startsWith(PROFILE_IMAGE_API_PATH)) {
+            return null;
+        }
+
+        const objectKey = decodeURIComponent(
+            parsed.pathname.replace(`${PROFILE_IMAGE_API_PATH}/`, "")
+        );
+
+        if (!objectKey) {
+            return null;
+        }
+
+        return {
+            objectKey,
+        };
+    } catch {
+        return null;
+    }
+}
+
+export function isManagedProfileImageUrl(imageUrl?: string | null): boolean {
+    return parseManagedProfileImageUrl(imageUrl) !== null;
+}

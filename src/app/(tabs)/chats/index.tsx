@@ -1,211 +1,38 @@
 import ChatFilledIcon, { ChatIcon } from '@/components/chat-icon'
+import { ChatAvatarImage } from '@/components/decrypted-chat-avatar'
+import { ThemedText } from '@/components/themed-text'
 import { ThemedView } from '@/components/themed-view'
 import { Colors } from '@/constants/theme'
+import { db } from '@/db/client'
+import { contacts, currentUser, chats as dbChats, encryptedMedia, messages } from '@/db/schema'
+import { deleteToken } from '@/helper/user-session'
+import { useChatRealtime } from '@/hooks/use-chat-realtime'
+import { authClient } from '@/lib/auth-client'
+import { clearAllSensitiveData } from '@/lib/crypto-storage'
 import { rightNavRef } from '@/store/right-nav-ref'
+import { useActiveChatStore } from '@/store/use-active-chat-store'
+import { ChatItemType } from '@/types/chats.type'
 import { MaterialIcons } from '@expo/vector-icons'
 import * as Haptics from 'expo-haptics'
 import { router } from 'expo-router'
 import React, { useState } from 'react'
 import {
+    Alert,
     FlatList,
     StyleSheet,
     Text,
     useColorScheme,
-    View,
+    View
 } from 'react-native'
-import { Appbar, Checkbox, FAB, Searchbar, TouchableRipple } from 'react-native-paper'
+import { ActivityIndicator, Appbar, Checkbox, Divider, FAB, Menu, Searchbar, TouchableRipple } from 'react-native-paper'
 
 const SCROLL_THRESHOLD = 10
 const APP_GREEN = '#25D366'
 
-type MessageStatus = 'sending' | 'sent' | 'delivered' | 'read' | 'error'
-type MediaType = 'image' | 'video' | 'audio' | 'document' | 'location' | 'contact' | null
 type ThemeColors = typeof Colors.light | typeof Colors.dark
 
-interface ChatMessage {
-    text: string
-    status: MessageStatus
-    mediaType?: MediaType
-    mediaUrl?: string
-    mediaDuration?: string
-    fileName?: string
-    fileSize?: string
-}
-
-interface Chat {
-    id: string
-    name: string
-    lastMessage: ChatMessage
-    time: string
-    unread: number
-    pinned: boolean
-    muted: boolean
-    archived?: boolean
-    avatarColor: { light: { bg: string; text: string }; dark: { bg: string; text: string } }
-    phoneNumber?: string
-    isGroup?: boolean
-    participants?: string[]
-}
-
-const INITIAL_CHATS: Chat[] = [
-    {
-        id: '1',
-        name: 'Family',
-        lastMessage: {
-            text: 'Dinner at 7 tonight?',
-            status: 'read',
-            mediaType: null,
-        },
-        time: '10:32 AM',
-        unread: 0,
-        pinned: true,
-        muted: true,
-        phoneNumber: '+1234567890',
-        avatarColor: { light: { bg: '#ede9fe', text: '#7c3aed' }, dark: { bg: '#3b0764', text: '#a78bfa' } },
-    },
-    {
-        id: '2',
-        name: 'Work Team',
-        lastMessage: {
-            text: 'Deployment done',
-            status: 'delivered',
-            mediaType: null,
-        },
-        time: '9:58 AM',
-        unread: 3,
-        pinned: true,
-        muted: false,
-        isGroup: true,
-        participants: ['Ahmed', 'Sara', 'Mohammed'],
-        avatarColor: { light: { bg: '#dbeafe', text: '#1d4ed8' }, dark: { bg: '#1e3a5f', text: '#60a5fa' } },
-    },
-    {
-        id: '3',
-        name: 'Sara',
-        lastMessage: {
-            text: 'Sounds good, see you there!',
-            status: 'read',
-            mediaType: null,
-        },
-        time: '9:14 AM',
-        unread: 0,
-        pinned: false,
-        muted: false,
-        phoneNumber: '+1234567891',
-        avatarColor: { light: { bg: '#ffedd5', text: '#c2410c' }, dark: { bg: '#431407', text: '#fb923c' } },
-    },
-    {
-        id: '4',
-        name: 'Mohammed',
-        lastMessage: {
-            text: 'Check out this file',
-            status: 'sent',
-            mediaType: 'document',
-            fileName: 'Project_Proposal.pdf',
-            fileSize: '2.4 MB',
-        },
-        time: 'Yesterday',
-        unread: 1,
-        pinned: false,
-        muted: false,
-        phoneNumber: '+1234567892',
-        avatarColor: { light: { bg: '#dcfce7', text: '#15803d' }, dark: { bg: '#052e16', text: '#4ade80' } },
-    },
-    {
-        id: '5',
-        name: 'Khalid',
-        lastMessage: {
-            text: 'Watch this video',
-            status: 'read',
-            mediaType: 'video',
-            mediaDuration: '1:23',
-        },
-        time: 'Mon',
-        unread: 0,
-        pinned: false,
-        muted: false,
-        phoneNumber: '+1234567893',
-        avatarColor: { light: { bg: '#ccfbf1', text: '#0f766e' }, dark: { bg: '#042f2e', text: '#2dd4bf' } },
-    },
-    {
-        id: '6',
-        name: 'Tech Talk',
-        lastMessage: {
-            text: 'Anyone tried the new Expo SDK?',
-            status: 'sending',
-            mediaType: null,
-        },
-        time: 'Sat',
-        unread: 7,
-        pinned: false,
-        muted: true,
-        isGroup: true,
-        participants: ['Yousuf', 'Ali', 'Omar', 'Hassan'],
-        avatarColor: { light: { bg: '#fef9c3', text: '#a16207' }, dark: { bg: '#422006', text: '#facc15' } },
-    },
-    {
-        id: '7',
-        name: 'Reem',
-        lastMessage: {
-            text: 'Voice message',
-            status: 'delivered',
-            mediaType: 'audio',
-            mediaDuration: '0:24',
-        },
-        time: 'Mon',
-        unread: 0,
-        pinned: false,
-        muted: false,
-        phoneNumber: '+1234567894',
-        avatarColor: { light: { bg: '#fee2e2', text: '#b91c1c' }, dark: { bg: '#450a0a', text: '#f87171' } },
-    },
-    {
-        id: '8',
-        name: 'Design Resources',
-        lastMessage: {
-            text: 'New design assets',
-            status: 'read',
-            mediaType: 'image',
-            mediaUrl: 'https://example.com/image.jpg',
-        },
-        time: 'Mon',
-        unread: 0,
-        pinned: false,
-        muted: false,
-        isGroup: true,
-        participants: ['Design Team'],
-        avatarColor: { light: { bg: '#f3e8ff', text: '#7e22ce' }, dark: { bg: '#3b0764', text: '#c084fc' } },
-    },
-    {
-        id: '9',
-        name: 'John Doe',
-        lastMessage: {
-            text: 'Im here',
-            status: 'read',
-            mediaType: 'location',
-        },
-        time: 'Tue',
-        unread: 0,
-        pinned: false,
-        muted: false,
-        phoneNumber: '+1234567895',
-        avatarColor: { light: { bg: '#e0f2fe', text: '#0369a1' }, dark: { bg: '#082f49', text: '#7dd3fc' } },
-    },
-    {
-        id: '10',
-        name: 'Contact Support',
-        lastMessage: {
-            text: 'Contact shared',
-            status: 'sent',
-            mediaType: 'contact',
-        },
-        time: 'Wed',
-        unread: 2,
-        pinned: false,
-        muted: false,
-        avatarColor: { light: { bg: '#fce7f3', text: '#be185d' }, dark: { bg: '#4c0519', text: '#f472b6' } },
-    },
-]
+type MediaType = 'image' | 'video' | 'audio' | 'document' | 'location' | 'contact' | null
+type MessageStatus = 'sending' | 'sent' | 'delivered' | 'read' | 'error'
 
 const MessageStatusIcon = ({ status }: { status: MessageStatus }) => {
     switch (status) {
@@ -222,6 +49,31 @@ const MessageStatusIcon = ({ status }: { status: MessageStatus }) => {
         default:
             return null
     }
+}
+
+const MediaPreviewText = ({
+    mediaType,
+}: {
+    mediaType: string | null
+}) => {
+    if (!mediaType) return null
+
+    const getText = () => {
+        switch (mediaType) {
+            case 'image': return 'Photo'
+            case 'video': return 'Video'
+            case 'audio': return 'Voice message'
+            case 'document': return 'Document'
+            case 'location': return 'Location'
+            case 'contact': return 'Contact'
+            default: return null
+        }
+    }
+
+    const text = getText()
+    if (!text) return null
+
+    return <Text style={styles.mediaPreviewText}>{text}</Text>
 }
 
 const MediaTypeIcon = ({
@@ -249,34 +101,6 @@ const MediaTypeIcon = ({
         default:
             return null
     }
-}
-
-const MediaPreviewText = ({ mediaType, mediaDuration, fileName, fileSize }: ChatMessage) => {
-    if (!mediaType) return null
-
-    const getText = () => {
-        switch (mediaType) {
-            case 'image':
-                return 'Photo'
-            case 'video':
-                return `Video ${mediaDuration ? `- ${mediaDuration}` : ''}`
-            case 'audio':
-                return `Voice message ${mediaDuration ? `- ${mediaDuration}` : ''}`
-            case 'document':
-                return `${fileName || 'Document'}${fileSize ? ` - ${fileSize}` : ''}`
-            case 'location':
-                return 'Location'
-            case 'contact':
-                return 'Contact'
-            default:
-                return null
-        }
-    }
-
-    const text = getText()
-    if (!text) return null
-
-    return <Text style={styles.mediaPreviewText}>{text}</Text>
 }
 
 const openChat = (chatId: string) => {
@@ -328,7 +152,7 @@ const toggleSelection = (currentSelection: Set<string>, chatId: string) => {
 }
 
 type ChatItemProps = {
-    item: Chat
+    item: ChatItemType
     colors: ThemeColors
     scheme: 'light' | 'dark'
     isSelected: boolean
@@ -346,9 +170,20 @@ const ChatItem = ({
     onPress,
     onLongPress,
 }: ChatItemProps) => {
-    const av = item.avatarColor[scheme]
-    const hasMedia = item.lastMessage.mediaType !== null
-    const hasText = item.lastMessage.text && !hasMedia
+    const avatarBg = colors.card
+    const avatarText = colors.text
+
+    const hasMedia = !!item.last_message_media
+    const hasText = !!item.last_message_context && !hasMedia
+
+    // Derive status from available fields
+    const messageStatus: MessageStatus = item.last_message_sender_is_me
+        ? item.last_message_is_read_by_recipient
+            ? 'read'
+            : 'delivered'
+        : 'received' as MessageStatus
+
+    const displayName = item.display_name ?? item.contact_phone ?? 'Unknown'
 
     return (
         <TouchableRipple
@@ -370,17 +205,37 @@ const ChatItem = ({
                     />
                 )}
 
-                <View style={[styles.avatar, { backgroundColor: av.bg }]}>
-                    <Text style={[styles.avatarText, { color: av.text }]}>{item.name[0]}</Text>
-                </View>
+                {item.avatar ? (
+                    <ChatAvatarImage iconColor={avatarText} backgroundColor={avatarBg} imageUrl={item.avatar} style={styles.avatar} />
+                ) : displayName && displayName !== "Unknown" ? (
+                    <View style={[styles.avatar, { backgroundColor: avatarBg }]}>
+                        <Text style={[styles.avatarText, { color: avatarText }]}>
+                            {displayName[0]?.toUpperCase()}
+                        </Text>
+                    </View>
+                ) : item.contact_phone ? (
+                    <View style={[styles.avatar, { backgroundColor: avatarBg }]}>
+                        <Text style={[styles.avatarText, { color: avatarText }]}>
+                            {item.contact_phone[0]}
+                        </Text>
+                    </View>
+                ) : (
+                    <View style={[styles.avatar, { backgroundColor: avatarBg }]}>
+                        <MaterialIcons
+                            name="person"
+                            size={24}
+                            color={avatarText}
+                        />
+                    </View>
+                )}
 
                 <View style={styles.chatBody}>
                     <View style={styles.chatTop}>
                         <View style={styles.chatNameContainer}>
                             <Text style={[styles.chatName, { color: colors.text }]} numberOfLines={1}>
-                                {item.name}
+                                {displayName}
                             </Text>
-                            {item.muted && (
+                            {item.is_muted_chat_notifications && (
                                 <MaterialIcons
                                     name="volume-off"
                                     size={12}
@@ -389,8 +244,8 @@ const ChatItem = ({
                                 />
                             )}
                         </View>
-                        <Text style={[styles.chatTime, { color: item.unread ? APP_GREEN : colors.textSecondary }]}>
-                            {item.time}
+                        <Text style={[styles.chatTime, { color: item.is_unreaded_chat ? APP_GREEN : colors.textSecondary }]}>
+                            {new Date(item.updated_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
                         </Text>
                     </View>
 
@@ -398,26 +253,31 @@ const ChatItem = ({
                         <View style={styles.previewContainer}>
                             {hasMedia && (
                                 <MediaTypeIcon
-                                    mediaType={item.lastMessage.mediaType}
+                                    mediaType={item.last_message_media as MediaType}
                                     size={16}
                                     color={colors.textSecondary}
                                 />
                             )}
-                            {hasText && <MessageStatusIcon status={item.lastMessage.status} />}
+                            {hasText && item.last_message_sender_is_me && (
+                                <MessageStatusIcon status={messageStatus} />
+                            )}
                             <Text style={[styles.chatPreview, { color: colors.textSecondary }]} numberOfLines={1}>
-                                {hasMedia ? (
-                                    <MediaPreviewText {...item.lastMessage} />
-                                ) : (
-                                    item.lastMessage.text
-                                )}
+                                {hasMedia
+                                    ? <MediaPreviewText mediaType={item.last_message_media} />
+                                    : item.last_message_context
+                                }
                             </Text>
                         </View>
 
                         <View style={styles.rightContainer}>
-                            {!hasText && !hasMedia && <MessageStatusIcon status={item.lastMessage.status} />}
-                            {item.unread > 0 && (
+                            {!hasText && !hasMedia && item.last_message_sender_is_me && (
+                                <MessageStatusIcon status={messageStatus} />
+                            )}
+                            {item.unreaded_messages_length > 0 && (
                                 <View style={styles.badge}>
-                                    <Text style={[styles.badgeText, { color: colors.background }]}>{item.unread}</Text>
+                                    <Text style={[styles.badgeText, { color: colors.background }]}>
+                                        {item.unreaded_messages_length}
+                                    </Text>
                                 </View>
                             )}
                         </View>
@@ -429,15 +289,25 @@ const ChatItem = ({
 }
 
 const ChatsPage = () => {
+    useChatRealtime();
+
+    const chats = useActiveChatStore((state) => state.chats);
+    const chatsLoading = useActiveChatStore((state) => state.chatsLoading);
+
     const scheme = useColorScheme()
     const resolvedScheme = scheme === 'unspecified' ? 'light' : scheme ?? 'light'
     const colors = Colors[resolvedScheme]
 
-    const [chats, setChats] = useState(INITIAL_CHATS)
     const [isSearchFocus, setIsSearchFocus] = useState(false)
     const [searchQuery, setSearchQuery] = useState('')
     const [appbarBg, setAppbarBg] = useState<string>(colors.background)
     const [selectedChatIds, setSelectedChatIds] = useState<Set<string>>(new Set())
+    const [visible, setVisible] = useState(false);
+    const [logoutLoading, setLogoutLoading] = useState(false);
+
+    const openMenu = () => setVisible(true);
+
+    const closeMenu = () => setVisible(false);
 
     const isSelectionMode = selectedChatIds.size > 0
 
@@ -471,58 +341,51 @@ const ChatsPage = () => {
         })
     }
 
-    const handleDeleteSelectedChats = () => {
-        setChats((currentChats) => currentChats.filter((chat) => !selectedChatIds.has(chat.id)))
-        clearSelection()
-    }
+    const confirmLogout = async () => {
+        try {
+            setLogoutLoading(true);
 
-    const handleMarkSelectedAsRead = () => {
-        setChats((currentChats) =>
-            currentChats.map((chat) =>
-                selectedChatIds.has(chat.id)
-                    ? { ...chat, unread: 0 }
-                    : chat
-            )
-        )
-        clearSelection()
-    }
+            await db.transaction(async (tx) => {
+                await tx.delete(encryptedMedia);
+                await tx.delete(messages);
+                await tx.delete(dbChats);
+                await tx.delete(contacts);
+                await tx.delete(currentUser);
+            });
 
-    const handleArchiveSelectedChats = () => {
-        setChats((currentChats) =>
-            currentChats.map((chat) =>
-                selectedChatIds.has(chat.id)
-                    ? { ...chat, archived: true }
-                    : chat
-            )
-        )
-        clearSelection()
-    }
+            await clearAllSensitiveData();
 
-    const handleTogglePinSelectedChats = () => {
-        const shouldPin = chats.some(
-            (chat) => selectedChatIds.has(chat.id) && !chat.pinned
-        )
+            await deleteToken();
 
-        setChats((currentChats) =>
-            currentChats.map((chat) =>
-                selectedChatIds.has(chat.id)
-                    ? { ...chat, pinned: shouldPin }
-                    : chat
-            )
-        )
-        clearSelection()
-    }
+            await authClient.signOut();
+        } catch (error) {
+            console.log(error);
+        } finally {
+            setLogoutLoading(false);
+        }
+    };
+
+    const handleLogout = () => {
+        Alert.alert(
+            'Logout from account?',
+            'Are you sure you want to logout from account? All messages will be deleted from this device.',
+            [
+                { text: 'Cancel', style: 'cancel' },
+                { text: 'Logout', style: 'destructive', onPress: confirmLogout }
+            ]
+        );
+    };
 
     const filteredChats = chats.filter((chat) => {
         const matchesSearch =
-            chat.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
-            chat.lastMessage.text.toLowerCase().includes(searchQuery.toLowerCase())
+            chat.display_name?.toLowerCase().includes(searchQuery.toLowerCase()) ||
+            chat.last_message_context.toLowerCase().includes(searchQuery.toLowerCase())
 
-        return !chat.archived && matchesSearch
+        return !chat.is_archived_chat && matchesSearch
     })
 
-    const pinnedChats = filteredChats.filter((chat) => chat.pinned)
-    const recentChats = filteredChats.filter((chat) => !chat.pinned)
+    const pinnedChats = filteredChats.filter((chat) => chat.is_pinned_chat)
+    const recentChats = filteredChats.filter((chat) => !chat.is_pinned_chat)
 
     const renderHeader = () => (
         <>
@@ -531,14 +394,14 @@ const ChatsPage = () => {
                     <Text style={[styles.sectionLabel, { color: colors.textSecondary }]}>Pinned</Text>
                     {pinnedChats.map((item) => (
                         <ChatItem
-                            key={item.id}
+                            key={item.chat_id}
                             item={item}
                             colors={colors}
                             scheme={resolvedScheme}
-                            isSelected={selectedChatIds.has(item.id)}
+                            isSelected={selectedChatIds.has(item.chat_id)}
                             isSelectionMode={isSelectionMode}
-                            onPress={() => handleChatPress(item.id)}
-                            onLongPress={() => handleChatLongPress(item.id)}
+                            onPress={() => handleChatPress(item.chat_id)}
+                            onLongPress={() => handleChatLongPress(item.chat_id)}
                         />
                     ))}
                 </>
@@ -551,6 +414,17 @@ const ChatsPage = () => {
             )}
         </>
     )
+
+    if (logoutLoading) {
+        return (
+            <ThemedView style={{ flex: 1, justifyContent: 'center', alignItems: 'center' }}>
+                <ThemedView style={{ flexDirection: 'row', alignItems: 'center', gap: 10 }}>
+                    <ActivityIndicator size={'small'} color={colors.text} />
+                    <ThemedText>Logging out from account</ThemedText>
+                </ThemedView>
+            </ThemedView>
+        )
+    }
 
     return (
         <ThemedView style={styles.main}>
@@ -571,19 +445,15 @@ const ChatsPage = () => {
                         />
                         <Appbar.Action
                             icon={ReadAllAppbarIcon}
-                            onPress={handleMarkSelectedAsRead}
                         />
                         <Appbar.Action
                             icon={DeleteAppbarIcon}
-                            onPress={handleDeleteSelectedChats}
                         />
                         <Appbar.Action
                             icon={ArchiveAppbarIcon}
-                            onPress={handleArchiveSelectedChats}
                         />
                         <Appbar.Action
                             icon={PinAppbarIcon}
-                            onPress={handleTogglePinSelectedChats}
                         />
                     </>
                 ) : isSearchFocus ? (
@@ -604,24 +474,35 @@ const ChatsPage = () => {
                     <>
                         <Appbar.Content title="YaaHalaa" titleStyle={styles.appbarTitle} />
                         <Appbar.Action icon="magnify" onPress={() => setIsSearchFocus(true)} />
-                        <Appbar.Action icon="dots-vertical" onPress={() => { }} />
+                        <Menu
+                            visible={visible}
+                            onDismiss={closeMenu}
+                            anchorPosition='bottom'
+                            contentStyle={{ backgroundColor: colors.background }}
+                            anchor={<Appbar.Action icon="dots-vertical" onPress={openMenu} />}>
+                            <Menu.Item onPress={() => { }} title="New group" leadingIcon={'account-multiple-plus-outline'} />
+                            <Menu.Item onPress={() => { }} title="Starred messages" leadingIcon={'star-outline'} />
+                            <Menu.Item onPress={() => { }} title="Mar all as read" leadingIcon={'message-badge-outline'} />
+                            <Divider />
+                            <Menu.Item onPress={handleLogout} title="Logout" leadingIcon={'logout'} />
+                        </Menu>
                     </>
                 )}
             </Appbar.Header>
 
             <FlatList
                 data={recentChats}
-                keyExtractor={(item) => item.id}
+                keyExtractor={(item) => item.chat_id}
                 ListHeaderComponent={renderHeader}
                 renderItem={({ item }) => (
                     <ChatItem
                         item={item}
                         colors={colors}
                         scheme={resolvedScheme}
-                        isSelected={selectedChatIds.has(item.id)}
+                        isSelected={selectedChatIds.has(item.chat_id)}
                         isSelectionMode={isSelectionMode}
-                        onPress={() => handleChatPress(item.id)}
-                        onLongPress={() => handleChatLongPress(item.id)}
+                        onPress={() => handleChatPress(item.chat_id)}
+                        onLongPress={() => handleChatLongPress(item.chat_id)}
                     />
                 )}
                 onScroll={handleScroll}

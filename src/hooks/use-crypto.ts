@@ -4,7 +4,7 @@ import { clearSessionKeys, fetchKeyBundle, retrieveSessionKeys, storeSessionKeys
 import { SessionKeys } from '@/types/crypto.type'
 import { useCallback, useEffect, useState } from 'react'
 
-type CryptoState =
+export type CryptoState =
     | { status: 'idle' }
     | { status: 'loading' }
     | { status: 'unlocked'; session: SessionKeys }
@@ -12,6 +12,7 @@ type CryptoState =
 
 export function useCrypto() {
     const [state, setState] = useState<CryptoState>({ status: 'idle' })
+    const [isHydrated, setIsHydrated] = useState(false)
 
     useEffect(() => {
         const loadSessionKeys = async () => {
@@ -19,6 +20,7 @@ export function useCrypto() {
             if (session) {
                 setState({ status: 'unlocked', session })
             }
+            setIsHydrated(true)
         }
         loadSessionKeys()
     }, [])
@@ -155,5 +157,5 @@ export function useCrypto() {
         setState({ status: 'idle' })
     }, [])
 
-    return { state, register, unlock, changePin, lock }
+    return { state, isHydrated, register, unlock, changePin, lock }
 }
