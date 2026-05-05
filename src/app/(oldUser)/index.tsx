@@ -2,6 +2,9 @@ import { ThemedText } from '@/components/themed-text';
 import { ThemedView } from '@/components/themed-view';
 import { Colors } from '@/constants/theme';
 import { useCrypto } from '@/hooks/use-crypto';
+import { authClient } from '@/lib/auth-client';
+import { preloadUserChatsAndMessages } from '@/lib/chat-sync';
+import { useActiveChatStore } from '@/store/use-active-chat-store';
 import { usePinOldUserStore } from '@/store/use-pin-old-user-store';
 import { triggerRefreshKeys } from '@/types/keys.module';
 import { router } from 'expo-router';
@@ -16,6 +19,7 @@ const OldUserPage = () => {
     const insets = useSafeAreaInsets();
     const scheme = useColorScheme();
     const colors = Colors[scheme === 'unspecified' ? 'light' : scheme ?? 'light']
+    const { data: session } = authClient.useSession();
     const {
         pin,
         canGoNext,
@@ -24,11 +28,13 @@ const OldUserPage = () => {
         isProcessing,
         setPin,
         error,
-        reset
     } = usePinOldUserStore()
     const { unlock } = useCrypto()
 
     const [keyboardOffset, setKeyboardOffset] = useState(0);
+    const [isPreloading, setIsPreloading] = useState(false);
+    const [loadingTitle, setLoadingTitle] = useState('Loading your chats');
+    const [syncError, setSyncError] = useState<string | null>(null);
     const inputRefs = useRef<(RNTextInput | null)[]>([])
 
     const pinDigits = Array.from({ length: PIN_LENGTH }, (_, index) => pin[index] ?? '')
@@ -84,6 +90,7 @@ const OldUserPage = () => {
         if (!canGoNext) return
 
         setProcessing(true)
+        setSyncError(null)
 
         try {
             const ok = await unlock(pin)
@@ -92,21 +99,63 @@ const OldUserPage = () => {
                 setError(true)
                 setPin('')
                 setProcessing(false)
+                setSyncError('Incorrect PIN. Please try again.')
                 setTimeout(() => setError(false), 600)
                 return
             }
 
+            const currentUserId =
+                session?.user.id ?? (await authClient.getSession()).data?.user.id
+
+            if (!currentUserId) {
+                throw new Error('No user session found')
+            }
+
+            Keyboard.dismiss()
+            setIsPreloading(true)
+            setLoadingTitle('Loading your chats')
+
+            await preloadUserChatsAndMessages({
+                currentUserId,
+                cookies: authClient.getCookie(),
+                onLoadingTitleChange: setLoadingTitle,
+                onChatsLoaded: (chats) => {
+                    useActiveChatStore.getState().setChats(chats)
+                },
+                onChatMessagesLoaded: (chatId, messages, hasOlderMessages) => {
+                    useActiveChatStore.getState().replaceMessages(chatId, messages)
+                    useActiveChatStore
+                        .getState()
+                        .setHasOlderMessages(chatId, Boolean(hasOlderMessages))
+                },
+            })
+
             setProcessing(false)
-
             triggerRefreshKeys()
-
             router.replace('/(tabs)')
         } catch {
             setError(true)
             setProcessing(false)
+            setIsPreloading(false)
+            setSyncError('Could not load your chats. Please try again.')
             setPin('')
             setTimeout(() => setError(false), 600)
         }
+    }
+
+    if (isPreloading) {
+        return (
+            <ThemedView style={[styles.loadingMain, { paddingTop: insets.top * 2, paddingBottom: Math.max(insets.bottom, 24) }]}>
+                <ThemedView style={styles.loadingTopContainer}>
+                    <ThemedText style={styles.loadingTitle}>
+                        {loadingTitle}
+                    </ThemedText>
+                </ThemedView>
+                <ThemedView style={styles.loadingBottomContainer}>
+                    <ActivityIndicator color='#25D366' size='large' />
+                </ThemedView>
+            </ThemedView>
+        )
     }
 
     return (
@@ -121,7 +170,7 @@ const OldUserPage = () => {
                             Enter your PIN
                         </ThemedText>
                         <ThemedText style={styles.description}>
-                            Type your 6-digit PIN to continue.
+                            {syncError ?? 'Type your 6-digit PIN to continue.'}
                         </ThemedText>
                     </ThemedView>
                     <View style={styles.otpContainer}>
@@ -137,7 +186,7 @@ const OldUserPage = () => {
                                     styles.otpInput,
                                     {
                                         backgroundColor: colors.card,
-                                        borderColor: digit ? '#25D366' : colors.indicator,
+                                        borderColor: error ? '#ef4444' : digit ? '#25D366' : colors.indicator,
                                         color: colors.text,
                                     },
                                 ]}
@@ -170,6 +219,27 @@ const styles = StyleSheet.create({
         flex: 1,
         paddingHorizontal: 16,
         justifyContent: 'space-between'
+    },
+    loadingMain: {
+        flex: 1,
+        paddingHorizontal: 16,
+        justifyContent: 'space-between',
+    },
+    loadingTopContainer: {
+        width: '100%',
+        maxWidth: 400,
+        marginHorizontal: 'auto',
+        alignItems: 'flex-start',
+    },
+    loadingTitle: {
+        fontSize: 28,
+        fontWeight: '600',
+        lineHeight: 32,
+    },
+    loadingBottomContainer: {
+        width: '100%',
+        alignItems: 'center',
+        justifyContent: 'flex-end',
     },
     topContainer: {
         flex: 1,

@@ -2,7 +2,7 @@ import { db } from "@/db/client";
 import { messages as dbMessages } from "@/db/schema";
 import type { Message } from "@/types/messages";
 import type { InferInsertModel, InferSelectModel } from "drizzle-orm";
-import { and, desc, eq, inArray, lt } from "drizzle-orm";
+import { and, asc, desc, eq, inArray, lt } from "drizzle-orm";
 
 type DbMessage = InferSelectModel<typeof dbMessages>;
 type DbMessageInsert = InferInsertModel<typeof dbMessages>;
@@ -131,6 +131,25 @@ export async function getDbMessages(
     return rows
         .map(dbRowToMessage)
         .sort((left, right) => left.created_at.getTime() - right.created_at.getTime());
+}
+
+export async function getAllDbMessages(chatRoomId: string): Promise<Message[]> {
+    const rows = await db
+        .select()
+        .from(dbMessages)
+        .where(eq(dbMessages.chat_room_id, chatRoomId))
+        .orderBy(asc(dbMessages.created_at));
+
+    return rows.map(dbRowToMessage);
+}
+
+export async function getEveryDbMessage(): Promise<Message[]> {
+    const rows = await db
+        .select()
+        .from(dbMessages)
+        .orderBy(asc(dbMessages.chat_room_id), asc(dbMessages.created_at));
+
+    return rows.map(dbRowToMessage);
 }
 
 // Get a single message by ID

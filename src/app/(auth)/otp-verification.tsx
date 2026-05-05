@@ -151,6 +151,7 @@ const styles = StyleSheet.create({
         flexDirection: 'column',
         gap: 32,
         maxWidth: 400,
+        width: '100%',
         marginHorizontal: 'auto'
     },
     contextContainer: {

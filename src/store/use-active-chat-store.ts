@@ -40,6 +40,7 @@ interface ActiveChatState {
     setReplyDraft: (chatId: string, replyMessage: ReplyMessage) => void;
     clearReplyDraft: (chatId: string) => void;
     setMessages: (chatId: string, messages: Message[]) => void;
+    replaceMessages: (chatId: string, messages: Message[]) => void;
     appendMessage: (chatId: string, message: Message) => void;
     updateMessage: (
         chatId: string,
@@ -67,7 +68,7 @@ interface ActiveChatState {
 
 export const useActiveChatStore = create<ActiveChatState>((set) => ({
     chats: [],
-    chatsLoading: false,
+    chatsLoading: true,
     chatsError: null,
     selectedChatId: null,
     recipientPhone: null,
@@ -164,6 +165,13 @@ export const useActiveChatStore = create<ActiveChatState>((set) => ({
                 },
             };
         }),
+    replaceMessages: (chatId, messages) =>
+        set((state) => ({
+            messagesByChatId: {
+                ...state.messagesByChatId,
+                [chatId]: sortMessagesChronologically(messages),
+            },
+        })),
     appendMessage: (chatId, message) =>
         set((state) => {
             const existingMessages = state.messagesByChatId[chatId] ?? [];
@@ -421,7 +429,7 @@ export const useActiveChatStore = create<ActiveChatState>((set) => ({
     reset: () =>
         set({
             chats: [],
-            chatsLoading: false,
+            chatsLoading: true,
             chatsError: null,
             selectedChatId: null,
             recipientPhone: null,

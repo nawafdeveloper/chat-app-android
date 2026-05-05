@@ -115,6 +115,16 @@ export async function getDbChat(chatId: string): Promise<ChatItemType | null> {
     return rows.length > 0 ? dbRowToChatItem(rows[0]) : null;
 }
 
+export async function markDbChatRead(chatId: string) {
+    await db
+        .update(dbChats)
+        .set({
+            is_unread: false,
+            unread_count: 0,
+        })
+        .where(eq(dbChats.chat_id, chatId));
+}
+
 export async function upsertDbChats(chats: ChatItemType[]) {
     for (const chat of chats) {
         const values = toDbChatInsert(chat);

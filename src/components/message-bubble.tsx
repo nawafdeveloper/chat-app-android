@@ -2,7 +2,8 @@ import { Colors } from "@/constants/theme";
 import { Message } from "@/types/messages";
 import * as Haptics from 'expo-haptics';
 import { Image } from "expo-image";
-import { Pressable, StyleSheet, Text, TouchableWithoutFeedback, useColorScheme, View } from "react-native";
+import { memo, useMemo } from "react";
+import { Pressable, StyleSheet, Text, TouchableWithoutFeedback, View } from "react-native";
 import { Gesture, GestureDetector } from "react-native-gesture-handler";
 import { Icon, IconButton, TouchableRipple } from "react-native-paper";
 import Animated, { Extrapolation, interpolate, SlideInLeft, SlideInRight, SlideOutLeft, SlideOutRight, useAnimatedStyle, useSharedValue, withSpring, ZoomIn, ZoomOut } from "react-native-reanimated";
@@ -14,13 +15,14 @@ import { DarkFileIcon, LightFileIcon } from "./ui/file-icons";
 
 type BubbleProps = {
     message: Message;
+    currentUserId: string | null;
     isDark: boolean;
     showTail?: boolean;
     isSelected: boolean;
-    onLongPress: () => void;
-    onPress: () => void;
+    selectedCount: number;
+    onLongPress: (messageId: string) => void;
+    onPress: (messageId: string) => void;
     handleReply: (replyTo: string, replyMsg: string) => void;
-    selectedMessageIds: Set<string>;
 };
 
 const DARK = {
@@ -55,9 +57,10 @@ const TAIL_PATH = "M1.533,2.568L8,11.193V0L2.812,0C1.042,0,0.474,1.156,1.533,2.5
 const MAX_SWIPE_TRANSLATION = 56;
 const SWIPE_HARD_LIMIT = 72;
 const SWIPE_RESISTANCE = 0.18;
+const REACTION_EMOJIS = ["👍", "❤️", "😂", "😮", "😢", "🙏"];
 const AnimatedIconButton = Animated.createAnimatedComponent(IconButton);
 
-function Tail({ color, sent }: { color: string; sent: boolean }) {
+const Tail = memo(function Tail({ color, sent }: { color: string; sent: boolean }) {
     return (
         <View style={[
             styles.tailContainer,
@@ -73,9 +76,9 @@ function Tail({ color, sent }: { color: string; sent: boolean }) {
             </Svg>
         </View>
     );
-}
+});
 
-function Bubble({ message, isDark, showTail = true, isSelected, onLongPress, onPress, handleReply, selectedMessageIds }: BubbleProps) {
+function Bubble({ message, currentUserId, isDark, showTail = true, isSelected, selectedCount, onLongPress, onPress, handleReply }: BubbleProps) {
     const {
         message_id,
         sender_user_id,
@@ -91,15 +94,16 @@ function Bubble({ message, isDark, showTail = true, isSelected, onLongPress, onP
         reply_message,
         message_raction
     } = message;
-    const scheme = useColorScheme();
+    const formattedTime = useMemo(
+        () => created_at.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+        [created_at]
+    );
 
     const theme = isDark ? DARK : LIGHT;
-    const colors = Colors[scheme === 'unspecified' ? 'light' : scheme ?? 'light']
-    const sent = sender_user_id === 'user_123';
+    const colors = isDark ? Colors.dark : Colors.light;
+    const sent = sender_user_id === currentUserId;
     const bubbleColor = sent ? theme.sentBubble : theme.receivedBubble;
     const swipeX = useSharedValue(0);
-
-    const reactionEmojis = ["👍", "❤️", "😂", "😮", "😢", "🙏"];
 
     const swipeProgress = useAnimatedStyle(() => {
         const progress = interpolate(
@@ -138,54 +142,57 @@ function Bubble({ message, isDark, showTail = true, isSelected, onLongPress, onP
 
     const hasTriggered = useSharedValue(false);
 
-    const panGesture = Gesture.Pan()
-        .activeOffsetX([-12, 12])
-        .failOffsetY([-10, 10])
-        .onUpdate((event) => {
-            const nextTranslation = Math.max(0, event.translationX);
-            const resistedTranslation = nextTranslation <= MAX_SWIPE_TRANSLATION
-                ? nextTranslation
-                : MAX_SWIPE_TRANSLATION + (nextTranslation - MAX_SWIPE_TRANSLATION) * SWIPE_RESISTANCE;
+    const panGesture = useMemo(
+        () => Gesture.Pan()
+            .activeOffsetX([-12, 12])
+            .failOffsetY([-10, 10])
+            .onUpdate((event) => {
+                const nextTranslation = Math.max(0, event.translationX);
+                const resistedTranslation = nextTranslation <= MAX_SWIPE_TRANSLATION
+                    ? nextTranslation
+                    : MAX_SWIPE_TRANSLATION + (nextTranslation - MAX_SWIPE_TRANSLATION) * SWIPE_RESISTANCE;
 
-            swipeX.value = Math.min(SWIPE_HARD_LIMIT, resistedTranslation);
+                swipeX.value = Math.min(SWIPE_HARD_LIMIT, resistedTranslation);
 
-            if (!hasTriggered.value && resistedTranslation >= MAX_SWIPE_TRANSLATION) {
-                hasTriggered.value = true;
-                runOnJS(Haptics.impactAsync)(Haptics.ImpactFeedbackStyle.Medium);
-            }
-        })
-        .onEnd((event) => {
-            const finalTranslation = Math.max(0, event.translationX);
-            const finalResistedTranslation = finalTranslation <= MAX_SWIPE_TRANSLATION
-                ? finalTranslation
-                : MAX_SWIPE_TRANSLATION + (finalTranslation - MAX_SWIPE_TRANSLATION) * SWIPE_RESISTANCE;
+                if (!hasTriggered.value && resistedTranslation >= MAX_SWIPE_TRANSLATION) {
+                    hasTriggered.value = true;
+                    runOnJS(Haptics.impactAsync)(Haptics.ImpactFeedbackStyle.Medium);
+                }
+            })
+            .onEnd((event) => {
+                const finalTranslation = Math.max(0, event.translationX);
+                const finalResistedTranslation = finalTranslation <= MAX_SWIPE_TRANSLATION
+                    ? finalTranslation
+                    : MAX_SWIPE_TRANSLATION + (finalTranslation - MAX_SWIPE_TRANSLATION) * SWIPE_RESISTANCE;
 
-            if (finalResistedTranslation >= MAX_SWIPE_TRANSLATION) {
-                runOnJS(handleReply)(sender_user_id, message_text_content || '');
-            }
+                if (finalResistedTranslation >= MAX_SWIPE_TRANSLATION) {
+                    runOnJS(handleReply)(sender_user_id, message_text_content || '');
+                }
 
-            hasTriggered.value = false;
-            swipeX.value = withSpring(0, {
-                damping: 22,
-                stiffness: 240,
-                mass: 0.7,
-            });
-        })
-        .onFinalize(() => {
-            if (hasTriggered.value) {
                 hasTriggered.value = false;
-            }
-            swipeX.value = withSpring(0, {
-                damping: 22,
-                stiffness: 240,
-                mass: 0.7,
-            });
-        });
+                swipeX.value = withSpring(0, {
+                    damping: 22,
+                    stiffness: 240,
+                    mass: 0.7,
+                });
+            })
+            .onFinalize(() => {
+                if (hasTriggered.value) {
+                    hasTriggered.value = false;
+                }
+                swipeX.value = withSpring(0, {
+                    damping: 22,
+                    stiffness: 240,
+                    mass: 0.7,
+                });
+            }),
+        [handleReply, hasTriggered, message_text_content, sender_user_id, swipeX]
+    );
 
     return (
         <TouchableWithoutFeedback
-            onLongPress={onLongPress}
-            onPress={onPress}
+            onLongPress={() => onLongPress(message_id)}
+            onPress={() => onPress(message_id)}
         >
             <View
                 key={message_id}
@@ -194,13 +201,13 @@ function Bubble({ message, isDark, showTail = true, isSelected, onLongPress, onP
                     sent ? styles.rowSent : styles.rowReceived,
                 ]}
             >
-                {isSelected && selectedMessageIds.size < 2 && (
+                {isSelected && selectedCount < 2 && (
                     <Animated.View
                         key={'animated-emojis-container'}
                         entering={sent ? SlideInRight.duration(100) : SlideInLeft.duration(100)}
                         exiting={sent ? SlideOutRight.duration(100) : SlideOutLeft.duration(100)}
                         style={[styles.reactionContainer, { backgroundColor: theme.cardReceived, left: sent ? undefined : 30, right: sent ? 30 : undefined }]}>
-                        {reactionEmojis.map((item, index) => (
+                        {REACTION_EMOJIS.map((item, index) => (
                             <Animated.View key={`animated-emoji-${index}`} entering={ZoomIn.delay(index * 20).duration(100)} exiting={ZoomOut.delay(index * 20).duration(100)}>
                                 <TouchableRipple>
                                     <ThemedText style={styles.emojis}>{item}</ThemedText>
@@ -271,8 +278,8 @@ function Bubble({ message, isDark, showTail = true, isSelected, onLongPress, onP
                                 {attached_media === 'contact' && (
                                     <ThemedView style={[styles.contactCard, { backgroundColor: sent ? theme.cardSent : theme.cardReceived }]}>
                                         <ThemedView style={styles.contactContentContainer}>
-                                            <View style={[styles.avatar, { backgroundColor: scheme === 'dark' ? '#052e16' : '#dcfce7' }]}>
-                                                <Text style={[styles.avatarText, { color: scheme === 'dark' ? '#4ade80' : '#15803d' }]}>M</Text>
+                                            <View style={[styles.avatar, { backgroundColor: isDark ? '#052e16' : '#dcfce7' }]}>
+                                                <Text style={[styles.avatarText, { color: isDark ? '#4ade80' : '#15803d' }]}>M</Text>
                                             </View>
                                             <ThemedText>Mohammed</ThemedText>
                                         </ThemedView>
@@ -314,7 +321,7 @@ function Bubble({ message, isDark, showTail = true, isSelected, onLongPress, onP
                                         styles.timeText,
                                         { color: sent ? theme.sentTime : theme.receivedTime },
                                     ]}>
-                                        {created_at.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                                        {formattedTime}
                                     </Text>
                                     {sent && (
                                         <Icon
@@ -327,16 +334,16 @@ function Bubble({ message, isDark, showTail = true, isSelected, onLongPress, onP
                                 {attached_media === 'contact' && (
                                     <ThemedView style={[styles.contactActionContainer, { borderTopColor: sent ? theme.borderSent : theme.borderReceive }]}>
                                         <TouchableRipple style={[styles.contactActionButton, { borderRightColor: sent ? theme.borderSent : theme.borderReceive, borderRightWidth: 1 }]}>
-                                            <ThemedText style={{ color: scheme === 'dark' ? '#4ade80' : '#15803d' }}>Add contact</ThemedText>
+                                            <ThemedText style={{ color: isDark ? '#4ade80' : '#15803d' }}>Add contact</ThemedText>
                                         </TouchableRipple>
                                         <TouchableRipple style={styles.contactActionButton}>
-                                            <ThemedText style={{ color: scheme === 'dark' ? '#4ade80' : '#15803d' }}>Message</ThemedText>
+                                            <ThemedText style={{ color: isDark ? '#4ade80' : '#15803d' }}>Message</ThemedText>
                                         </TouchableRipple>
                                     </ThemedView>
                                 )}
                                 {poll && (
                                     <TouchableRipple style={[styles.pollActionContainer, { borderTopColor: sent ? theme.borderSent : theme.borderReceive }]}>
-                                        <ThemedText style={{ color: scheme === 'dark' ? '#4ade80' : '#15803d' }}>View votes</ThemedText>
+                                        <ThemedText style={{ color: isDark ? '#4ade80' : '#15803d' }}>View votes</ThemedText>
                                     </TouchableRipple>
                                 )}
                                 {message_raction && (
@@ -357,7 +364,31 @@ function Bubble({ message, isDark, showTail = true, isSelected, onLongPress, onP
     );
 }
 
-export default Bubble;
+function areBubblePropsEqual(previous: BubbleProps, next: BubbleProps) {
+    if (
+        previous.message !== next.message ||
+        previous.currentUserId !== next.currentUserId ||
+        previous.isDark !== next.isDark ||
+        previous.showTail !== next.showTail ||
+        previous.isSelected !== next.isSelected ||
+        previous.onLongPress !== next.onLongPress ||
+        previous.onPress !== next.onPress ||
+        previous.handleReply !== next.handleReply
+    ) {
+        return false;
+    }
+
+    if (
+        (previous.isSelected || next.isSelected) &&
+        previous.selectedCount !== next.selectedCount
+    ) {
+        return false;
+    }
+
+    return true;
+}
+
+export default memo(Bubble, areBubblePropsEqual);
 
 const BORDER_RADIUS = 8;
 

@@ -35,6 +35,8 @@ export async function showMessageNotification(
             body,
             categoryIdentifier: 'chat_message',
             data: {
+                type: 'NEW_MESSAGE',
+                conversationId: roomId,
                 roomId,
                 senderId
             }

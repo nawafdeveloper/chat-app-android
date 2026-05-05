@@ -4,44 +4,59 @@ import { TiledBackground } from '@/components/tailed-wallpaper';
 import { ThemedText } from '@/components/themed-text';
 import { ThemedView } from '@/components/themed-view';
 import { Colors } from '@/constants/theme';
-import { authClient } from '@/lib/auth-client';
 import { useChatMessages } from '@/hooks/use-chat-realtime';
+import { authClient } from '@/lib/auth-client';
+import { markDbChatRead } from '@/lib/upsert-db-chats';
 import { rightNavRef } from '@/store/right-nav-ref';
 import { useActiveChatStore } from '@/store/use-active-chat-store';
+import { useRealtimeStore } from '@/store/use-realtime-store';
 import type { Message } from '@/types/messages';
 import * as Haptics from 'expo-haptics';
-import { router } from 'expo-router';
-import React, { useCallback, useEffect, useRef, useState } from 'react';
-import { FlatList, Keyboard, KeyboardAvoidingView, StyleSheet, Text, TextInput, useColorScheme, View } from 'react-native';
-import { ActivityIndicator, Appbar, TouchableRipple } from 'react-native-paper';
+import { router, useLocalSearchParams } from 'expo-router';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { FlatList, Keyboard, KeyboardAvoidingView, Platform, StyleSheet, Text, TextInput, useColorScheme, View } from 'react-native';
+import { Appbar, TouchableRipple } from 'react-native-paper';
 
 const EMPTY_MESSAGES: Message[] = [];
 
 const ChatId = () => {
     const { data: session } = authClient.useSession()
-    const listRef = useRef<FlatList>(null);
+    const listRef = useRef<FlatList<Message>>(null);
     const inputRef = useRef<TextInput>(null);
     const scheme = useColorScheme();
     const isDark = scheme === 'dark';
     const colors = Colors[scheme === 'unspecified' ? 'light' : scheme ?? 'light']
+    const params = useLocalSearchParams<{ chatId?: string | string[] }>();
+    const routeChatId = Array.isArray(params.chatId) ? params.chatId[0] : params.chatId;
 
     const selectedChatId = useActiveChatStore((state) => state.selectedChatId);
-    const { loadOlderMessages } = useChatMessages();
+    const setSelectedChatId = useActiveChatStore((state) => state.setSelectedChatId);
+    const activeChatId = routeChatId ?? selectedChatId;
+    const currentUserId = session?.user.id ?? null;
+    const { loadOlderMessages } = useChatMessages(activeChatId);
+    const activeChat = useActiveChatStore((state) =>
+        activeChatId
+            ? state.chats.find((chat) => chat.chat_id === activeChatId) ?? null
+            : null
+    );
     const messages = useActiveChatStore((state) =>
-        selectedChatId
-            ? state.messagesByChatId[selectedChatId] ?? EMPTY_MESSAGES
+        activeChatId
+            ? state.messagesByChatId[activeChatId] ?? EMPTY_MESSAGES
             : EMPTY_MESSAGES
     );
+    const visibleMessages = useMemo(() => [...messages].reverse(), [messages]);
     const olderMessagesLoading = useActiveChatStore((state) =>
-        selectedChatId
-            ? state.olderMessagesLoadingByChatId[selectedChatId] ?? false
+        activeChatId
+            ? state.olderMessagesLoadingByChatId[activeChatId] ?? false
             : false
     );
     const hasOlderMessages = useActiveChatStore((state) =>
-        selectedChatId
-            ? state.hasOlderMessagesByChatId[selectedChatId] ?? false
+        activeChatId
+            ? state.hasOlderMessagesByChatId[activeChatId] ?? false
             : false
     );
+    const chatTitle = activeChat?.display_name ?? activeChat?.contact_phone ?? 'Chat';
+    const chatInitial = chatTitle.trim().charAt(0).toUpperCase() || '?';
 
     const [selectionMode, setSelectionMode] = useState(false);
     const [selectedMessageIds, setSelectedMessageIds] = useState<Set<string>>(new Set());
@@ -49,6 +64,34 @@ const ChatId = () => {
     const [replyToUser, setReplyToUser] = useState('');
     const [replyMessage, setReplyMessage] = useState('');
     const [keyboardOffset, setKeyboardOffset] = useState(-30);
+    const selectedCount = selectedMessageIds.size;
+    const selectionModeRef = useRef(selectionMode);
+    const hasStartedMessageScrollRef = useRef(false);
+
+    useEffect(() => {
+        selectionModeRef.current = selectionMode;
+    }, [selectionMode]);
+
+    useEffect(() => {
+        if (routeChatId && routeChatId !== selectedChatId) {
+            setSelectedChatId(routeChatId);
+        }
+    }, [routeChatId, selectedChatId, setSelectedChatId]);
+
+    useEffect(() => {
+        if (!activeChatId) {
+            return;
+        }
+
+        useActiveChatStore.getState().markChatRead(activeChatId);
+        void markDbChatRead(activeChatId).catch((error) => {
+            console.log('Failed to mark chat read locally:', error);
+        });
+        useRealtimeStore.getState().sendEvent({
+            type: 'MARK_READ',
+            conversationId: activeChatId,
+        });
+    }, [activeChatId]);
 
     useEffect(() => {
         const keyboardDidShowListener = Keyboard.addListener('keyboardDidShow', () => {
@@ -64,44 +107,51 @@ const ChatId = () => {
         };
     }, []);
 
-    const handleLongPress = (messageId: string) => {
-        Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
+    const handleLongPress = useCallback((messageId: string) => {
+        void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
+        selectionModeRef.current = true;
         setSelectionMode(true);
         setSelectedMessageIds(new Set([messageId]));
-    };
+    }, []);
 
-    const handleBubblePress = (messageId: string) => {
-        if (selectionMode) {
-            const newSelected = new Set(selectedMessageIds);
+    const handleBubblePress = useCallback((messageId: string) => {
+        if (!selectionModeRef.current) {
+            return;
+        }
+
+        setSelectedMessageIds((currentSelection) => {
+            const newSelected = new Set(currentSelection);
             if (newSelected.has(messageId)) {
                 newSelected.delete(messageId);
                 if (newSelected.size === 0) {
+                    selectionModeRef.current = false;
                     setSelectionMode(false);
                 }
             } else {
                 newSelected.add(messageId);
             }
-            setSelectedMessageIds(newSelected);
-        }
-    };
+            return newSelected;
+        });
+    }, []);
 
-    const handleReply = (replyTo: string, replyMsg: string) => {
+    const handleReply = useCallback((replyTo: string, replyMsg: string) => {
         setIsReply(true);
         setReplyToUser(replyTo);
         setReplyMessage(replyMsg);
         inputRef.current?.focus();
-    };
+    }, []);
 
-    const handleClearReply = () => {
+    const handleClearReply = useCallback(() => {
         setIsReply(false);
         setReplyToUser('');
         setReplyMessage('');
-    };
+    }, []);
 
-    const handleCancelSelectionMode = () => {
+    const handleCancelSelectionMode = useCallback(() => {
+        selectionModeRef.current = false;
         setSelectionMode(false);
         setSelectedMessageIds(new Set());
-    };
+    }, []);
 
     const handleExitFromChat = () => {
         if (rightNavRef.isReady()) {
@@ -113,16 +163,46 @@ const ChatId = () => {
     };
 
     const handleLoadOlderMessages = useCallback(() => {
-        if (!selectedChatId || olderMessagesLoading || !hasOlderMessages) {
+        if (
+            !hasStartedMessageScrollRef.current ||
+            !activeChatId ||
+            olderMessagesLoading ||
+            !hasOlderMessages
+        ) {
             return;
         }
 
-        void loadOlderMessages(selectedChatId);
+        void loadOlderMessages(activeChatId);
     }, [
+        activeChatId,
         hasOlderMessages,
         loadOlderMessages,
         olderMessagesLoading,
-        selectedChatId,
+    ]);
+
+    const handleMessageScroll = useCallback(() => {
+        hasStartedMessageScrollRef.current = true;
+    }, []);
+
+    const renderMessageItem = useCallback(({ item }: { item: Message }) => (
+        <Bubble
+            message={item}
+            currentUserId={currentUserId}
+            isDark={isDark}
+            isSelected={selectedMessageIds.has(item.message_id)}
+            selectedCount={selectedCount}
+            onLongPress={handleLongPress}
+            onPress={handleBubblePress}
+            handleReply={handleReply}
+        />
+    ), [
+        currentUserId,
+        handleBubblePress,
+        handleLongPress,
+        handleReply,
+        isDark,
+        selectedCount,
+        selectedMessageIds,
     ]);
 
     const wallpapers: Record<string, { dark: any; light: any }> = {
@@ -184,9 +264,9 @@ const ChatId = () => {
                                 <TouchableRipple>
                                     <ThemedView style={styles.profileContainer}>
                                         <View style={[styles.avatar, { backgroundColor: scheme === 'dark' ? '#052e16' : '#dcfce7' }]}>
-                                            <Text style={[styles.avatarText, { color: scheme === 'dark' ? '#4ade80' : '#15803d' }]}>M</Text>
+                                            <Text style={[styles.avatarText, { color: scheme === 'dark' ? '#4ade80' : '#15803d' }]}>{chatInitial}</Text>
                                         </View>
-                                        <ThemedText>Mohammed</ThemedText>
+                                        <ThemedText numberOfLines={1}>{chatTitle}</ThemedText>
                                     </ThemedView>
                                 </TouchableRipple>
                             }
@@ -198,32 +278,22 @@ const ChatId = () => {
             <TiledBackground source={getWallpaper(isDark)} style={styles.background}>
                 <FlatList
                     ref={listRef}
-                    data={messages}
+                    data={visibleMessages}
                     keyExtractor={(item) => item.message_id}
-                    renderItem={({ item }) => (
-                        <Bubble
-                            key={item.message_id}
-                            message={item}
-                            isDark={isDark}
-                            isSelected={selectedMessageIds.has(item.message_id)}
-                            onLongPress={() => handleLongPress(item.message_id)}
-                            onPress={() => handleBubblePress(item.message_id)}
-                            handleReply={handleReply}
-                            selectedMessageIds={selectedMessageIds}
-                        />
-                    )}
+                    renderItem={renderMessageItem}
                     inverted
-                    contentContainerStyle={{ flexDirection: 'column-reverse' }}
+                    contentContainerStyle={styles.messagesContent}
                     contentInsetAdjustmentBehavior="automatic"
+                    keyboardShouldPersistTaps="handled"
+                    onScroll={handleMessageScroll}
+                    scrollEventThrottle={32}
+                    initialNumToRender={18}
+                    maxToRenderPerBatch={10}
+                    updateCellsBatchingPeriod={32}
+                    windowSize={7}
+                    removeClippedSubviews={Platform.OS === 'android'}
                     onEndReached={handleLoadOlderMessages}
                     onEndReachedThreshold={0.25}
-                    ListFooterComponent={
-                        olderMessagesLoading ? (
-                            <View style={styles.olderMessagesLoader}>
-                                <ActivityIndicator size="small" color="#25D366" />
-                            </View>
-                        ) : null
-                    }
                 />
                 <ChatInputContainer
                     isReply={isReply}
@@ -243,6 +313,9 @@ const styles = StyleSheet.create({
     background: {
         flex: 1,
     },
+    messagesContent: {
+        paddingVertical: 8,
+    },
     profileContainer: {
         flexDirection: 'row',
         alignItems: 'center',
@@ -259,10 +332,5 @@ const styles = StyleSheet.create({
     avatarText: {
         fontSize: 18,
         fontWeight: '500'
-    },
-    olderMessagesLoader: {
-        paddingVertical: 12,
-        alignItems: 'center',
-        justifyContent: 'center',
     },
 })

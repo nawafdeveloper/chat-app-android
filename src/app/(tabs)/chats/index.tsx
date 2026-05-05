@@ -8,18 +8,22 @@ import { contacts, currentUser, chats as dbChats, encryptedMedia, messages } fro
 import { deleteToken } from '@/helper/user-session'
 import { useChatRealtime } from '@/hooks/use-chat-realtime'
 import { authClient } from '@/lib/auth-client'
+import { deleteMobilePushToken, getDecryptedDbMessagePage, MESSAGE_PAGE_SIZE } from '@/lib/chat-sync'
 import { clearAllSensitiveData } from '@/lib/crypto-storage'
+import { markDbChatRead } from '@/lib/upsert-db-chats'
 import { rightNavRef } from '@/store/right-nav-ref'
+import { useNotificationStore } from '@/store/notification-store'
 import { useActiveChatStore } from '@/store/use-active-chat-store'
-import { useRealtimeStore } from '@/store/use-realtime-store'
 import { ChatItemType } from '@/types/chats.type'
 import { MaterialIcons } from '@expo/vector-icons'
 import * as Haptics from 'expo-haptics'
 import { router } from 'expo-router'
-import React, { useCallback, useMemo, useState } from 'react'
+import React, { useCallback, useMemo, useRef, useState } from 'react'
 import {
     Alert,
     FlatList,
+    InteractionManager,
+    Platform,
     Pressable,
     StyleSheet,
     Text,
@@ -111,7 +115,7 @@ const openChat = (chatId: string) => {
         return
     }
 
-    router.push({
+    router.navigate({
         pathname: '/chatId',
         params: { chatId },
     })
@@ -158,8 +162,8 @@ type ChatItemProps = {
     colors: ThemeColors
     isSelected: boolean
     isSelectionMode: boolean
-    onPress: () => void
-    onLongPress: () => void
+    onPress: (chatId: string) => void
+    onLongPress: (chatId: string) => void
 }
 
 const ChatItem = ({
@@ -183,21 +187,25 @@ const ChatItem = ({
         : 'received' as MessageStatus
 
     const displayName = item.display_name ?? item.contact_phone ?? 'Unknown'
+    const chatTime = useMemo(
+        () => new Date(item.updated_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+        [item.updated_at]
+    )
 
     return (
         <Pressable
-            onPress={onPress}
-            onLongPress={onLongPress}
+            onPress={() => onPress(item.chat_id)}
+            onLongPress={() => onLongPress(item.chat_id)}
             style={styles.chatRipple}>
             <View style={styles.chatItem}>
                 {isSelectionMode && (
-                    <Checkbox.Android
-                        status={isSelected ? 'checked' : 'unchecked'}
-                        onPress={onPress}
-                        color={APP_GREEN}
-                        uncheckedColor={colors.textSecondary}
-                        style={styles.selectionCheckbox}
-                    />
+                    <View pointerEvents="none" style={styles.selectionCheckbox}>
+                        <Checkbox.Android
+                            status={isSelected ? 'checked' : 'unchecked'}
+                            color={APP_GREEN}
+                            uncheckedColor={colors.textSecondary}
+                        />
+                    </View>
                 )}
 
                 <ChatAvatar
@@ -226,7 +234,7 @@ const ChatItem = ({
                             )}
                         </View>
                         <Text style={[styles.chatTime, { color: item.is_unreaded_chat ? APP_GREEN : colors.textSecondary }]}>
-                            {new Date(item.updated_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                            {chatTime}
                         </Text>
                     </View>
 
@@ -269,12 +277,14 @@ const ChatItem = ({
     )
 }
 
+const MemoChatItem = React.memo(ChatItem)
+
 const ChatsPage = () => {
     useChatRealtime();
 
+    const { data: session } = authClient.useSession();
     const chats = useActiveChatStore((state) => state.chats);
     const chatsLoading = useActiveChatStore((state) => state.chatsLoading);
-    const status = useRealtimeStore((state) => state.status);
     const setSelectedChatId = useActiveChatStore((state) => state.setSelectedChatId);
 
     const scheme = useColorScheme()
@@ -287,6 +297,8 @@ const ChatsPage = () => {
     const [selectedChatIds, setSelectedChatIds] = useState<Set<string>>(new Set())
     const [visible, setVisible] = useState(false);
     const [logoutLoading, setLogoutLoading] = useState(false);
+    const ignoreNextChatPressRef = useRef<string | null>(null);
+    const isScrolledRef = useRef(false);
 
     const openMenu = () => setVisible(true);
 
@@ -294,26 +306,75 @@ const ChatsPage = () => {
 
     const isSelectionMode = selectedChatIds.size > 0
 
-    const handleScroll = (e: any) => {
+    const handleScroll = useCallback((e: any) => {
         const offsetY = e.nativeEvent.contentOffset.y
-        setAppbarBg(offsetY > SCROLL_THRESHOLD ? colors.card : colors.background)
-    }
+        const isScrolled = offsetY > SCROLL_THRESHOLD
+
+        if (isScrolledRef.current === isScrolled) {
+            return
+        }
+
+        isScrolledRef.current = isScrolled
+        setAppbarBg(isScrolled ? colors.card : colors.background)
+    }, [colors.background, colors.card])
 
     const clearSelection = () => {
         setSelectedChatIds(new Set())
     }
 
+    const primeMessagesFromCache = useCallback((chatId: string) => {
+        const currentUserId = session?.user.id;
+        if (!currentUserId) return;
+        if ((useActiveChatStore.getState().messagesByChatId[chatId]?.length ?? 0) > 0) {
+            return;
+        }
+
+        void getDecryptedDbMessagePage({
+            chatId,
+            currentUserId,
+        }).then((cachedMessages) => {
+            if (cachedMessages.length === 0) return;
+
+            const {
+                setMessages,
+                setHasOlderMessages,
+            } = useActiveChatStore.getState();
+
+            setMessages(chatId, cachedMessages);
+            setHasOlderMessages(chatId, cachedMessages.length === MESSAGE_PAGE_SIZE);
+        });
+    }, [session?.user.id]);
+
     const handleChatPress = useCallback((chatId: string) => {
+        if (ignoreNextChatPressRef.current === chatId) {
+            ignoreNextChatPressRef.current = null;
+            return;
+        }
+
         if (isSelectionMode) {
             setSelectedChatIds((currentSelection) => toggleSelection(currentSelection, chatId));
             return;
         }
+
         setSelectedChatId(chatId);
+        useActiveChatStore.getState().markChatRead(chatId);
+        void markDbChatRead(chatId).catch((error) => {
+            console.log('Failed to mark chat read locally:', error);
+        });
         openChat(chatId);
-    }, [isSelectionMode, setSelectedChatId]);
+        InteractionManager.runAfterInteractions(() => {
+            primeMessagesFromCache(chatId);
+        });
+    }, [isSelectionMode, primeMessagesFromCache, setSelectedChatId]);
 
     const handleChatLongPress = useCallback((chatId: string) => {
-        Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
+        ignoreNextChatPressRef.current = chatId;
+        setTimeout(() => {
+            if (ignoreNextChatPressRef.current === chatId) {
+                ignoreNextChatPressRef.current = null;
+            }
+        }, 700);
+        void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
         setIsSearchFocus(false);
         setSelectedChatIds((currentSelection) => {
             if (currentSelection.size === 0) return new Set([chatId]);
@@ -335,7 +396,15 @@ const ChatsPage = () => {
 
             await clearAllSensitiveData();
 
+            try {
+                await deleteMobilePushToken({ cookies: authClient.getCookie() });
+            } catch (error) {
+                console.log('Failed to clear push token:', error);
+            }
+
             await deleteToken();
+            useNotificationStore.getState().setExpoPushToken('');
+            useActiveChatStore.getState().reset();
 
             await authClient.signOut();
         } catch (error) {
@@ -373,14 +442,14 @@ const ChatsPage = () => {
                 <>
                     <Text style={[styles.sectionLabel, { color: colors.textSecondary }]}>Pinned</Text>
                     {pinnedChats.map((item) => (
-                        <ChatItem
+                        <MemoChatItem
                             key={item.chat_id}
                             item={item}
                             colors={colors}
                             isSelected={selectedChatIds.has(item.chat_id)}
                             isSelectionMode={isSelectionMode}
-                            onPress={() => handleChatPress(item.chat_id)}
-                            onLongPress={() => handleChatLongPress(item.chat_id)}
+                            onPress={handleChatPress}
+                            onLongPress={handleChatLongPress}
                         />
                     ))}
                 </>
@@ -392,18 +461,18 @@ const ChatsPage = () => {
                 </Text>
             )}
         </>
-    ), [pinnedChats, recentChats, colors, resolvedScheme, selectedChatIds, isSelectionMode, handleChatPress, handleChatLongPress]);
+    ), [pinnedChats, recentChats, colors, selectedChatIds, isSelectionMode, handleChatPress, handleChatLongPress]);
 
     const renderItem = useCallback(({ item }: { item: ChatItemType }) => (
-        <ChatItem
+        <MemoChatItem
             item={item}
             colors={colors}
             isSelected={selectedChatIds.has(item.chat_id)}
             isSelectionMode={isSelectionMode}
-            onPress={() => handleChatPress(item.chat_id)}
-            onLongPress={() => handleChatLongPress(item.chat_id)}
+            onPress={handleChatPress}
+            onLongPress={handleChatLongPress}
         />
-    ), [colors, resolvedScheme, selectedChatIds, isSelectionMode, handleChatPress, handleChatLongPress]);
+    ), [colors, selectedChatIds, isSelectionMode, handleChatPress, handleChatLongPress]);
 
     if (logoutLoading) {
         return (
@@ -486,27 +555,21 @@ const ChatsPage = () => {
                 renderItem={renderItem}
                 onScroll={handleScroll}
                 scrollEventThrottle={16}
+                initialNumToRender={12}
+                maxToRenderPerBatch={8}
+                updateCellsBatchingPeriod={32}
+                windowSize={7}
+                removeClippedSubviews={Platform.OS === 'android'}
                 ListHeaderComponentStyle={{ gap: 6 }}
                 contentContainerStyle={styles.listContent}
-                ListEmptyComponent={
+                ListEmptyComponent={!chatsLoading ? (
                     <View style={styles.emptyContainer}>
                         <ChatIcon color={colors.textSecondary} />
                         <Text style={[styles.emptyText, { color: colors.textSecondary }]}>
                             No chats found
                         </Text>
                     </View>
-                }
-                ListFooterComponent={
-                    <>
-                        {status === 'connecting' || chatsLoading && (
-                            <ThemedView style={{ flexDirection: 'column', justifyContent: 'center', alignItems: 'center' }}>
-                                <ThemedView style={{ width: 50, height: 50, borderRadius: 99, backgroundColor: colors.card, borderWidth: 1, borderColor: colors.indicator + '33', justifyContent: 'center', alignItems: 'center' }}>
-                                    <ActivityIndicator size={'small'} color={APP_GREEN} />
-                                </ThemedView>
-                            </ThemedView>
-                        )}
-                    </>
-                }
+                ) : null}
             />
             {!isSelectionMode && (
                 <FAB

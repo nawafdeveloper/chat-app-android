@@ -4,16 +4,19 @@ import { setupNotificationCategories } from '@/helper/push-notification';
 import { registerForPushNotificationsAsync } from '@/helper/request-for-push-notification';
 import { getToken } from '@/helper/user-session';
 import { authClient } from '@/lib/auth-client';
+import { deleteMobilePushToken, hydrateLocalChatCache, registerMobilePushToken, syncMobileChatsAndMessages } from '@/lib/chat-sync';
 import { retrieveSessionKeys } from '@/lib/crypto-storage';
+import { rightNavRef } from '@/store/right-nav-ref';
 import { useAuthStore } from '@/store/auth-store';
 import { useNotificationStore } from '@/store/notification-store';
+import { useActiveChatStore } from '@/store/use-active-chat-store';
 import { setRefreshKeysHandler } from '@/types/keys.module';
 import { DarkTheme, DefaultTheme, ThemeProvider } from '@react-navigation/native';
 import { useMigrations } from 'drizzle-orm/expo-sqlite/migrator';
 import * as Notifications from 'expo-notifications';
-import { Stack } from 'expo-router';
+import { router, Stack } from 'expo-router';
 import * as SplashScreen from 'expo-splash-screen';
-import React, { useEffect, useState } from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { StatusBar, Text, useColorScheme, View } from 'react-native';
 import { GestureHandlerRootView } from 'react-native-gesture-handler';
 import { PaperProvider } from 'react-native-paper';
@@ -75,9 +78,13 @@ const AppLayout = () => {
     const colorScheme = useColorScheme();
     const [isReady, setIsReady] = useState(false);
     const [hasKeys, setHasKeys] = useState<boolean | null>(null);
+    const [localCacheReady, setLocalCacheReady] = useState(false);
     const { hasSession, setHasSession } = useAuthStore();
     const { data: session } = authClient.useSession();
-    const { setExpoPushToken, setNotification } = useNotificationStore();
+    const { expoPushToken, setExpoPushToken, setNotification } = useNotificationStore();
+    const registeredPushTokenRef = useRef<string | null>(null);
+    const hydratedLocalCacheRef = useRef<string | null>(null);
+    const handledNotificationResponseRef = useRef<string | null>(null);
 
     const refreshKeys = async () => {
         const keys = await retrieveSessionKeys();
@@ -100,38 +107,213 @@ const AppLayout = () => {
             setIsReady(true);
         };
         bootstrap();
+    }, [setHasSession]);
+
+    useEffect(() => {
+        const shouldWaitForLocalCache = hasSession && hasKeys === true;
+
+        if (
+            isReady &&
+            success &&
+            hasKeys !== null &&
+            (!shouldWaitForLocalCache || localCacheReady)
+        ) {
+            SplashScreen.hideAsync();
+        }
+    }, [hasKeys, hasSession, isReady, localCacheReady, session?.user.id, success]);
+
+    useEffect(() => {
+        if (!hasSession) {
+            hydratedLocalCacheRef.current = null;
+            registeredPushTokenRef.current = null;
+            setLocalCacheReady(false);
+        }
+    }, [hasSession]);
+
+    useEffect(() => {
+        if (!success || hasKeys !== true || !hasSession) {
+            setLocalCacheReady(true);
+            return;
+        }
+
+        if (!session?.user.id) {
+            setLocalCacheReady(false);
+            return;
+        }
+
+        if (hydratedLocalCacheRef.current === session.user.id) {
+            setLocalCacheReady(true);
+            return;
+        }
+
+        hydratedLocalCacheRef.current = session.user.id;
+        setLocalCacheReady(false);
+
+        void hydrateLocalChatCache({
+            currentUserId: session.user.id,
+            onChatsLoaded: (chats) => {
+                useActiveChatStore.getState().setChats(chats);
+            },
+            onChatMessagesLoaded: (chatId, messages, hasOlderMessages) => {
+                useActiveChatStore.getState().replaceMessages(chatId, messages);
+                useActiveChatStore
+                    .getState()
+                    .setHasOlderMessages(chatId, Boolean(hasOlderMessages));
+            },
+        })
+            .catch((error) => {
+                console.log('Failed to hydrate local chat cache:', error);
+            })
+            .finally(() => {
+                useActiveChatStore.getState().setChatsLoading(false);
+                setLocalCacheReady(true);
+            });
+    }, [hasKeys, hasSession, session?.user.id, success]);
+
+    const openChatFromNotification = useCallback((conversationId: string) => {
+        useActiveChatStore.getState().setSelectedChatId(conversationId);
+
+        if (rightNavRef.isReady()) {
+            rightNavRef.navigate('chatId', { chatId: conversationId });
+            return;
+        }
+
+        router.navigate({
+            pathname: '/chatId',
+            params: { chatId: conversationId },
+        });
+    }, []);
+
+    const syncMobileCache = useCallback(async () => {
+        if (!session?.user.id || hasKeys !== true) {
+            return;
+        }
+
+        await syncMobileChatsAndMessages({
+            currentUserId: session.user.id,
+            cookies: authClient.getCookie(),
+            onChatsLoaded: (chats) => {
+                useActiveChatStore.getState().setChats(chats);
+            },
+            onChatMessagesLoaded: (chatId, messages, hasOlderMessages) => {
+                useActiveChatStore.getState().replaceMessages(chatId, messages);
+                useActiveChatStore
+                    .getState()
+                    .setHasOlderMessages(chatId, Boolean(hasOlderMessages));
+            },
+        });
+    }, [hasKeys, session?.user.id]);
+
+    const getNotificationConversationId = useCallback((
+        notification: Notifications.Notification
+    ) => {
+        const data = notification.request.content.data as {
+            conversationId?: unknown;
+            roomId?: unknown;
+        };
+
+        const conversationId = data.conversationId ?? data.roomId;
+        return typeof conversationId === 'string' ? conversationId : null;
     }, []);
 
     useEffect(() => {
-        if (isReady && success && hasKeys !== null) {
-            SplashScreen.hideAsync();
-        }
-    }, [isReady, success, hasKeys]);
+        registerForPushNotificationsAsync()
+            .then(token => {
+                if (token) {
+                    setExpoPushToken(token);
+                }
+            })
+            .catch((error) => {
+                console.log('Push registration failed:', error);
+                if (
+                    hasSession &&
+                    error instanceof Error &&
+                    error.message.includes('Permission not granted')
+                ) {
+                    void deleteMobilePushToken({
+                        cookies: authClient.getCookie(),
+                    }).catch((deleteError) => {
+                        console.log('Failed to clear push token:', deleteError);
+                    });
+                }
+            });
+    }, [hasSession, setExpoPushToken]);
 
     useEffect(() => {
-        registerForPushNotificationsAsync().then(token => {
-            if (token) {
-                setExpoPushToken(token);
+        if (!hasSession || !session?.user.id || !expoPushToken) {
+            return;
+        }
+
+        const registrationKey = `${session.user.id}:${expoPushToken}`;
+
+        if (registeredPushTokenRef.current === registrationKey) {
+            return;
+        }
+
+        void registerMobilePushToken({
+            token: expoPushToken,
+            cookies: authClient.getCookie(),
+        })
+            .then(() => {
+                registeredPushTokenRef.current = registrationKey;
+            })
+            .catch((error) => {
+                console.log('Failed to save push token:', error);
+            });
+    }, [expoPushToken, hasSession, session?.user.id]);
+
+    useEffect(() => {
+        const syncFromNotification = () => {
+            void syncMobileCache().catch((error) => {
+                console.log('Failed to sync mobile notification data:', error);
+            });
+        };
+
+        const handleNotificationResponse = (
+            response: Notifications.NotificationResponse
+        ) => {
+            const identifier = response.notification.request.identifier;
+            if (handledNotificationResponseRef.current === identifier) {
+                return;
             }
-        });
+
+            handledNotificationResponseRef.current = identifier;
+
+            const conversationId = getNotificationConversationId(response.notification);
+
+            if (conversationId) {
+                openChatFromNotification(conversationId);
+            }
+
+            syncFromNotification();
+        };
+
+        Notifications.getLastNotificationResponseAsync()
+            .then((response) => {
+                if (response) {
+                    handleNotificationResponse(response);
+                }
+            })
+            .catch((error) => {
+                console.log('Failed to read last notification response:', error);
+            });
 
         const subscription = Notifications.addNotificationReceivedListener(
             (notification) => {
                 setNotification(notification);
+                syncFromNotification();
             }
         );
 
         const responseSubscription = Notifications.addNotificationResponseReceivedListener(
-            (response) => {
-                console.log('Notification response:', response);
-            }
+            handleNotificationResponse
         );
 
         return () => {
             subscription.remove();
             responseSubscription.remove();
         };
-    }, [setExpoPushToken, setNotification]);
+    }, [getNotificationConversationId, openChatFromNotification, setNotification, syncMobileCache]);
 
     if (error) {
         return (
