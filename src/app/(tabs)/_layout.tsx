@@ -9,7 +9,7 @@ export default function TabLayout() {
   if (isTablet) {
     return <TabletAppTabs />;
   }
-  
+
   return (
     <AppTabs />
   );

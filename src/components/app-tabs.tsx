@@ -3,10 +3,17 @@ import React from 'react';
 import { Platform, useColorScheme } from 'react-native';
 
 import { Colors } from '@/constants/theme';
+import { useActiveChatStore } from '@/store/use-active-chat-store';
 
 export default function AppTabs() {
   const scheme = useColorScheme();
   const colors = Colors[scheme === 'unspecified' ? 'light' : scheme];
+  const chats = useActiveChatStore((state) => state.chats);
+
+  const totalUnreadMessages = chats.reduce(
+    (total, chat) => total + chat.unreaded_messages_length,
+    0
+  );
 
   // Only render on Android
   if (Platform.OS !== 'android') {
@@ -18,7 +25,9 @@ export default function AppTabs() {
       backgroundColor={colors.card}
       indicatorColor={colors.indicator}
       rippleColor={colors.indicator}
-      labelStyle={{ selected: { color: colors.text } }}>
+      labelStyle={{ selected: { color: colors.text } }}
+      badgeBackgroundColor={'#25D366'}
+    >
       <NativeTabs.Trigger name="index" hidden />
 
       <NativeTabs.Trigger name="chats">
@@ -27,6 +36,11 @@ export default function AppTabs() {
           src={require('@/assets/expo.icon/Assets/chats_icon.png')}
           renderingMode="template"
         />
+        {totalUnreadMessages > 0 && (
+          <NativeTabs.Trigger.Badge>
+            {totalUnreadMessages.toString()}
+          </NativeTabs.Trigger.Badge>
+        )}
       </NativeTabs.Trigger>
 
       <NativeTabs.Trigger name="archive">

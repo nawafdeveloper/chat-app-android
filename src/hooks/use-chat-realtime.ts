@@ -1,4 +1,5 @@
 import { useCryptoKeys } from "@/context/crypto";
+import { showMessageNotification } from "@/helper/push-notification";
 import { authClient } from "@/lib/auth-client";
 import {
     decryptChatPreviewBatch,
@@ -14,14 +15,27 @@ import {
 } from "@/lib/chat-utils";
 import { decryptStoredContact } from "@/lib/contact-crypto";
 import { resolveDirectChatContact } from "@/lib/contact-display";
-import { upsertDbChats } from "@/lib/upsert-db-chats";
+import { getDbChat, getDbChats, upsertDbChats } from "@/lib/upsert-db-chats";
+import { getDbMessage, getDbMessages, upsertDbMessages } from "@/lib/upsert-db-messages";
 import { useActiveChatStore } from "@/store/use-active-chat-store";
 import { useContactDirectoryStore } from "@/store/use-contact-directory-store";
 import { useRealtimeStore } from "@/store/use-realtime-store";
 import type { ChatItemType } from "@/types/chats.type";
-import { Message } from "@/types/messages";
+import type { Message } from "@/types/messages";
 import type { ServerRealtimeEvent } from "@/types/realtime-events";
-import { useEffect, useRef } from "react";
+import { useCallback, useEffect, useRef } from "react";
+
+const MESSAGE_PAGE_SIZE = 20;
+
+type RemoteMessage = Omit<Message, "created_at" | "updated_at"> & {
+    created_at: string | Date;
+    updated_at: string | Date;
+};
+
+type MessagePage = {
+    messages: Message[];
+    hasMore: boolean;
+};
 
 async function hydrateStoredContactOverrides(chats: ChatItemType[]) {
     const chatsWithStoredContacts = await Promise.all(
@@ -45,167 +59,165 @@ async function hydrateStoredContactOverrides(chats: ChatItemType[]) {
     return chatsWithStoredContacts;
 }
 
-export function useChatRealtime() {
+async function getDecryptedDbMessagePage({
+    chatId,
+    currentUserId,
+    beforeDate,
+}: {
+    chatId: string;
+    currentUserId: string;
+    beforeDate?: Date;
+}) {
+    const cachedMessages = await getDbMessages(
+        chatId,
+        MESSAGE_PAGE_SIZE,
+        beforeDate
+    );
+
+    if (cachedMessages.length === 0) {
+        return [];
+    }
+
+    return decryptMessageBatch({
+        currentUserId,
+        messages: cachedMessages,
+    });
+}
+
+async function fetchDecryptedMessagePage({
+    chatId,
+    currentUserId,
+    cookies,
+    beforeDate,
+}: {
+    chatId: string;
+    currentUserId: string;
+    cookies: string | null;
+    beforeDate?: Date;
+}): Promise<MessagePage> {
+    const beforeQuery = beforeDate
+        ? `&before=${encodeURIComponent(beforeDate.toISOString())}`
+        : "";
+
+    const response = await fetch(
+        `https://halabakk-web.nawaf-alhasosah.workers.dev/api/messages?chatRoomId=${encodeURIComponent(chatId)}&limit=${MESSAGE_PAGE_SIZE}${beforeQuery}`,
+        {
+            headers: {
+                "Cookie": cookies || "",
+                "Content-Type": "application/json"
+            },
+            credentials: "omit"
+        }
+    );
+
+    if (!response.ok) {
+        throw new Error("Failed to fetch messages");
+    }
+
+    const payload = (await response.json()) as {
+        messages: RemoteMessage[];
+        hasMore?: boolean;
+    };
+
+    const normalizedMessages = payload.messages
+        .map(normalizeMessage)
+        .filter((message) =>
+            beforeDate ? message.created_at.getTime() < beforeDate.getTime() : true
+        );
+    const decryptedMessages = await decryptMessageBatch({
+        currentUserId,
+        messages: normalizedMessages,
+    });
+
+    return {
+        messages: decryptedMessages,
+        hasMore:
+            normalizedMessages.length > 0
+                ? payload.hasMore ?? normalizedMessages.length === MESSAGE_PAGE_SIZE
+                : false,
+    };
+}
+
+export function useChatMessages() {
     const { isReady } = useCryptoKeys();
     const { data: session } = authClient.useSession();
     const cookies = authClient.getCookie();
     const selectedChatId = useActiveChatStore((state) => state.selectedChatId);
-    const chats = useActiveChatStore((state) => state.chats);
-    const setChats = useActiveChatStore((state) => state.setChats);
-    const upsertChat = useActiveChatStore((state) => state.upsertChat);
-    const setChatsLoading = useActiveChatStore((state) => state.setChatsLoading);
-    const setChatsError = useActiveChatStore((state) => state.setChatsError);
-    const setMessages = useActiveChatStore((state) => state.setMessages);
-    const appendMessage = useActiveChatStore((state) => state.appendMessage);
-    const setMessagesLoading = useActiveChatStore(
-        (state) => state.setMessagesLoading
-    );
-    const setHasOlderMessages = useActiveChatStore(
-        (state) => state.setHasOlderMessages
-    );
-    const setPresence = useActiveChatStore((state) => state.setPresence);
-    const setTypingUsers = useActiveChatStore((state) => state.setTypingUsers);
-    const markChatRead = useActiveChatStore((state) => state.markChatRead);
-    const markMessagesReadByUser = useActiveChatStore(
-        (state) => state.markMessagesReadByUser
-    );
-    const setRecipientPhone = useActiveChatStore((state) => state.setRecipientPhone);
-    const setSocket = useRealtimeStore((state) => state.setSocket);
-    const setStatus = useRealtimeStore((state) => state.setStatus);
-    const sendEvent = useRealtimeStore((state) => state.sendEvent);
+
+    const {
+        setChatsError,
+        setMessages,
+        setMessagesLoading,
+        setOlderMessagesLoading,
+        setHasOlderMessages,
+    } = useActiveChatStore.getState();
 
     const currentUserId = session?.user.id ?? null;
-    const currentPhone = (session?.user as { phoneNumber?: string | null } | undefined)
-        ?.phoneNumber ?? null;
 
-    const selectedChatIdRef = useRef<string | null>(selectedChatId);
-    const joinedChatIdRef = useRef<string | null>(null);
-    const reconnectTimeoutRef = useRef<number | null>(null);
-    const notificationSettingsRef = useRef({
-        disableMessagesNotifications: false,
-        disableGroupsNotifications: false,
-    });
-
-    const applyKnownContactOverride = (chat: ChatItemType) => {
-        const directContact = resolveDirectChatContact(
-            chat,
-            useContactDirectoryStore.getState().contacts,
-            currentPhone
-        );
-
-        return directContact ? applyContactToSingleChat(chat, directContact) : chat;
-    };
-
-    useEffect(() => {
-        selectedChatIdRef.current = selectedChatId;
-    }, [selectedChatId]);
-
-    useEffect(() => {
-        const user = session?.user as
-            | {
-                disableMessagesNotifications?: boolean | null;
-                disableGroupsNotifications?: boolean | null;
-            }
-            | undefined;
-
-        notificationSettingsRef.current = {
-            disableMessagesNotifications: Boolean(
-                user?.disableMessagesNotifications
-            ),
-            disableGroupsNotifications: Boolean(user?.disableGroupsNotifications),
-        };
-    }, [session]);
-
-    useEffect(() => {
-        if (!currentUserId || !isReady) {
+    const loadOlderMessages = useCallback(async (chatId?: string | null) => {
+        const targetChatId = chatId ?? selectedChatId;
+        if (!currentUserId || !targetChatId || !isReady) {
             return;
         }
 
-        let isCancelled = false;
-
-        const fetchChats = async () => {
-            try {
-                setChatsLoading(true);
-                setChatsError(null);
-
-                const response = await fetch("https://halabakk-web.nawaf-alhasosah.workers.dev/api/chats", {
-                    headers: {
-                        "Cookie": cookies || "",
-                        "Content-Type": "application/json"
-                    },
-                    credentials: "omit"
-                });
-
-                if (!response.ok) {
-                    throw new Error("Failed to fetch chats");
-                }
-
-                const payload = (await response.json()) as {
-                    chats: ChatItemType[];
-                };
-
-                if (isCancelled) {
-                    return;
-                }
-
-                const normalizedChats = payload.chats.map(normalizeChatItem);
-                const chatsWithStoredContacts = await hydrateStoredContactOverrides(
-                    normalizedChats
-                );
-                const decryptedChats = await decryptChatPreviewBatch({
-                    chats: chatsWithStoredContacts,
-                    currentUserId,
-                });
-
-                if (!isCancelled) {
-                    const finalChats = decryptedChats.map((chat) => applyKnownContactOverride(chat));
-                    await upsertDbChats(finalChats);
-                    setChats(finalChats);
-                }
-            } catch (error) {
-                if (!isCancelled) {
-                    setChatsError(
-                        error instanceof Error
-                            ? error.message
-                            : "Failed to load chats"
-                    );
-                }
-            } finally {
-                if (!isCancelled) {
-                    setChatsLoading(false);
-                }
-            }
-        };
-
-        void fetchChats();
-        const handleContactsChanged = () => {
-            void fetchChats();
-        };
-
-        return () => {
-            isCancelled = true;
-        };
-    }, [currentPhone, currentUserId, isReady, setChats, setChatsError, setChatsLoading]);
-
-    useEffect(() => {
-        if (!selectedChatId) {
-            setRecipientPhone(null);
+        const state = useActiveChatStore.getState();
+        if (
+            state.olderMessagesLoadingByChatId[targetChatId] ||
+            state.hasOlderMessagesByChatId[targetChatId] === false
+        ) {
             return;
         }
 
-        const selectedChat = chats.find((chat) => chat.chat_id === selectedChatId);
+        const currentMessages = state.messagesByChatId[targetChatId] ?? [];
+        const oldestMessage = currentMessages[0];
+        if (!oldestMessage) {
+            return;
+        }
 
-        if (selectedChat?.chat_type === "single") {
-            setRecipientPhone(
-                selectedChat.contact_phone ??
-                resolveDirectChatPartner(selectedChat.chat_id, currentPhone)
+        setOlderMessagesLoading(targetChatId, true);
+        setChatsError(null);
+
+        try {
+            const beforeDate = oldestMessage.created_at;
+            const cachedMessages = await getDecryptedDbMessagePage({
+                chatId: targetChatId,
+                currentUserId,
+                beforeDate,
+            });
+
+            if (cachedMessages.length > 0) {
+                setMessages(targetChatId, cachedMessages);
+            }
+
+            const remotePage = await fetchDecryptedMessagePage({
+                chatId: targetChatId,
+                currentUserId,
+                cookies,
+                beforeDate,
+            });
+
+            await upsertDbMessages(remotePage.messages, currentUserId);
+            setMessages(targetChatId, remotePage.messages);
+            setHasOlderMessages(targetChatId, remotePage.hasMore);
+        } catch (error) {
+            setChatsError(
+                error instanceof Error
+                    ? error.message
+                    : "Failed to load older messages"
             );
-            markChatRead(selectedChat.chat_id);
-        } else {
-            setRecipientPhone(null);
-            markChatRead(selectedChatId);
+        } finally {
+            setOlderMessagesLoading(targetChatId, false);
         }
-    }, [chats, currentPhone, markChatRead, selectedChatId, setRecipientPhone]);
+    }, [
+        cookies,
+        currentUserId,
+        isReady,
+        selectedChatId,
+        setChatsError,
+        setHasOlderMessages,
+        setMessages,
+        setOlderMessagesLoading,
+    ]);
 
     useEffect(() => {
         if (!currentUserId || !selectedChatId || !isReady) {
@@ -214,47 +226,39 @@ export function useChatRealtime() {
 
         let isCancelled = false;
 
-        const fetchMessages = async () => {
+        const loadMessages = async () => {
             try {
                 setMessagesLoading(selectedChatId, true);
-                const response = await fetch(
-                    `https://halabakk-web.nawaf-alhasosah.workers.dev/api/messages?chatRoomId=${encodeURIComponent(selectedChatId)}&limit=20`,
-                    {
-                        headers: {
-                            "Cookie": cookies || "",
-                            "Content-Type": "application/json"
-                        },
-                        credentials: "omit"
-                    }
-                );
-                if (!response.ok) {
-                    throw new Error("Failed to fetch messages");
+                setChatsError(null);
+
+                const cachedMessages = await getDecryptedDbMessagePage({
+                    chatId: selectedChatId,
+                    currentUserId,
+                });
+
+                if (!isCancelled && cachedMessages.length > 0) {
+                    setMessages(selectedChatId, cachedMessages);
+                    setHasOlderMessages(
+                        selectedChatId,
+                        cachedMessages.length === MESSAGE_PAGE_SIZE
+                    );
                 }
 
-                const payload = (await response.json()) as {
-                    messages: (Omit<Message, "created_at" | "updated_at"> & {
-                        created_at: string;
-                        updated_at: string;
-                    })[];
-                    hasMore?: boolean;
-                };
+                const remotePage = await fetchDecryptedMessagePage({
+                    chatId: selectedChatId,
+                    currentUserId,
+                    cookies,
+                });
 
                 if (isCancelled) {
                     return;
                 }
 
-                const normalizedMessages = payload.messages.map(normalizeMessage);
-                const decryptedMessages = await decryptMessageBatch({
-                    currentUserId,
-                    messages: normalizedMessages,
-                });
+                await upsertDbMessages(remotePage.messages, currentUserId);
 
                 if (!isCancelled) {
-                    setMessages(selectedChatId, decryptedMessages);
-                    setHasOlderMessages(
-                        selectedChatId,
-                        payload.hasMore ?? normalizedMessages.length === 20
-                    );
+                    setMessages(selectedChatId, remotePage.messages);
+                    setHasOlderMessages(selectedChatId, remotePage.hasMore);
                 }
             } catch (error) {
                 if (!isCancelled) {
@@ -271,12 +275,13 @@ export function useChatRealtime() {
             }
         };
 
-        void fetchMessages();
+        void loadMessages();
 
         return () => {
             isCancelled = true;
         };
     }, [
+        cookies,
         currentUserId,
         isReady,
         selectedChatId,
@@ -285,6 +290,201 @@ export function useChatRealtime() {
         setMessages,
         setMessagesLoading,
     ]);
+
+    return { loadOlderMessages };
+}
+
+export function useChatRealtime() {
+    const { isReady } = useCryptoKeys();
+    const { data: session } = authClient.useSession();
+    const cookies = authClient.getCookie();
+    const selectedChatId = useActiveChatStore((state) => state.selectedChatId);
+    const contacts = useContactDirectoryStore((state) => state.contacts);
+    const isMountedRef = useRef(false);
+
+    const {
+        setChats,
+        upsertChat,
+        setChatsLoading,
+        setChatsError,
+        appendMessage,
+        setPresence,
+        setTypingUsers,
+        markChatRead,
+        markMessagesReadByUser,
+        setRecipientPhone,
+    } = useActiveChatStore.getState();
+    const { setSocket, setStatus, sendEvent } = useRealtimeStore.getState();
+
+    const currentUserId = session?.user.id ?? null;
+    const currentPhone = (session?.user as { phoneNumber?: string | null } | undefined)
+        ?.phoneNumber ?? null;
+
+    const currentUserIdRef = useRef(currentUserId);
+    const currentPhoneRef = useRef(currentPhone);
+
+    useEffect(() => { currentUserIdRef.current = currentUserId; }, [currentUserId]);
+    useEffect(() => { currentPhoneRef.current = currentPhone; }, [currentPhone]);
+
+    const selectedChatIdRef = useRef<string | null>(selectedChatId);
+    const joinedChatIdRef = useRef<string | null>(null);
+    const reconnectTimeoutRef = useRef<number | null>(null);
+    const notificationSettingsRef = useRef({
+        disableMessagesNotifications: false,
+        disableGroupsNotifications: false,
+    });
+
+    useEffect(() => {
+        isMountedRef.current = true;
+    }, []);
+
+    const applyKnownContactOverride = useCallback((chat: ChatItemType) => {
+        const directContact = resolveDirectChatContact(
+            chat,
+            useContactDirectoryStore.getState().contacts,
+            currentPhone
+        );
+        return directContact ? applyContactToSingleChat(chat, directContact) : chat;
+    }, [currentPhone]);
+
+    useEffect(() => {
+        if (!isMountedRef.current || contacts.length === 0) return;
+        const current = useActiveChatStore.getState().chats;
+        if (current.length === 0) return;
+        setChats(current.map(applyKnownContactOverride));
+    }, [contacts, applyKnownContactOverride, setChats]);
+
+    const persistAndUpsertChat = async (chat: ChatItemType) => {
+        await upsertDbChats([chat]);
+        const fromDb = await getDbChat(chat.chat_id);
+        const final = applyKnownContactOverride(fromDb ?? chat);
+        upsertChat(final);
+        return final;
+    };
+
+    useEffect(() => {
+        selectedChatIdRef.current = selectedChatId;
+    }, [selectedChatId]);
+
+    const disableMessagesNotifications = Boolean(
+        (session?.user as any)?.disableMessagesNotifications
+    );
+    const disableGroupsNotifications = Boolean(
+        (session?.user as any)?.disableGroupsNotifications
+    );
+
+    useEffect(() => {
+        notificationSettingsRef.current = {
+            disableMessagesNotifications,
+            disableGroupsNotifications,
+        };
+    }, [disableMessagesNotifications, disableGroupsNotifications]);
+
+    useEffect(() => {
+        if (!currentUserId || !isReady) return;
+
+        let isCancelled = false;
+
+        const fetchChats = async () => {
+            try {
+                setChatsLoading(true);
+                setChatsError(null);
+
+                const cachedChats = await getDbChats();
+                const cachedById = new Map(cachedChats.map((c) => [c.chat_id, c]));
+                if (!isCancelled && cachedChats.length > 0) {
+                    setChats(cachedChats.map(applyKnownContactOverride));
+                }
+
+                const response = await fetch(
+                    "https://halabakk-web.nawaf-alhasosah.workers.dev/api/chats",
+                    {
+                        headers: { Cookie: cookies || "", "Content-Type": "application/json" },
+                        credentials: "omit",
+                    }
+                );
+                if (!response.ok) throw new Error("Failed to fetch chats");
+
+                const payload = (await response.json()) as { chats: ChatItemType[] };
+                if (isCancelled) return;
+
+                const normalizedChats = payload.chats.map(normalizeChatItem);
+                const chatsWithStoredContacts = await hydrateStoredContactOverrides(normalizedChats);
+
+                const needsDecryption: ChatItemType[] = [];
+                const alreadyCached: ChatItemType[] = [];
+
+                for (const chat of chatsWithStoredContacts) {
+                    const cached = cachedById.get(chat.chat_id);
+                    const previewUnchanged =
+                        cached &&
+                        cached.last_message_id === chat.last_message_id &&
+                        cached.last_message_context !== "";
+
+                    if (previewUnchanged) {
+                        alreadyCached.push({
+                            ...chat,
+                            last_message_context: cached.last_message_context,
+                            last_message_media: cached.last_message_media,
+                        });
+                    } else {
+                        needsDecryption.push(chat);
+                    }
+                }
+
+                const decryptedChats = needsDecryption.length > 0
+                    ? await decryptChatPreviewBatch({ chats: needsDecryption, currentUserId })
+                    : [];
+
+                if (isCancelled) return;
+
+                const toUpsert = [
+                    ...decryptedChats,
+                    ...alreadyCached,
+                ];
+                await upsertDbChats(toUpsert);
+
+                const freshChats = await getDbChats();
+                if (!isCancelled) {
+                    setChats(freshChats.map(applyKnownContactOverride));
+                }
+            } catch (error) {
+                if (!isCancelled) {
+                    setChatsError(error instanceof Error ? error.message : "Failed to load chats");
+                }
+            } finally {
+                if (!isCancelled) setChatsLoading(false);
+            }
+        };
+
+        void fetchChats();
+
+        return () => {
+            isCancelled = true;
+        };
+    }, [currentPhone, currentUserId, isReady, setChats, setChatsError, setChatsLoading]);
+
+    useEffect(() => {
+        if (!selectedChatId) {
+            setRecipientPhone(null);
+            return;
+        }
+
+        const selectedChat = useActiveChatStore.getState().chats.find(
+            (chat) => chat.chat_id === selectedChatId
+        );
+
+        if (selectedChat?.chat_type === 'single') {
+            setRecipientPhone(
+                selectedChat.contact_phone ??
+                resolveDirectChatPartner(selectedChat.chat_id, currentPhone)
+            );
+            markChatRead(selectedChat.chat_id);
+        } else {
+            setRecipientPhone(null);
+            markChatRead(selectedChatId);
+        }
+    }, [currentPhone, markChatRead, selectedChatId, setRecipientPhone]);
 
     useEffect(() => {
         if (!currentUserId || !isReady) {
@@ -305,17 +505,34 @@ export function useChatRealtime() {
 
                     const messageId =
                         event.clientMessageId ?? nextMessage.message_id;
+                    const confirmedMessage: Message = {
+                        ...nextMessage,
+                        client_status: "sent",
+                        client_error: null,
+                        client_received_via_realtime: false,
+                    };
 
-                    useActiveChatStore.getState().updateMessage(
-                        event.conversationId,
-                        messageId,
-                        () => ({
-                            ...nextMessage,
-                            client_status: "sent",
-                            client_error: null,
-                            client_received_via_realtime: false,
-                        })
-                    );
+                    await upsertDbMessages([confirmedMessage], currentUserId);
+
+                    const existingMessageId = (
+                        useActiveChatStore
+                            .getState()
+                            .messagesByChatId[event.conversationId] ?? []
+                    ).find(
+                        (message) =>
+                            message.message_id === messageId ||
+                            message.message_id === nextMessage.message_id
+                    )?.message_id;
+
+                    if (existingMessageId) {
+                        useActiveChatStore.getState().updateMessage(
+                            event.conversationId,
+                            existingMessageId,
+                            () => confirmedMessage
+                        );
+                    } else {
+                        appendMessage(event.conversationId, confirmedMessage);
+                    }
 
                     const existingChat = useActiveChatStore
                         .getState()
@@ -325,15 +542,14 @@ export function useChatRealtime() {
                         buildChatFromMessage({
                             conversationId: event.conversationId,
                             conversationType: event.conversationType,
-                            message: nextMessage,
+                            message: confirmedMessage,
                             currentUserId,
                             unreadCount: 0,
                             fallbackExistingChat: existingChat,
                         })
                     );
 
-                    await upsertDbChats([nextChat]);
-                    upsertChat(nextChat);
+                    await persistAndUpsertChat(nextChat);
                     break;
                 }
 
@@ -343,14 +559,17 @@ export function useChatRealtime() {
                         currentUserId,
                         messages: [normalizedMessage],
                     });
-
-                    appendMessage(event.conversationId, {
+                    const incomingMessage: Message = {
                         ...nextMessage,
                         client_status: "sent",
                         client_error: null,
                         client_received_via_realtime:
                             nextMessage.sender_user_id !== currentUserId,
-                    });
+                    };
+
+                    await upsertDbMessages([incomingMessage], currentUserId);
+
+                    appendMessage(event.conversationId, incomingMessage);
 
                     const existingChat = useActiveChatStore
                         .getState()
@@ -359,7 +578,7 @@ export function useChatRealtime() {
                         useActiveChatStore.getState().selectedChatId ===
                         event.conversationId;
                     const unreadCount =
-                        nextMessage.sender_user_id === currentUserId || isSelected
+                        incomingMessage.sender_user_id === currentUserId || isSelected
                             ? 0
                             : (existingChat?.unreaded_messages_length ?? 0) + 1;
 
@@ -367,17 +586,16 @@ export function useChatRealtime() {
                         buildChatFromMessage({
                             conversationId: event.conversationId,
                             conversationType: event.conversationType,
-                            message: nextMessage,
+                            message: incomingMessage,
                             currentUserId,
                             unreadCount,
                             fallbackExistingChat: existingChat,
                         })
                     );
-                    await upsertDbChats([nextChat]);
-                    upsertChat(nextChat);
+                    await persistAndUpsertChat(nextChat);
                     const notificationSettings = notificationSettingsRef.current;
                     const shouldNotify =
-                        nextMessage.sender_user_id !== currentUserId &&
+                        incomingMessage.sender_user_id !== currentUserId &&
                         !nextChat.is_muted_chat_notifications &&
                         !notificationSettings.disableMessagesNotifications &&
                         !(
@@ -386,15 +604,25 @@ export function useChatRealtime() {
                         );
 
                     if (shouldNotify) {
+                        const isCurrentlyViewing =
+                            useActiveChatStore.getState().selectedChatId === event.conversationId;
 
+                        if (!isCurrentlyViewing) {
+                            await showMessageNotification(
+                                nextChat.display_name ?? 'New Message',
+                                nextChat.last_message_context ?? '',
+                                event.conversationId,
+                                incomingMessage.sender_user_id,
+                            );
+                        }
                     }
                     if (isSelected) {
                         markChatRead(event.conversationId);
-                        if (nextMessage.sender_user_id !== currentUserId) {
+                        if (incomingMessage.sender_user_id !== currentUserId) {
                             sendEvent({
                                 type: "MARK_READ",
                                 conversationId: event.conversationId,
-                                messageId: nextMessage.message_id,
+                                messageId: incomingMessage.message_id,
                             });
                         }
                     }
@@ -407,6 +635,13 @@ export function useChatRealtime() {
                         currentUserId,
                         messages: [normalizedMessage],
                     });
+                    const conversationMessage: Message = {
+                        ...nextMessage,
+                        client_status: "sent",
+                        client_error: null,
+                        client_received_via_realtime:
+                            nextMessage.sender_user_id !== currentUserId,
+                    };
                     const existingChat = useActiveChatStore
                         .getState()
                         .chats.find((chat) => chat.chat_id === event.conversationId);
@@ -418,17 +653,20 @@ export function useChatRealtime() {
                         buildChatFromMessage({
                             conversationId: event.conversationId,
                             conversationType: event.conversationType,
-                            message: nextMessage,
+                            message: conversationMessage,
                             currentUserId,
                             unreadCount: isSelected ? 0 : event.unreadCount,
                             fallbackExistingChat: existingChat,
                         })
                     );
-                    await upsertDbChats([nextChat]);
-                    upsertChat(nextChat);
+                    await upsertDbMessages([conversationMessage], currentUserId);
+                    if (isSelected) {
+                        appendMessage(event.conversationId, conversationMessage);
+                    }
+                    await persistAndUpsertChat(nextChat);
                     const notificationSettings = notificationSettingsRef.current;
                     const shouldNotify =
-                        nextMessage.sender_user_id !== currentUserId &&
+                        conversationMessage.sender_user_id !== currentUserId &&
                         !nextChat.is_muted_chat_notifications &&
                         !notificationSettings.disableMessagesNotifications &&
                         !(
@@ -437,16 +675,26 @@ export function useChatRealtime() {
                         );
 
                     if (shouldNotify) {
+                        const isCurrentlyViewing =
+                            useActiveChatStore.getState().selectedChatId === event.conversationId;
 
+                        if (!isCurrentlyViewing) {
+                            await showMessageNotification(
+                                nextChat.display_name ?? 'New Message',
+                                nextChat.last_message_context ?? '',
+                                event.conversationId,
+                                conversationMessage.sender_user_id,
+                            );
+                        }
                     }
                     if (
                         isSelected &&
-                        nextMessage.sender_user_id !== currentUserId
+                        conversationMessage.sender_user_id !== currentUserId
                     ) {
                         sendEvent({
                             type: "MARK_READ",
                             conversationId: event.conversationId,
-                            messageId: nextMessage.message_id,
+                            messageId: conversationMessage.message_id,
                         });
                     }
                     break;
@@ -457,6 +705,12 @@ export function useChatRealtime() {
                     const safeUpdatedAt = Number.isNaN(updatedAt.getTime())
                         ? new Date()
                         : updatedAt;
+                    const messageToPersist = (
+                        useActiveChatStore
+                            .getState()
+                            .messagesByChatId[event.conversationId] ?? []
+                    ).find((message) => message.message_id === event.messageId)
+                        ?? await getDbMessage(event.messageId);
 
                     useActiveChatStore.getState().updateMessage(
                         event.conversationId,
@@ -467,6 +721,19 @@ export function useChatRealtime() {
                             updated_at: safeUpdatedAt,
                         })
                     );
+
+                    if (messageToPersist) {
+                        await upsertDbMessages(
+                            [
+                                {
+                                    ...messageToPersist,
+                                    message_raction: event.reaction,
+                                    updated_at: safeUpdatedAt,
+                                },
+                            ],
+                            currentUserId
+                        );
+                    }
 
                     const existingChat = useActiveChatStore
                         .getState()
@@ -488,8 +755,7 @@ export function useChatRealtime() {
                         })
                     );
 
-                    await upsertDbChats([nextChat]);
-                    upsertChat(nextChat);
+                    await persistAndUpsertChat(nextChat);
                     if (isSelected) {
                         markChatRead(event.conversationId);
                     }
@@ -539,8 +805,8 @@ export function useChatRealtime() {
         const connect = () => {
             setStatus("connecting");
 
-            const userId = session?.user?.id;
-            const phoneNumber = session?.user?.phoneNumber;
+            const userId = currentUserIdRef.current;
+            const phoneNumber = currentPhoneRef.current;
 
             if (!userId) {
                 setStatus("error");
@@ -611,19 +877,8 @@ export function useChatRealtime() {
             setStatus("idle");
         };
     }, [
-        appendMessage,
-        currentPhone,
         currentUserId,
         isReady,
-        markChatRead,
-        markMessagesReadByUser,
-        sendEvent,
-        setChatsError,
-        setPresence,
-        setSocket,
-        setStatus,
-        setTypingUsers,
-        upsertChat,
     ]);
 
     useEffect(() => {
@@ -652,5 +907,5 @@ export function useChatRealtime() {
 
         selectedChatIdRef.current = selectedChatId;
         joinedChatIdRef.current = selectedChatId;
-    }, [selectedChatId, sendEvent]);
+    }, [selectedChatId]);
 }

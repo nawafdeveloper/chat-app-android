@@ -1,12 +1,16 @@
 import { CryptoProvider, useCryptoKeys } from '@/context/crypto';
 import { TabletProvider } from '@/context/screen-checking-context';
+import { setupNotificationCategories } from '@/helper/push-notification';
+import { registerForPushNotificationsAsync } from '@/helper/request-for-push-notification';
 import { getToken } from '@/helper/user-session';
 import { authClient } from '@/lib/auth-client';
 import { retrieveSessionKeys } from '@/lib/crypto-storage';
 import { useAuthStore } from '@/store/auth-store';
+import { useNotificationStore } from '@/store/notification-store';
 import { setRefreshKeysHandler } from '@/types/keys.module';
 import { DarkTheme, DefaultTheme, ThemeProvider } from '@react-navigation/native';
 import { useMigrations } from 'drizzle-orm/expo-sqlite/migrator';
+import * as Notifications from 'expo-notifications';
 import { Stack } from 'expo-router';
 import * as SplashScreen from 'expo-splash-screen';
 import React, { useEffect, useState } from 'react';
@@ -18,9 +22,18 @@ import migrations from '../../drizzle/migrations';
 import { db } from '../db/client';
 install()
 
-SplashScreen.preventAutoHideAsync();
+Notifications.setNotificationHandler({
+    handleNotification: async () => ({
+        shouldPlaySound: true,
+        shouldSetBadge: true,
+        shouldShowBanner: true,
+        shouldShowList: true,
+    }),
+});
 
-// ─── Outside AppLayout ───────────────────────────────────
+setupNotificationCategories();
+
+SplashScreen.preventAutoHideAsync();
 
 type AppStackProps = {
     hasSession: boolean
@@ -57,8 +70,6 @@ const AppStack = ({ hasSession, isNewUser, hasPin, hasNoPin, hasName }: AppStack
     );
 };
 
-// ─── AppLayout ───────────────────────────────────────────
-
 const AppLayout = () => {
     const { success, error } = useMigrations(db, migrations);
     const colorScheme = useColorScheme();
@@ -66,6 +77,7 @@ const AppLayout = () => {
     const [hasKeys, setHasKeys] = useState<boolean | null>(null);
     const { hasSession, setHasSession } = useAuthStore();
     const { data: session } = authClient.useSession();
+    const { setExpoPushToken, setNotification } = useNotificationStore();
 
     const refreshKeys = async () => {
         const keys = await retrieveSessionKeys();
@@ -95,6 +107,31 @@ const AppLayout = () => {
             SplashScreen.hideAsync();
         }
     }, [isReady, success, hasKeys]);
+
+    useEffect(() => {
+        registerForPushNotificationsAsync().then(token => {
+            if (token) {
+                setExpoPushToken(token);
+            }
+        });
+
+        const subscription = Notifications.addNotificationReceivedListener(
+            (notification) => {
+                setNotification(notification);
+            }
+        );
+
+        const responseSubscription = Notifications.addNotificationResponseReceivedListener(
+            (response) => {
+                console.log('Notification response:', response);
+            }
+        );
+
+        return () => {
+            subscription.remove();
+            responseSubscription.remove();
+        };
+    }, [setExpoPushToken, setNotification]);
 
     if (error) {
         return (

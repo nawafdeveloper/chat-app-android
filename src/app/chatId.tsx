@@ -5,13 +5,17 @@ import { ThemedText } from '@/components/themed-text';
 import { ThemedView } from '@/components/themed-view';
 import { Colors } from '@/constants/theme';
 import { authClient } from '@/lib/auth-client';
-import { messages } from '@/mocks/chats-messages';
+import { useChatMessages } from '@/hooks/use-chat-realtime';
 import { rightNavRef } from '@/store/right-nav-ref';
+import { useActiveChatStore } from '@/store/use-active-chat-store';
+import type { Message } from '@/types/messages';
 import * as Haptics from 'expo-haptics';
 import { router } from 'expo-router';
-import React, { useEffect, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { FlatList, Keyboard, KeyboardAvoidingView, StyleSheet, Text, TextInput, useColorScheme, View } from 'react-native';
-import { Appbar, TouchableRipple } from 'react-native-paper';
+import { ActivityIndicator, Appbar, TouchableRipple } from 'react-native-paper';
+
+const EMPTY_MESSAGES: Message[] = [];
 
 const ChatId = () => {
     const { data: session } = authClient.useSession()
@@ -20,6 +24,24 @@ const ChatId = () => {
     const scheme = useColorScheme();
     const isDark = scheme === 'dark';
     const colors = Colors[scheme === 'unspecified' ? 'light' : scheme ?? 'light']
+
+    const selectedChatId = useActiveChatStore((state) => state.selectedChatId);
+    const { loadOlderMessages } = useChatMessages();
+    const messages = useActiveChatStore((state) =>
+        selectedChatId
+            ? state.messagesByChatId[selectedChatId] ?? EMPTY_MESSAGES
+            : EMPTY_MESSAGES
+    );
+    const olderMessagesLoading = useActiveChatStore((state) =>
+        selectedChatId
+            ? state.olderMessagesLoadingByChatId[selectedChatId] ?? false
+            : false
+    );
+    const hasOlderMessages = useActiveChatStore((state) =>
+        selectedChatId
+            ? state.hasOlderMessagesByChatId[selectedChatId] ?? false
+            : false
+    );
 
     const [selectionMode, setSelectionMode] = useState(false);
     const [selectedMessageIds, setSelectedMessageIds] = useState<Set<string>>(new Set());
@@ -89,6 +111,19 @@ const ChatId = () => {
 
         router.back();
     };
+
+    const handleLoadOlderMessages = useCallback(() => {
+        if (!selectedChatId || olderMessagesLoading || !hasOlderMessages) {
+            return;
+        }
+
+        void loadOlderMessages(selectedChatId);
+    }, [
+        hasOlderMessages,
+        loadOlderMessages,
+        olderMessagesLoading,
+        selectedChatId,
+    ]);
 
     const wallpapers: Record<string, { dark: any; light: any }> = {
         'wallpaper-1': { dark: require('../../assets/dark-wallpaper-1.svg'), light: require('../../assets/light-wallpaper-1.svg') },
@@ -180,6 +215,15 @@ const ChatId = () => {
                     inverted
                     contentContainerStyle={{ flexDirection: 'column-reverse' }}
                     contentInsetAdjustmentBehavior="automatic"
+                    onEndReached={handleLoadOlderMessages}
+                    onEndReachedThreshold={0.25}
+                    ListFooterComponent={
+                        olderMessagesLoading ? (
+                            <View style={styles.olderMessagesLoader}>
+                                <ActivityIndicator size="small" color="#25D366" />
+                            </View>
+                        ) : null
+                    }
                 />
                 <ChatInputContainer
                     isReply={isReply}
@@ -215,5 +259,10 @@ const styles = StyleSheet.create({
     avatarText: {
         fontSize: 18,
         fontWeight: '500'
+    },
+    olderMessagesLoader: {
+        paddingVertical: 12,
+        alignItems: 'center',
+        justifyContent: 'center',
     },
 })

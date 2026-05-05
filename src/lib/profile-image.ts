@@ -3,7 +3,8 @@ import {
     cacheDirectory,
     deleteAsync,
     EncodingType,
-    writeAsStringAsync,
+    getInfoAsync,
+    writeAsStringAsync
 } from 'expo-file-system/legacy'
 import { authClient } from './auth-client'
 import { retrieveSessionKeys } from './crypto-storage'
@@ -136,9 +137,19 @@ const aesKeyCache = new Map<string, { key: string; iv: string }>()
 const imageFileCache = new Map<string, string>()
 
 export async function fetchAndDecryptProfileImage(objectKey: string): Promise<string> {
-    const cached = imageFileCache.get(objectKey)
-    if (cached) return cached
+    // 1. In-memory hit (fastest, same session)
+    const memoryCached = imageFileCache.get(objectKey)
+    if (memoryCached) return memoryCached
 
+    // 2. Disk hit (persists across restarts)
+    const diskPath = cacheDirectory + `profile_${objectKey.replace(/\//g, '_')}.jpg`
+    const diskInfo = await getInfoAsync(diskPath)
+    if (diskInfo.exists) {
+        imageFileCache.set(objectKey, diskPath) // warm the memory cache too
+        return diskPath
+    }
+
+    // 3. Full fetch + decrypt (only runs when truly missing)
     const sessionKeys = await retrieveSessionKeys()
     if (!sessionKeys?.privateKey) {
         throw new Error('No private key found in session. Please log in again.')
@@ -170,15 +181,14 @@ export async function fetchAndDecryptProfileImage(objectKey: string): Promise<st
     const encryptedData = await imageResponse.arrayBuffer()
     const decryptedBytes = await decryptFileWithAes(encryptedData, cachedKey.key, cachedKey.iv)
 
-    const tempUri = cacheDirectory + `profile_${objectKey.replace(/\//g, '_')}.jpg`
     await writeAsStringAsync(
-        tempUri,
+        diskPath,
         Buffer.from(decryptedBytes).toString('base64'),
         { encoding: EncodingType.Base64 }
     )
 
-    imageFileCache.set(objectKey, tempUri)
-    return tempUri
+    imageFileCache.set(objectKey, diskPath)
+    return diskPath
 }
 
 export const PROFILE_IMAGE_API_PATH = "/api/profile-image";

@@ -1,5 +1,5 @@
 import { db } from "@/db/client";
-import { DbChatInsert, chats as dbChats } from "@/db/schema";
+import { DbChat, DbChatInsert, chats as dbChats } from "@/db/schema";
 import type { ChatItemType } from "@/types/chats.type";
 import { eq } from "drizzle-orm";
 
@@ -23,6 +23,10 @@ function toDbChatInsert(chat: ChatItemType): DbChatInsert {
         is_pinned: Boolean(chat.is_pinned_chat),
         is_favourite: Boolean(chat.is_favourite_chat),
         is_blocked: Boolean(chat.is_blocked_chat),
+        recipient_user_id: chat.recipient_user_id ?? null,
+        contact_phone: chat.contact_phone ?? null,
+        display_name: chat.display_name ?? null,
+        last_message_is_read_by_recipient: chat.last_message_is_read_by_recipient ?? null,
         encrypted_aes_key: chat.chat_recipient_keys
             ? JSON.stringify(chat.chat_recipient_keys)
             : null,
@@ -36,6 +40,79 @@ function toDbChatInsert(chat: ChatItemType): DbChatInsert {
                 ? chat.updated_at.toISOString()
                 : String(chat.updated_at),
     };
+}
+
+function dbRowToChatItem(row: DbChat): ChatItemType {
+    return {
+        chat_id: row.chat_id,
+        chat_type: row.chat_type as "single" | "group",
+        avatar: row.avatar,
+        display_name: row.display_name ?? null,
+        recipient_user_id: row.recipient_user_id ?? null,
+        recipient_public_key: null,
+        contact_phone: row.contact_phone ?? null,
+        recipient_last_seen: null,
+        recipient_who_can_see_last_seen: null,
+        recipient_last_seen_visible: null,
+        recipient_who_can_see_status: null,
+        recipient_who_can_see_profile_picture: null,
+        recipient_profile_picture_visible: null,
+        recipient_about_ciphertext: null,
+        recipient_about_encrypted_aes_key: null,
+        recipient_about_iv: null,
+        recipient_who_can_see_about: null,
+        recipient_about_visible: null,
+        stored_contact: null,
+        is_provisional: false,
+        last_message_id: row.last_message_id ?? null,
+        encrypted_preview_ciphertext: row.encrypted_preview_ciphertext ?? null,
+        encrypted_preview_iv: row.encrypted_preview_iv ?? null,
+        encrypted_preview_algorithm: (row.encrypted_preview_algorithm ?? null) as ChatItemType["encrypted_preview_algorithm"],
+        chat_recipient_keys: row.encrypted_aes_key
+            ? (() => {
+                try {
+                    return JSON.parse(row.encrypted_aes_key);
+                } catch {
+                    return null;
+                }
+            })()
+            : null,
+        last_message_context: row.last_message_context,
+        last_message_media: row.last_message_media ?? null,
+        last_message_sender_is_me: row.last_message_sender_is_me ?? false,
+        last_message_sender_nickname: row.last_message_sender_nickname,
+        last_message_is_read_by_recipient: row.last_message_is_read_by_recipient ?? null,
+        last_message_read_by_user_ids: null,
+        last_message_recipient_user_ids: null,
+        is_unreaded_chat: row.is_unread ?? false,
+        unreaded_messages_length: row.unread_count ?? 0,
+        is_archived_chat: row.is_archived ?? false,
+        is_muted_chat_notifications: row.is_muted ?? false,
+        is_pinned_chat: row.is_pinned ?? false,
+        is_favourite_chat: row.is_favourite ?? false,
+        is_blocked_chat: row.is_blocked ?? false,
+        created_at: new Date(row.created_at),
+        updated_at: new Date(row.updated_at),
+    };
+}
+
+export async function getDbChats(): Promise<ChatItemType[]> {
+    const rows = await db
+        .select()
+        .from(dbChats)
+        .orderBy(dbChats.is_pinned, dbChats.updated_at);
+
+    return rows.map(dbRowToChatItem);
+}
+
+export async function getDbChat(chatId: string): Promise<ChatItemType | null> {
+    const rows = await db
+        .select()
+        .from(dbChats)
+        .where(eq(dbChats.chat_id, chatId))
+        .limit(1);
+
+    return rows.length > 0 ? dbRowToChatItem(rows[0]) : null;
 }
 
 export async function upsertDbChats(chats: ChatItemType[]) {

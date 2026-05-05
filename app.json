@@ -22,7 +22,8 @@
       "package": "com.nawafhq.chatappandroid",
       "permissions": [
         "android.permission.RECORD_AUDIO"
-      ]
+      ],
+      "googleServicesFile": "./google-services.json"
     },
     "web": {
       "output": "static",
@@ -75,6 +76,15 @@
         {
           "configureAndroidBackup": true,
           "faceIDPermission": "Allow $(PRODUCT_NAME) to access your Face ID biometric data."
+        }
+      ],
+      [
+        "expo-notifications",
+        {
+          "icon": "./assets/expo.icon/Assets/notification-icon.png",
+          "color": "#ffffff",
+          "defaultChannel": "default",
+          "enableBackgroundRemoteNotifications": true
         }
       ]
     ],
