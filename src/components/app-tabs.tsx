@@ -4,11 +4,13 @@ import { Platform, useColorScheme } from 'react-native';
 
 import { Colors } from '@/constants/theme';
 import { useActiveChatStore } from '@/store/use-active-chat-store';
+import { useLogoutLoadingState } from '@/store/use-logout-loading-state';
 
 export default function AppTabs() {
   const scheme = useColorScheme();
   const colors = Colors[scheme === 'unspecified' ? 'light' : scheme];
   const chats = useActiveChatStore((state) => state.chats);
+  const { logoutLoading } = useLogoutLoadingState()
 
   const totalUnreadMessages = chats.reduce(
     (total, chat) => total + chat.unreaded_messages_length,
@@ -27,6 +29,7 @@ export default function AppTabs() {
       rippleColor={colors.indicator}
       labelStyle={{ selected: { color: colors.text } }}
       badgeBackgroundColor={'#25D366'}
+      hidden={logoutLoading}
     >
       <NativeTabs.Trigger name="index" hidden />
 

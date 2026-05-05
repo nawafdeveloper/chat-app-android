@@ -1,4 +1,5 @@
 import ChatInputContainer from '@/components/chat-input-container';
+import { ChatAvatar } from '@/components/decrypted-chat-avatar';
 import Bubble from '@/components/message-bubble';
 import { TiledBackground } from '@/components/tailed-wallpaper';
 import { ThemedText } from '@/components/themed-text';
@@ -14,7 +15,7 @@ import type { Message } from '@/types/messages';
 import * as Haptics from 'expo-haptics';
 import { router, useLocalSearchParams } from 'expo-router';
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { FlatList, Keyboard, KeyboardAvoidingView, Platform, StyleSheet, Text, TextInput, useColorScheme, View } from 'react-native';
+import { FlatList, Keyboard, KeyboardAvoidingView, Platform, StyleSheet, TextInput, useColorScheme } from 'react-native';
 import { Appbar, TouchableRipple } from 'react-native-paper';
 
 const EMPTY_MESSAGES: Message[] = [];
@@ -56,7 +57,7 @@ const ChatId = () => {
             : false
     );
     const chatTitle = activeChat?.display_name ?? activeChat?.contact_phone ?? 'Chat';
-    const chatInitial = chatTitle.trim().charAt(0).toUpperCase() || '?';
+    const avatarTint = colors.text;
 
     const [selectionMode, setSelectionMode] = useState(false);
     const [selectedMessageIds, setSelectedMessageIds] = useState<Set<string>>(new Set());
@@ -205,30 +206,6 @@ const ChatId = () => {
         selectedMessageIds,
     ]);
 
-    const wallpapers: Record<string, { dark: any; light: any }> = {
-        'wallpaper-1': { dark: require('../../assets/dark-wallpaper-1.svg'), light: require('../../assets/light-wallpaper-1.svg') },
-        'wallpaper-2': { dark: require('../../assets/dark-wallpaper-2.svg'), light: require('../../assets/light-wallpaper-2.svg') },
-        'wallpaper-3': { dark: require('../../assets/dark-wallpaper-3.svg'), light: require('../../assets/light-wallpaper-3.svg') },
-        'wallpaper-4': { dark: require('../../assets/dark-wallpaper-4.svg'), light: require('../../assets/light-wallpaper-4.svg') },
-        'wallpaper-5': { dark: require('../../assets/dark-wallpaper-5.svg'), light: require('../../assets/light-wallpaper-5.svg') },
-        'wallpaper-6': { dark: require('../../assets/dark-wallpaper-6.svg'), light: require('../../assets/light-wallpaper-6.svg') },
-        'wallpaper-7': { dark: require('../../assets/dark-wallpaper-7.svg'), light: require('../../assets/light-wallpaper-7.svg') },
-        'wallpaper-8': { dark: require('../../assets/dark-wallpaper-8.svg'), light: require('../../assets/light-wallpaper-8.svg') },
-        'wallpaper-9': { dark: require('../../assets/dark-wallpaper-9.svg'), light: require('../../assets/light-wallpaper-9.svg') },
-        'wallpaper-10': { dark: require('../../assets/dark-wallpaper-10.svg'), light: require('../../assets/light-wallpaper-10.svg') },
-    }
-
-    const defaultWallpaper = {
-        dark: require('../../assets/dark-wallpaper-1.svg'),
-        light: require('../../assets/light-wallpaper-1.svg'),
-    }
-
-    const getWallpaper = (isDark: boolean) => {
-        const key = session?.user.chatWallpaper ?? ''
-        const pair = wallpapers[key] ?? defaultWallpaper
-        return isDark ? pair.dark : pair.light
-    }
-
     return (
         <KeyboardAvoidingView
             behavior={'height'}
@@ -263,9 +240,20 @@ const ChatId = () => {
                             title={
                                 <TouchableRipple>
                                     <ThemedView style={styles.profileContainer}>
-                                        <View style={[styles.avatar, { backgroundColor: scheme === 'dark' ? '#052e16' : '#dcfce7' }]}>
-                                            <Text style={[styles.avatarText, { color: scheme === 'dark' ? '#4ade80' : '#15803d' }]}>{chatInitial}</Text>
-                                        </View>
+                                        <ChatAvatar
+                                            userId={
+                                                activeChat?.recipient_user_id ??
+                                                activeChat?.chat_id ??
+                                                activeChatId
+                                            }
+                                            imageUrl={activeChat?.avatar}
+                                            displayName={chatTitle}
+                                            contactPhone={activeChat?.contact_phone}
+                                            style={styles.avatar}
+                                            iconColor={avatarTint}
+                                            backgroundColor={colors.card}
+                                            textColor={avatarTint}
+                                        />
                                         <ThemedText numberOfLines={1}>{chatTitle}</ThemedText>
                                     </ThemedView>
                                 </TouchableRipple>
@@ -275,7 +263,7 @@ const ChatId = () => {
                     </>
                 )}
             </Appbar.Header>
-            <TiledBackground source={getWallpaper(isDark)} style={styles.background}>
+            <TiledBackground source={isDark ? require('@/assets/bg-pattern-dark.png') : require('@/assets/bg-pattern-light.png')} style={styles.background}>
                 <FlatList
                     ref={listRef}
                     data={visibleMessages}
@@ -328,9 +316,5 @@ const styles = StyleSheet.create({
         alignItems: 'center',
         justifyContent: 'center',
         marginRight: 12,
-    },
-    avatarText: {
-        fontSize: 18,
-        fontWeight: '500'
     },
 })

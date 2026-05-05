@@ -1,4 +1,7 @@
-import { fetchAndDecryptProfileImage } from "@/lib/profile-image";
+import {
+    fetchAndDecryptProfileImage,
+    parseManagedProfileImageUrl,
+} from "@/lib/profile-image";
 import { MaterialIcons } from "@expo/vector-icons";
 import { Image } from "expo-image";
 import React, { useEffect, useState } from "react";
@@ -66,15 +69,17 @@ export function ChatAvatar({
             setLocalUri(null);
             setFailed(false);
 
-            const objectKey = imageUrl?.split("/api/profile-image/")[1];
+            const managedImage = parseManagedProfileImageUrl(imageUrl);
 
-            if (!objectKey) {
+            if (!managedImage) {
                 if (mounted) setLocalUri(imageUrl || null);
                 return;
             }
 
             try {
-                const decryptedUri = await fetchAndDecryptProfileImage(objectKey);
+                const decryptedUri = await fetchAndDecryptProfileImage(
+                    managedImage.objectKey
+                );
                 if (mounted) setLocalUri(decryptedUri);
             } catch {
                 if (mounted) setFailed(true);

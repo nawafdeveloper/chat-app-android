@@ -1,5 +1,6 @@
 import { db } from "@/db/client";
 import { messages as dbMessages } from "@/db/schema";
+import { upsertEncryptedMediaMetadataForMessage } from "@/lib/message-media";
 import type { Message } from "@/types/messages";
 import type { InferInsertModel, InferSelectModel } from "drizzle-orm";
 import { and, asc, desc, eq, inArray, lt } from "drizzle-orm";
@@ -87,6 +88,13 @@ function dbRowToMessage(row: DbMessage): Message {
         media_height: row.media_height ?? null,
         media_file_name: row.media_file_name ?? null,
         video_thumbnail: row.video_thumbnail ?? null,
+        encrypted_media: null,
+        media_object_key: null,
+        media_preview_object_key: null,
+        media_encrypted_aes_key: null,
+        media_iv: null,
+        media_mime_type: null,
+        media_preview_mime_type: null,
         reply_message: parseJson(row.reply_message_json),
         message_raction: parseJson(row.reactions_json),
         poll: parseJson(row.poll_json),
@@ -185,6 +193,8 @@ export async function upsertDbMessages(
         } else {
             await db.insert(dbMessages).values(values);
         }
+
+        await upsertEncryptedMediaMetadataForMessage(msg);
     }
 }
 

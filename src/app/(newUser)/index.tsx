@@ -121,6 +121,7 @@ const NewUserPage = () => {
                         onPress={() => router.push('/(newUser)/verify-new-pin-code')}
                         buttonColor='#25D366'
                         textColor='#ffffff'
+                        style={{ height: 45, width: 90, borderRadius: 99 }}
                     >
                         Next
                     </Button>

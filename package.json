@@ -27,6 +27,7 @@
     "drizzle-orm": "^0.45.2",
     "expo": "~55.0.16",
     "expo-constants": "~55.0.15",
+    "expo-contacts": "~55.0.14",
     "expo-crypto": "~55.0.14",
     "expo-dev-client": "~55.0.30",
     "expo-device": "~55.0.15",

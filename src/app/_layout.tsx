@@ -3,12 +3,13 @@ import { TabletProvider } from '@/context/screen-checking-context';
 import { setupNotificationCategories } from '@/helper/push-notification';
 import { registerForPushNotificationsAsync } from '@/helper/request-for-push-notification';
 import { getToken } from '@/helper/user-session';
+import { useChatRealtime } from '@/hooks/use-chat-realtime';
 import { authClient } from '@/lib/auth-client';
 import { deleteMobilePushToken, hydrateLocalChatCache, registerMobilePushToken, syncMobileChatsAndMessages } from '@/lib/chat-sync';
 import { retrieveSessionKeys } from '@/lib/crypto-storage';
-import { rightNavRef } from '@/store/right-nav-ref';
 import { useAuthStore } from '@/store/auth-store';
 import { useNotificationStore } from '@/store/notification-store';
+import { rightNavRef } from '@/store/right-nav-ref';
 import { useActiveChatStore } from '@/store/use-active-chat-store';
 import { setRefreshKeysHandler } from '@/types/keys.module';
 import { DarkTheme, DefaultTheme, ThemeProvider } from '@react-navigation/native';
@@ -62,15 +63,21 @@ const AppStack = ({ hasSession, isNewUser, hasPin, hasNoPin, hasName }: AppStack
             <Stack.Protected guard={hasSession && !isNewUser && hasNoPin}>
                 <Stack.Screen name="(oldUser)" options={{ animation: 'none', gestureEnabled: false }} />
             </Stack.Protected>
-            <Stack.Protected guard={hasSession && !isNewUser && hasPin && !hasName}>
+            <Stack.Protected guard={hasSession && hasPin && !hasName}>
                 <Stack.Screen name="(complete-profile)" options={{ animation: 'none', gestureEnabled: false }} />
             </Stack.Protected>
             <Stack.Protected guard={hasSession && !isNewUser && hasPin && hasName}>
                 <Stack.Screen name='(tabs)' options={{ headerShown: false }} />
                 <Stack.Screen name='chatId' options={{ headerShown: false }} />
+                <Stack.Screen name='create-chat' options={{ headerShown: false }} />
             </Stack.Protected>
         </Stack>
     );
+};
+
+const RealtimeBootstrap = () => {
+    useChatRealtime();
+    return null;
 };
 
 const AppLayout = () => {
@@ -239,6 +246,10 @@ const AppLayout = () => {
             });
     }, [hasSession, setExpoPushToken]);
 
+    // useEffect(() => {
+    //     RequestContact()
+    // }, [hasSession, hasKeys]);
+
     useEffect(() => {
         if (!hasSession || !session?.user.id || !expoPushToken) {
             return;
@@ -336,6 +347,9 @@ const AppLayout = () => {
                 <PaperProvider>
                     <ThemeProvider value={colorScheme === 'dark' ? DarkTheme : DefaultTheme}>
                         <CryptoProvider>
+                            {hasSession && !isNewUser && hasPin && hasName ? (
+                                <RealtimeBootstrap />
+                            ) : null}
                             <AppStack
                                 hasSession={hasSession}
                                 isNewUser={isNewUser}

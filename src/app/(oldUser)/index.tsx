@@ -7,7 +7,6 @@ import { preloadUserChatsAndMessages } from '@/lib/chat-sync';
 import { useActiveChatStore } from '@/store/use-active-chat-store';
 import { usePinOldUserStore } from '@/store/use-pin-old-user-store';
 import { triggerRefreshKeys } from '@/types/keys.module';
-import { router } from 'expo-router';
 import React, { useEffect, useRef, useState } from 'react';
 import { Keyboard, KeyboardAvoidingView, TextInput as RNTextInput, StyleSheet, useColorScheme, View } from 'react-native';
 import { ActivityIndicator, Button } from 'react-native-paper';
@@ -132,7 +131,6 @@ const OldUserPage = () => {
 
             setProcessing(false)
             triggerRefreshKeys()
-            router.replace('/(tabs)')
         } catch {
             setError(true)
             setProcessing(false)
@@ -204,7 +202,7 @@ const OldUserPage = () => {
                         buttonColor='#25D366'
                         textColor='#ffffff'
                     >
-                        {isProcessing ? <ActivityIndicator color='#25D366' size={'small'} /> : <ThemedText>Verify</ThemedText>}
+                        Verify
                     </Button>
                 </ThemedView>
             </ThemedView>

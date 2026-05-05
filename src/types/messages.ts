@@ -56,6 +56,20 @@ export type ReplyMessage = {
     original_attached_media_url: string | null;
 };
 
+export type EncryptedMessageMedia = {
+    id?: string | null;
+    message_id?: string | null;
+    object_key: string;
+    preview_object_key?: string | null;
+    encrypted_aes_key: string;
+    iv: string;
+    mime_type: string;
+    preview_mime_type?: string | null;
+    original_size_bytes?: number | null;
+    local_path?: string | null;
+    preview_local_path?: string | null;
+};
+
 export type Message = {
     message_id: string;
     sender_user_id: string;
@@ -84,6 +98,13 @@ export type Message = {
     media_height?: number | null;
     media_file_name?: string | null;
     video_thumbnail: string | null;
+    encrypted_media?: EncryptedMessageMedia | null;
+    media_object_key?: string | null;
+    media_preview_object_key?: string | null;
+    media_encrypted_aes_key?: string | null;
+    media_iv?: string | null;
+    media_mime_type?: string | null;
+    media_preview_mime_type?: string | null;
     message_raction: MessageReaction | null;
     is_forward_message: boolean;
     message_text_content: string | null;

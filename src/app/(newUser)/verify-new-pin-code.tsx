@@ -1,10 +1,12 @@
 import { ThemedText } from '@/components/themed-text';
 import { ThemedView } from '@/components/themed-view';
 import { Colors } from '@/constants/theme';
+import { useCrypto } from '@/context/crypto';
 import { usePinStore } from '@/store/use-new-pin-store';
+import { triggerRefreshKeys } from '@/types/keys.module';
 import { router } from 'expo-router';
 import React, { useEffect, useRef, useState } from 'react';
-import { Keyboard, KeyboardAvoidingView, StyleSheet, TextInput as RNTextInput, useColorScheme, View } from 'react-native';
+import { Keyboard, KeyboardAvoidingView, TextInput as RNTextInput, StyleSheet, useColorScheme, View } from 'react-native';
 import { Button } from 'react-native-paper';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
@@ -22,15 +24,15 @@ const VerifyNewPinCode = () => {
     const pinColors = isDark ? COLORS.dark : COLORS.light
     const colors = Colors[scheme === 'unspecified' ? 'light' : scheme ?? 'light']
 
-    const { confirmPin, setConfirmPin, isConfirmMatch } = usePinStore()
+    const { confirmPin, setConfirmPin, isConfirmMatch, reset } = usePinStore()
+    const { register } = useCrypto()
     const inputRefs = useRef<(RNTextInput | null)[]>([])
     const [error, setError] = useState(false)
+    const [isProcessing, setIsProcessing] = useState(false)
     const [keyboardOffset, setKeyboardOffset] = useState(0);
-    const isProcessing = useRef(false)
 
     useEffect(() => {
         setConfirmPin('')
-        isProcessing.current = false
         const timer = setTimeout(() => inputRefs.current[0]?.focus(), 100)
         return () => clearTimeout(timer)
     }, [setConfirmPin])
@@ -51,37 +53,53 @@ const VerifyNewPinCode = () => {
         };
     }, []);
 
-    useEffect(() => {
-        if (confirmPin.length !== PIN_LENGTH || isProcessing.current) return
-        isProcessing.current = true
+    const handleVerify = async () => {
+        if (isProcessing || confirmPin.length !== PIN_LENGTH) return
+        setIsProcessing(true)
+        Keyboard.dismiss()
 
         if (isConfirmMatch) {
-            const create = async () => {
-                try {
-                    
-                } catch (error) {
-                    console.log(error);
-                    setError(true)
-                    setTimeout(() => {
-                        setError(false)
-                        setConfirmPin('')
-                        isProcessing.current = false
-                    }, 600)
+            try {
+                const create = async () => {
+                    try {
+                        await register(confirmPin)
+                        reset()
+                    } catch (error) {
+                        console.log(error);
+                        setError(true)
+                        setTimeout(() => {
+                            setError(false)
+                            setConfirmPin('')
+                            setIsProcessing(false)
+                        }, 600)
+                    }
                 }
+                create()
+                triggerRefreshKeys();
+                router.replace('/(complete-profile)')
+            } catch (err) {
+                console.log(err)
+                setError(true)
+                setTimeout(() => {
+                    setError(false)
+                    setConfirmPin('')
+                    setIsProcessing(false)
+                    inputRefs.current[0]?.focus()
+                }, 600)
             }
-            create()
         } else {
             setError(true)
             setTimeout(() => {
                 setError(false)
                 setConfirmPin('')
-                isProcessing.current = false
+                setIsProcessing(false)
+                inputRefs.current[0]?.focus()
             }, 600)
         }
-    }, [confirmPin, isConfirmMatch, setConfirmPin])
+    }
 
     const handlePinChange = (text: string, index: number) => {
-        if (error || isProcessing.current) return
+        if (error || isProcessing) return
 
         const sanitized = text.replace(/[^0-9]/g, '')
 
@@ -111,8 +129,7 @@ const VerifyNewPinCode = () => {
     }
 
     const handleKeyPress = (key: string, index: number) => {
-        if (error || isProcessing.current) return
-
+        if (error || isProcessing) return
         if (key === 'Backspace' && !pinDigits[index] && index > 0) {
             inputRefs.current[index - 1]?.focus()
         }
@@ -122,6 +139,8 @@ const VerifyNewPinCode = () => {
         if (error) return pinColors.dotError
         return pinDigits[index] ? '#25D366' : colors.indicator
     }
+
+    const isButtonDisabled = confirmPin.length !== PIN_LENGTH || isProcessing
 
     return (
         <KeyboardAvoidingView
@@ -156,7 +175,7 @@ const VerifyNewPinCode = () => {
                                 ]}
                                 selectionColor="#25D366"
                                 textAlign="center"
-                                editable={!error && !isProcessing.current}
+                                editable={!error && !isProcessing}
                             />
                         ))}
                     </View>
@@ -164,12 +183,13 @@ const VerifyNewPinCode = () => {
                 <ThemedView style={styles.bottomContainer}>
                     <Button
                         mode="contained"
-                        disabled={!confirmPin}
-                        onPress={() => router.push('/(tabs)')}
+                        disabled={isButtonDisabled}
+                        onPress={handleVerify}
                         buttonColor='#25D366'
                         textColor='#ffffff'
+                        style={{ height: 45, width: 90, borderRadius: 99 }}
                     >
-                        Next
+                        Verify
                     </Button>
                 </ThemedView>
             </ThemedView>

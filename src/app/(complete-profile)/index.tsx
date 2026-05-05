@@ -1,7 +1,7 @@
 import { ThemedText } from '@/components/themed-text';
 import { ThemedView } from '@/components/themed-view';
 import { Colors } from '@/constants/theme';
-import { router } from 'expo-router';
+import { authClient } from '@/lib/auth-client';
 import React, { useEffect, useState } from 'react';
 import { Keyboard, KeyboardAvoidingView, Pressable, StyleSheet, useColorScheme } from 'react-native';
 import { Button, Icon, TextInput } from 'react-native-paper';
@@ -14,6 +14,7 @@ const CompleteProfilePage = () => {
 
     const [firstName, setFirstName] = useState('');
     const [lastName, setLastName] = useState('');
+    const [isLoading, setIsLoading] = useState(false);
     const [keyboardOffset, setKeyboardOffset] = useState(0);
 
     useEffect(() => {
@@ -29,6 +30,27 @@ const CompleteProfilePage = () => {
             keyboardDidHideListener.remove();
         };
     }, []);
+
+    const handleNext = async () => {
+        if (!firstName.trim() || isLoading) return
+
+        setIsLoading(true)
+        Keyboard.dismiss()
+
+        try {
+            const fullName = [firstName.trim(), lastName.trim()].filter(Boolean).join(' ')
+
+            await authClient.updateUser({ name: fullName })
+
+            // Force session to re-fetch so AppLayout sees the new name
+            await authClient.getSession()
+
+            // No router.push needed — AppStack re-evaluates hasName=true automatically
+        } catch (err) {
+            console.log('Failed to update profile:', err)
+            setIsLoading(false)
+        }
+    }
 
     return (
         <KeyboardAvoidingView
@@ -68,29 +90,26 @@ const CompleteProfilePage = () => {
                         cursorColor='#25D366'
                         underlineColor={colors.indicator}
                         activeUnderlineColor='#25D366'
-                        style={{
-                            backgroundColor: colors.card,
-                        }}
+                        style={{ backgroundColor: colors.card }}
                     />
                     <TextInput
-                        label="Last name (required)"
+                        label="Last name (optional)"
                         value={lastName}
                         onChangeText={text => setLastName(text)}
                         cursorColor='#25D366'
                         underlineColor={colors.indicator}
                         activeUnderlineColor='#25D366'
-                        style={{
-                            backgroundColor: colors.card,
-                        }}
+                        style={{ backgroundColor: colors.card }}
                     />
                 </ThemedView>
                 <ThemedView style={styles.bottomContainer}>
                     <Button
                         mode="contained"
-                        disabled={!firstName && !lastName}
-                        onPress={() => router.push('../(newUser)')}
+                        disabled={!firstName.trim() || isLoading}
+                        onPress={handleNext}
                         buttonColor='#25D366'
                         textColor='#ffffff'
+                        loading={isLoading}
                     >
                         Next
                     </Button>

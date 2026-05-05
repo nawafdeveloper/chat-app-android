@@ -27,6 +27,20 @@ import type { Message } from "@/types/messages";
 import type { ServerRealtimeEvent } from "@/types/realtime-events";
 import { useCallback, useEffect, useRef } from "react";
 
+const REALTIME_URL =
+    "wss://halabakk-web.nawaf-alhasosah.workers.dev/api/realtime?platform=mobile";
+const INITIAL_RECONNECT_DELAY_MS = 3000;
+const MAX_RECONNECT_DELAY_MS = 30000;
+const NON_RETRYABLE_CLOSE_CODES = new Set([1000, 1008, 4001, 4003, 4401, 4403]);
+
+type ReactNativeWebSocketConstructor = typeof WebSocket & {
+    new (
+        url: string,
+        protocols?: string | string[] | null,
+        options?: { headers?: Record<string, string> }
+    ): WebSocket;
+};
+
 export function useChatMessages(chatIdOverride?: string | null) {
     const { isReady } = useCryptoKeys();
     const { data: session } = authClient.useSession();
@@ -192,7 +206,8 @@ export function useChatRealtime() {
 
     const selectedChatIdRef = useRef<string | null>(selectedChatId);
     const joinedChatIdRef = useRef<string | null>(null);
-    const reconnectTimeoutRef = useRef<number | null>(null);
+    const reconnectTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+    const reconnectDelayRef = useRef(INITIAL_RECONNECT_DELAY_MS);
     const notificationSettingsRef = useRef({
         disableMessagesNotifications: false,
         disableGroupsNotifications: false,
@@ -218,13 +233,13 @@ export function useChatRealtime() {
         setChats(current.map(applyKnownContactOverride));
     }, [contacts, applyKnownContactOverride, setChats]);
 
-    const persistAndUpsertChat = async (chat: ChatItemType) => {
+    const persistAndUpsertChat = useCallback(async (chat: ChatItemType) => {
         await upsertDbChats([chat]);
         const fromDb = await getDbChat(chat.chat_id);
         const final = applyKnownContactOverride(fromDb ?? chat);
         upsertChat(final);
         return final;
-    };
+    }, [applyKnownContactOverride, upsertChat]);
 
     useEffect(() => {
         selectedChatIdRef.current = selectedChatId;
@@ -648,6 +663,14 @@ export function useChatRealtime() {
         };
 
         const connect = () => {
+            if (
+                socket &&
+                (socket.readyState === WebSocket.CONNECTING ||
+                    socket.readyState === WebSocket.OPEN)
+            ) {
+                return;
+            }
+
             setStatus("connecting");
 
             if (!currentUserIdRef.current) {
@@ -655,24 +678,37 @@ export function useChatRealtime() {
                 return;
             }
 
-            const wsUrl = "wss://halabakk-web.nawaf-alhasosah.workers.dev/api/realtime?platform=mobile";
+            const cookies = authClient.getCookie();
 
-            console.log('[WebSocket] Connecting to:', wsUrl);
-            socket = new WebSocket(wsUrl);
-            setSocket(socket);
+            if (!cookies) {
+                setStatus("error");
+                return;
+            }
 
-            socket.addEventListener("open", () => {
+            const SocketConstructor =
+                WebSocket as ReactNativeWebSocketConstructor;
+            const nextSocket = new SocketConstructor(REALTIME_URL, undefined, {
+                headers: {
+                    Cookie: cookies,
+                },
+            });
+
+            socket = nextSocket;
+            setSocket(nextSocket);
+
+            nextSocket.addEventListener("open", () => {
+                reconnectDelayRef.current = INITIAL_RECONNECT_DELAY_MS;
                 setStatus("connected");
 
                 if (selectedChatIdRef.current) {
-                    socket?.send(JSON.stringify({
+                    nextSocket.send(JSON.stringify({
                         type: "JOIN_CONVERSATION",
                         conversationId: selectedChatIdRef.current,
                     }));
                 }
             });
 
-            socket.addEventListener("message", (messageEvent) => {
+            nextSocket.addEventListener("message", (messageEvent) => {
                 try {
                     const payload = JSON.parse(messageEvent.data as string);
                     void handleServerEvent(payload);
@@ -681,16 +717,36 @@ export function useChatRealtime() {
                 }
             });
 
-            socket.addEventListener("error", (error) => {
+            nextSocket.addEventListener("error", () => {
                 setStatus("error");
             });
 
-            socket.addEventListener("close", (event) => {
-                setSocket(null);
-
-                if (!isDisposed && event.code !== 1000) {
-                    reconnectTimeoutRef.current = window.setTimeout(connect, 3000);
+            nextSocket.addEventListener("close", (event) => {
+                if (socket === nextSocket) {
+                    socket = null;
+                    setSocket(null);
                 }
+
+                if (isDisposed) {
+                    return;
+                }
+
+                if (NON_RETRYABLE_CLOSE_CODES.has(event.code)) {
+                    setStatus("error");
+                    return;
+                }
+
+                if (reconnectTimeoutRef.current) {
+                    clearTimeout(reconnectTimeoutRef.current);
+                }
+
+                const reconnectDelay = reconnectDelayRef.current;
+                reconnectDelayRef.current = Math.min(
+                    reconnectDelay * 2,
+                    MAX_RECONNECT_DELAY_MS
+                );
+                setStatus("connecting");
+                reconnectTimeoutRef.current = setTimeout(connect, reconnectDelay);
             });
         };
 
@@ -699,7 +755,8 @@ export function useChatRealtime() {
         return () => {
             isDisposed = true;
             if (reconnectTimeoutRef.current) {
-                window.clearTimeout(reconnectTimeoutRef.current);
+                clearTimeout(reconnectTimeoutRef.current);
+                reconnectTimeoutRef.current = null;
             }
 
             if (socket?.readyState === WebSocket.OPEN && selectedChatIdRef.current) {
@@ -716,8 +773,19 @@ export function useChatRealtime() {
             setStatus("idle");
         };
     }, [
+        appendMessage,
+        applyKnownContactOverride,
         currentUserId,
         isReady,
+        markChatRead,
+        markMessagesReadByUser,
+        persistAndUpsertChat,
+        sendEvent,
+        setChatsError,
+        setPresence,
+        setSocket,
+        setStatus,
+        setTypingUsers,
     ]);
 
     useEffect(() => {
@@ -746,5 +814,5 @@ export function useChatRealtime() {
 
         selectedChatIdRef.current = selectedChatId;
         joinedChatIdRef.current = selectedChatId;
-    }, [selectedChatId]);
+    }, [selectedChatId, sendEvent]);
 }

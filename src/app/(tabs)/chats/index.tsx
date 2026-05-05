@@ -1,4 +1,4 @@
-import ChatFilledIcon, { ChatIcon } from '@/components/chat-icon'
+import { NewChatFilledIcon, NewChatIcon } from '@/components/chat-icon'
 import { ChatAvatar } from '@/components/decrypted-chat-avatar'
 import { ThemedText } from '@/components/themed-text'
 import { ThemedView } from '@/components/themed-view'
@@ -6,14 +6,15 @@ import { Colors } from '@/constants/theme'
 import { db } from '@/db/client'
 import { contacts, currentUser, chats as dbChats, encryptedMedia, messages } from '@/db/schema'
 import { deleteToken } from '@/helper/user-session'
-import { useChatRealtime } from '@/hooks/use-chat-realtime'
 import { authClient } from '@/lib/auth-client'
 import { deleteMobilePushToken, getDecryptedDbMessagePage, MESSAGE_PAGE_SIZE } from '@/lib/chat-sync'
 import { clearAllSensitiveData } from '@/lib/crypto-storage'
 import { markDbChatRead } from '@/lib/upsert-db-chats'
-import { rightNavRef } from '@/store/right-nav-ref'
+import { useAuthStore } from '@/store/auth-store'
 import { useNotificationStore } from '@/store/notification-store'
+import { rightNavRef } from '@/store/right-nav-ref'
 import { useActiveChatStore } from '@/store/use-active-chat-store'
+import { useLogoutLoadingState } from '@/store/use-logout-loading-state'
 import { ChatItemType } from '@/types/chats.type'
 import { MaterialIcons } from '@expo/vector-icons'
 import * as Haptics from 'expo-haptics'
@@ -196,7 +197,7 @@ const ChatItem = ({
         <Pressable
             onPress={() => onPress(item.chat_id)}
             onLongPress={() => onLongPress(item.chat_id)}
-            style={styles.chatRipple}>
+            style={[styles.chatRipple, { backgroundColor: isSelected ? colors.card : 'transparent' }]}>
             <View style={styles.chatItem}>
                 {isSelectionMode && (
                     <View pointerEvents="none" style={styles.selectionCheckbox}>
@@ -280,23 +281,23 @@ const ChatItem = ({
 const MemoChatItem = React.memo(ChatItem)
 
 const ChatsPage = () => {
-    useChatRealtime();
-
     const { data: session } = authClient.useSession();
     const chats = useActiveChatStore((state) => state.chats);
     const chatsLoading = useActiveChatStore((state) => state.chatsLoading);
     const setSelectedChatId = useActiveChatStore((state) => state.setSelectedChatId);
+    const { setHasSession } = useAuthStore();
 
     const scheme = useColorScheme()
     const resolvedScheme = scheme === 'unspecified' ? 'light' : scheme ?? 'light'
     const colors = Colors[resolvedScheme]
+
+    const { logoutLoading, setLogoutLoading } = useLogoutLoadingState()
 
     const [isSearchFocus, setIsSearchFocus] = useState(false)
     const [searchQuery, setSearchQuery] = useState('')
     const [appbarBg, setAppbarBg] = useState<string>(colors.background)
     const [selectedChatIds, setSelectedChatIds] = useState<Set<string>>(new Set())
     const [visible, setVisible] = useState(false);
-    const [logoutLoading, setLogoutLoading] = useState(false);
     const ignoreNextChatPressRef = useRef<string | null>(null);
     const isScrolledRef = useRef(false);
 
@@ -407,6 +408,7 @@ const ChatsPage = () => {
             useActiveChatStore.getState().reset();
 
             await authClient.signOut();
+            setHasSession(false);
         } catch (error) {
             console.log(error);
         } finally {
@@ -564,17 +566,23 @@ const ChatsPage = () => {
                 contentContainerStyle={styles.listContent}
                 ListEmptyComponent={!chatsLoading ? (
                     <View style={styles.emptyContainer}>
-                        <ChatIcon color={colors.textSecondary} />
-                        <Text style={[styles.emptyText, { color: colors.textSecondary }]}>
-                            No chats found
-                        </Text>
+                        <View style={{ flexDirection: 'row', alignItems: 'center', flexWrap: 'wrap', gap: 4 }}>
+                            <Text style={[styles.emptyText, { color: colors.textSecondary }]}>
+                                You have no chats yet, to create a new chat press the
+                            </Text>
+                            <NewChatIcon size={18} color={colors.textSecondary} />
+                            <Text style={[styles.emptyText, { color: colors.textSecondary }]}>
+                                green floating button
+                            </Text>
+                        </View>
                     </View>
                 ) : null}
             />
             {!isSelectionMode && (
                 <FAB
-                    icon={() => <ChatFilledIcon size={24} color={colors.background} />}
+                    icon={() => <NewChatFilledIcon size={24} color={colors.background} />}
                     style={styles.fab}
+                    onPress={() => router.push('/create-chat')}
                 />
             )}
         </ThemedView>
@@ -700,14 +708,14 @@ const styles = StyleSheet.create({
         fontWeight: '700',
     },
     emptyContainer: {
-        flex: 1,
-        alignItems: 'center',
-        justifyContent: 'center',
-        paddingTop: 100,
+        flexDirection: 'row',
+        alignItems: 'flex-start',
+        justifyContent: 'flex-start',
+        padding: 16,
     },
     emptyText: {
-        fontSize: 16,
-        marginTop: 16,
+        fontSize: 14,
+        minWidth: 0,
     },
     fab: {
         position: 'absolute',

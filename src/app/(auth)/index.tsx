@@ -101,7 +101,7 @@ const PhoneLoginPage = () => {
                         textColor='#ffffff'
                         style={{ height: 45, width: 90, borderRadius: 99 }}
                     >
-                        {isLoading ? <ActivityIndicator color='#25D366' size={'small'} /> : <ThemedText>Next</ThemedText>}
+                        {isLoading ? <ActivityIndicator color={scheme === 'dark' ? '#FFFFFF' : '#000000'} size={'small'} /> : <ThemedText>Next</ThemedText>}
                     </Button>
                 </ThemedView>
             </ThemedView>

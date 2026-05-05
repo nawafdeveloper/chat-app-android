@@ -4,7 +4,7 @@ import { Colors } from '@/constants/theme';
 import { useLoginStore } from '@/store/use-login-store';
 import React, { useEffect, useRef, useState } from 'react';
 import { Keyboard, KeyboardAvoidingView, TextInput as RNTextInput, StyleSheet, useColorScheme, View } from 'react-native';
-import { ActivityIndicator, Button } from 'react-native-paper';
+import { Button } from 'react-native-paper';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 const OtpVerificationPage = () => {
@@ -14,9 +14,7 @@ const OtpVerificationPage = () => {
     const { otp, setOtp, isLoading, handleVerify } = useLoginStore()
 
     const [keyboardOffset, setKeyboardOffset] = useState(0);
-
     const inputRefs = useRef<(RNTextInput | null)[]>([]);
-
     const otpArray = otp.split('');
 
     const handleOtpChange = (text: string, index: number) => {
@@ -47,23 +45,18 @@ const OtpVerificationPage = () => {
         }
     };
 
-    const handleKeyPress = (e: any, index: number) => {
-        if (e.nativeEvent.key === 'Backspace' && !otpArray[index] && index > 0) {
+    const handleKeyPress = (key: string, index: number) => {
+        if (key === 'Backspace' && !otpArray[index] && index > 0) {
             inputRefs.current[index - 1]?.focus();
         }
     };
 
     const onVerify = () => {
-        if (otp.length === 6) {
+        if (otp.length === 6 && !isLoading) {
+            Keyboard.dismiss();
             handleVerify();
         }
     };
-
-    useEffect(() => {
-        if (inputRefs.current[0]) {
-            inputRefs.current[0].focus();
-        }
-    }, []);
 
     useEffect(() => {
         const keyboardDidShowListener = Keyboard.addListener('keyboardDidShow', () => {
@@ -102,7 +95,7 @@ const OtpVerificationPage = () => {
                                 ref={(ref) => { inputRefs.current[index] = ref; }}
                                 value={otpArray[index] || ''}
                                 onChangeText={(text) => handleOtpChange(text, index)}
-                                onKeyPress={(e) => handleKeyPress(e, index)}
+                                onKeyPress={(e) => handleKeyPress(e.nativeEvent.key, index)}
                                 keyboardType="number-pad"
                                 maxLength={6}
                                 style={[
@@ -130,7 +123,7 @@ const OtpVerificationPage = () => {
                         loading={isLoading}
                         style={{ height: 45, width: 90, borderRadius: 99 }}
                     >
-                        {isLoading ? <ActivityIndicator color='#25D366' size={'small'} /> : <ThemedText>Verify</ThemedText>}
+                        Verify
                     </Button>
                 </ThemedView>
             </ThemedView>

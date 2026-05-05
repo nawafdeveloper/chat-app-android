@@ -1,9 +1,10 @@
 import { Colors } from "@/constants/theme";
+import { fetchAndDecryptMessageMedia } from "@/lib/message-media";
 import { Message } from "@/types/messages";
 import * as Haptics from 'expo-haptics';
 import { Image } from "expo-image";
-import { memo, useMemo } from "react";
-import { Pressable, StyleSheet, Text, TouchableWithoutFeedback, View } from "react-native";
+import { memo, useEffect, useMemo, useState } from "react";
+import { ActivityIndicator, Pressable, StyleSheet, Text, TouchableWithoutFeedback, View } from "react-native";
 import { Gesture, GestureDetector } from "react-native-gesture-handler";
 import { Icon, IconButton, TouchableRipple } from "react-native-paper";
 import Animated, { Extrapolation, interpolate, SlideInLeft, SlideInRight, SlideOutLeft, SlideOutRight, useAnimatedStyle, useSharedValue, withSpring, ZoomIn, ZoomOut } from "react-native-reanimated";
@@ -11,6 +12,7 @@ import { Path, Svg } from 'react-native-svg';
 import { runOnJS } from "react-native-worklets";
 import { ThemedText } from "./themed-text";
 import { ThemedView } from "./themed-view";
+import { ChatAvatar } from "./decrypted-chat-avatar";
 import { DarkFileIcon, LightFileIcon } from "./ui/file-icons";
 
 type BubbleProps = {
@@ -60,6 +62,139 @@ const SWIPE_RESISTANCE = 0.18;
 const REACTION_EMOJIS = ["👍", "❤️", "😂", "😮", "😢", "🙏"];
 const AnimatedIconButton = Animated.createAnimatedComponent(IconButton);
 
+const formatBytes = (bytes?: number | null) => {
+    if (!bytes || bytes <= 0) {
+        return null;
+    }
+
+    const units = ["B", "KB", "MB", "GB"];
+    let value = bytes;
+    let unitIndex = 0;
+
+    while (value >= 1024 && unitIndex < units.length - 1) {
+        value /= 1024;
+        unitIndex += 1;
+    }
+
+    const formatted = value >= 10 || unitIndex === 0
+        ? Math.round(value).toString()
+        : value.toFixed(1);
+
+    return `${formatted} ${units[unitIndex]}`;
+};
+
+const getFileExtension = (
+    fileName?: string | null,
+    mimeType?: string | null
+) => {
+    const extension = fileName?.split(".").pop()?.toUpperCase();
+    if (extension && extension !== fileName?.toUpperCase()) {
+        return extension;
+    }
+
+    return mimeType?.split("/").pop()?.toUpperCase() ?? null;
+};
+
+const getAspectRatio = (message: Message) => {
+    if (message.media_aspect_ratio && message.media_aspect_ratio > 0) {
+        return message.media_aspect_ratio;
+    }
+
+    if (message.media_width && message.media_height) {
+        return message.media_width / message.media_height;
+    }
+
+    return 3 / 4;
+};
+
+function DecryptedMediaImage({
+    source,
+    isPreview,
+    aspectRatio,
+    isDark,
+    showPlayIcon = false,
+}: {
+    source?: string | null;
+    isPreview?: boolean;
+    aspectRatio: number;
+    isDark: boolean;
+    showPlayIcon?: boolean;
+}) {
+    const [resolvedUri, setResolvedUri] = useState<string | null>(null);
+    const [failed, setFailed] = useState(false);
+
+    useEffect(() => {
+        let mounted = true;
+
+        setResolvedUri(null);
+        setFailed(false);
+
+        if (!source) {
+            return () => {
+                mounted = false;
+            };
+        }
+
+        fetchAndDecryptMessageMedia({
+            source,
+            isPreview,
+            fallbackExtension: isPreview ? "jpg" : "jpg",
+        })
+            .then((uri) => {
+                if (mounted) {
+                    setResolvedUri(uri ?? null);
+                }
+            })
+            .catch(() => {
+                if (mounted) {
+                    setFailed(true);
+                }
+            });
+
+        return () => {
+            mounted = false;
+        };
+    }, [isPreview, source]);
+
+    if (!resolvedUri || failed) {
+        return (
+            <View
+                style={[
+                    styles.mediaPlaceholder,
+                    {
+                        aspectRatio,
+                        backgroundColor: isDark ? "#182229" : "#edf2f7",
+                    },
+                ]}
+            >
+                {!failed && <ActivityIndicator size="small" color="#25D366" />}
+                {failed && (
+                    <Icon
+                        source="image-broken-variant"
+                        color={isDark ? "#8E9499" : "#64748b"}
+                        size={28}
+                    />
+                )}
+            </View>
+        );
+    }
+
+    return (
+        <View style={[styles.mediaWrapper, { aspectRatio }]}>
+            <Image
+                source={{ uri: resolvedUri }}
+                contentFit="cover"
+                style={styles.mediaPhoto}
+            />
+            {showPlayIcon && (
+                <View style={styles.playOverlay}>
+                    <Icon source="play" color="#ffffff" size={32} />
+                </View>
+            )}
+        </View>
+    );
+}
+
 const Tail = memo(function Tail({ color, sent }: { color: string; sent: boolean }) {
     return (
         <View style={[
@@ -87,12 +222,19 @@ function Bubble({ message, currentUserId, isDark, showTail = true, isSelected, s
         attached_media,
         is_forward_message,
         media_url,
-        media_aspect_ratio,
         video_thumbnail,
+        media_preview_url,
+        media_size_bytes,
+        media_file_name,
+        client_local_media_name,
+        client_local_media_size,
+        client_local_media_mime_type,
         poll,
         open_graph_data,
         reply_message,
-        message_raction
+        message_raction,
+        contact,
+        location,
     } = message;
     const formattedTime = useMemo(
         () => created_at.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
@@ -104,6 +246,24 @@ function Bubble({ message, currentUserId, isDark, showTail = true, isSelected, s
     const sent = sender_user_id === currentUserId;
     const bubbleColor = sent ? theme.sentBubble : theme.receivedBubble;
     const swipeX = useSharedValue(0);
+    const mediaAspectRatio = getAspectRatio(message);
+    const fileName =
+        media_file_name ??
+        client_local_media_name ??
+        media_url?.split("?")[0].split("/").filter(Boolean).pop() ??
+        "File";
+    const fileSize = media_size_bytes ?? client_local_media_size ?? null;
+    const fileExtension = getFileExtension(fileName, client_local_media_mime_type);
+    const fileDetails = [formatBytes(fileSize), fileExtension]
+        .filter(Boolean)
+        .join(" - ");
+    const sharedContactName =
+        contact?.contact_name ??
+        message_text_content ??
+        "Shared contact";
+    const sharedContactPhone = contact?.contact_phone ?? null;
+    const photoSource = media_url ?? media_preview_url ?? null;
+    const videoThumbnailSource = video_thumbnail ?? media_preview_url ?? null;
 
     const swipeProgress = useAnimatedStyle(() => {
         const progress = interpolate(
@@ -278,10 +438,27 @@ function Bubble({ message, currentUserId, isDark, showTail = true, isSelected, s
                                 {attached_media === 'contact' && (
                                     <ThemedView style={[styles.contactCard, { backgroundColor: sent ? theme.cardSent : theme.cardReceived }]}>
                                         <ThemedView style={styles.contactContentContainer}>
-                                            <View style={[styles.avatar, { backgroundColor: isDark ? '#052e16' : '#dcfce7' }]}>
-                                                <Text style={[styles.avatarText, { color: isDark ? '#4ade80' : '#15803d' }]}>M</Text>
-                                            </View>
-                                            <ThemedText>Mohammed</ThemedText>
+                                            <ChatAvatar
+                                                userId={contact?.linked_user_id ?? contact?.contact_id ?? null}
+                                                imageUrl={contact?.contact_image}
+                                                displayName={sharedContactName}
+                                                contactPhone={sharedContactPhone}
+                                                style={styles.avatar}
+                                                iconColor={colors.textSecondary}
+                                                backgroundColor={sent ? theme.cardSent : theme.cardReceived}
+                                                textColor={colors.text}
+                                            />
+                                            <ThemedView style={styles.contactTextContainer}>
+                                                <ThemedText numberOfLines={1}>{sharedContactName}</ThemedText>
+                                                {sharedContactPhone && (
+                                                    <ThemedText
+                                                        numberOfLines={1}
+                                                        style={[styles.contactPhone, { color: colors.textSecondary }]}
+                                                    >
+                                                        {sharedContactPhone}
+                                                    </ThemedText>
+                                                )}
+                                            </ThemedView>
                                         </ThemedView>
                                     </ThemedView>
                                 )}
@@ -289,26 +466,86 @@ function Bubble({ message, currentUserId, isDark, showTail = true, isSelected, s
                                     <ThemedView style={[styles.fileCard, { backgroundColor: sent ? theme.cardSent : theme.cardReceived }]}>
                                         {isDark ? <DarkFileIcon /> : <LightFileIcon />}
                                         <ThemedView style={styles.innerFileCardContent}>
-                                            <ThemedText style={styles.fileName}>app-release.apk</ThemedText>
-                                            <ThemedText style={[styles.fileDetails, { color: isDark ? '#6C757C' : 'gray' }]}>104MB - BIN</ThemedText>
+                                            <ThemedText numberOfLines={1} style={styles.fileName}>{fileName}</ThemedText>
+                                            {fileDetails.length > 0 && (
+                                                <ThemedText style={[styles.fileDetails, { color: isDark ? '#6C757C' : 'gray' }]}>
+                                                    {fileDetails}
+                                                </ThemedText>
+                                            )}
                                         </ThemedView>
                                     </ThemedView>
                                 )}
                                 {attached_media === 'photo' && (
-                                    <Image
-                                        source={{ uri: media_url || '' }}
-                                        contentFit="cover"
-                                        style={[styles.mediaPhoto, { aspectRatio: media_aspect_ratio }]}
+                                    <DecryptedMediaImage
+                                        source={photoSource}
+                                        aspectRatio={mediaAspectRatio}
+                                        isDark={isDark}
                                     />
                                 )}
                                 {attached_media === 'video' && (
-                                    <Image
-                                        source={{ uri: video_thumbnail || '' }}
-                                        contentFit="cover"
-                                        style={[styles.mediaPhoto, { aspectRatio: media_aspect_ratio }]}
+                                    <DecryptedMediaImage
+                                        source={videoThumbnailSource}
+                                        isPreview
+                                        aspectRatio={mediaAspectRatio}
+                                        isDark={isDark}
+                                        showPlayIcon
                                     />
                                 )}
-                                {message_text_content && (
+                                {attached_media === 'voice' && (
+                                    <ThemedView style={[styles.fileCard, { backgroundColor: sent ? theme.cardSent : theme.cardReceived }]}>
+                                        <Icon
+                                            source="microphone"
+                                            color={isDark ? '#E9EDEF' : '#111B21'}
+                                            size={28}
+                                        />
+                                        <ThemedView style={styles.innerFileCardContent}>
+                                            <ThemedText style={styles.fileName}>Voice message</ThemedText>
+                                            {fileDetails.length > 0 && (
+                                                <ThemedText style={[styles.fileDetails, { color: isDark ? '#6C757C' : 'gray' }]}>
+                                                    {fileDetails}
+                                                </ThemedText>
+                                            )}
+                                        </ThemedView>
+                                    </ThemedView>
+                                )}
+                                {attached_media === 'location' && location && (
+                                    <ThemedView style={[styles.locationCard, { backgroundColor: sent ? theme.cardSent : theme.cardReceived }]}>
+                                        <Icon
+                                            source="map-marker"
+                                            color="#25D366"
+                                            size={28}
+                                        />
+                                        <ThemedView style={styles.innerFileCardContent}>
+                                            <ThemedText numberOfLines={1} style={styles.fileName}>
+                                                {location.name ?? 'Location'}
+                                            </ThemedText>
+                                            <ThemedText numberOfLines={2} style={[styles.fileDetails, { color: isDark ? '#6C757C' : 'gray' }]}>
+                                                {location.formatted_address ?? `${location.latitude}, ${location.longitude}`}
+                                            </ThemedText>
+                                        </ThemedView>
+                                    </ThemedView>
+                                )}
+                                {poll && (
+                                    <ThemedView style={[styles.pollContentContainer, { backgroundColor: sent ? theme.cardSent : theme.cardReceived }]}>
+                                        <ThemedText style={styles.pollTitle}>{poll.poll_question}</ThemedText>
+                                        {poll.poll_options.map((option, index) => (
+                                            <ThemedView
+                                                key={`${poll.poll_id}-${index}`}
+                                                style={[styles.pollOptionRow, { borderColor: sent ? theme.borderSent : theme.borderReceive }]}
+                                            >
+                                                <ThemedText numberOfLines={1} style={styles.pollOptionText}>
+                                                    {option}
+                                                </ThemedText>
+                                            </ThemedView>
+                                        ))}
+                                        {poll.poll_multiple_answers && (
+                                            <ThemedText style={[styles.pollHintText, { color: colors.textSecondary }]}>
+                                                Multiple answers
+                                            </ThemedText>
+                                        )}
+                                    </ThemedView>
+                                )}
+                                {message_text_content && attached_media !== 'contact' && (
                                     <Text style={[
                                         styles.messageText,
                                         { color: sent ? theme.sentText : theme.receivedText },
@@ -534,10 +771,11 @@ const styles = StyleSheet.create({
     },
     pollContentContainer: {
         paddingHorizontal: 12,
-        paddingTop: 12,
+        paddingVertical: 12,
         gap: 10,
         minWidth: '100%',
-        backgroundColor: 'transparent',
+        borderRadius: 8,
+        marginBottom: 8,
     },
     pollHeader: {
         flexDirection: 'row',
@@ -555,11 +793,44 @@ const styles = StyleSheet.create({
         fontWeight: '600',
         lineHeight: 15
     },
+    pollOptionRow: {
+        borderWidth: 1,
+        borderRadius: 999,
+        paddingHorizontal: 12,
+        paddingVertical: 8,
+        backgroundColor: 'transparent',
+    },
+    pollOptionText: {
+        fontSize: 14,
+        lineHeight: 16,
+    },
+    pollHintText: {
+        fontSize: 12,
+        lineHeight: 14,
+    },
+    mediaWrapper: {
+        width: '100%',
+        borderRadius: 6,
+        marginBottom: 4,
+        overflow: 'hidden',
+        position: 'relative',
+    },
     mediaPhoto: {
         width: '100%',
-        aspectRatio: 3 / 4,
+        height: '100%',
+    },
+    mediaPlaceholder: {
+        width: '100%',
         borderRadius: 6,
-        marginBottom: 4
+        marginBottom: 4,
+        justifyContent: 'center',
+        alignItems: 'center',
+    },
+    playOverlay: {
+        ...StyleSheet.absoluteFillObject,
+        justifyContent: 'center',
+        alignItems: 'center',
+        backgroundColor: 'rgba(0,0,0,0.18)',
     },
     messageText: {
         fontSize: 15,
@@ -594,6 +865,16 @@ const styles = StyleSheet.create({
         gap: 10,
         backgroundColor: 'transparent'
     },
+    contactTextContainer: {
+        flex: 1,
+        minWidth: 0,
+        backgroundColor: 'transparent',
+    },
+    contactPhone: {
+        fontSize: 12,
+        lineHeight: 14,
+        marginTop: 2,
+    },
     avatar: {
         width: 44,
         height: 44,
@@ -601,10 +882,6 @@ const styles = StyleSheet.create({
         alignItems: 'center',
         justifyContent: 'center',
         marginRight: 12,
-    },
-    avatarText: {
-        fontSize: 18,
-        fontWeight: '500'
     },
     fileCard: {
         paddingHorizontal: 12,
@@ -615,6 +892,16 @@ const styles = StyleSheet.create({
         gap: 10,
         marginBottom: 8,
         minWidth: '100%'
+    },
+    locationCard: {
+        paddingHorizontal: 12,
+        paddingVertical: 12,
+        borderRadius: 8,
+        flexDirection: 'row',
+        alignItems: 'center',
+        gap: 10,
+        marginBottom: 8,
+        minWidth: '100%',
     },
     innerFileCardContent: {
         flexDirection: 'column',
