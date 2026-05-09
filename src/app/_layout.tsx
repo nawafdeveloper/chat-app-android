@@ -71,6 +71,8 @@ const AppStack = ({ hasSession, isNewUser, hasPin, hasNoPin, hasName }: AppStack
                 <Stack.Screen name='(tabs)' options={{ headerShown: false }} />
                 <Stack.Screen name='chatId' options={{ headerShown: false }} />
                 <Stack.Screen name='create-chat' options={{ headerShown: false }} />
+                <Stack.Screen name='video-player' options={{ headerShown: false, animation: 'fade' }} />
+                <Stack.Screen name='image-preview' options={{ headerShown: false, animation: 'fade' }} />
             </Stack.Protected>
         </Stack>
     );

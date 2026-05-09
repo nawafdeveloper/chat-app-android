@@ -14,6 +14,7 @@ import Slider from "@react-native-community/slider";
 import { useAudioPlayer, useAudioPlayerStatus } from "expo-audio";
 import * as Haptics from 'expo-haptics';
 import { Image } from "expo-image";
+import { router } from "expo-router";
 import { useVideoPlayer, type VideoThumbnail } from "expo-video";
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { ActivityIndicator, Pressable, StyleSheet, Text, TouchableWithoutFeedback, View } from "react-native";
@@ -72,6 +73,8 @@ const MAX_SWIPE_TRANSLATION = 56;
 const SWIPE_HARD_LIMIT = 72;
 const SWIPE_RESISTANCE = 0.18;
 const AnimatedIconButton = Animated.createAnimatedComponent(IconButton);
+const getMediaSharedTransitionTag = (mediaType: "image" | "video", messageId: string) =>
+    `${mediaType}-preview-${messageId}`;
 
 type ActiveVoicePlayback = {
     messageId: string;
@@ -190,6 +193,11 @@ function DecryptedMediaImage({
     isDownloading = false,
     downloadDetails,
     onDownload,
+    message_id,
+    senderName,
+    timeStamp,
+    onPreviewPress,
+    sharedTransitionTag
 }: {
     source?: string | null;
     previewSource?: string | null;
@@ -203,6 +211,11 @@ function DecryptedMediaImage({
     isDownloading?: boolean;
     downloadDetails?: string | null;
     onDownload?: () => void;
+    message_id: string;
+    senderName: string;
+    timeStamp: string;
+    onPreviewPress?: (() => void) | null;
+    sharedTransitionTag?: string;
 }) {
     const [resolvedUri, setResolvedUri] = useState<string | null>(null);
     const [resolvedPreviewUri, setResolvedPreviewUri] = useState<string | null>(null);
@@ -279,6 +292,18 @@ function DecryptedMediaImage({
 
     const displayUri = resolvedUri ?? resolvedPreviewUri;
     const shouldBlurPreview = Boolean(!resolvedUri && resolvedPreviewUri);
+    const transitionTag = sharedTransitionTag ?? getMediaSharedTransitionTag("image", message_id);
+    const handlePreviewPress = onPreviewPress === undefined ? (() => {
+        router.push({
+            pathname: '/image-preview',
+            params: {
+                imageUrl: displayUri ?? "",
+                messageId: message_id,
+                senderName,
+                timeStamp,
+            },
+        });
+    }) : onPreviewPress;
 
     if (!displayUri || failed) {
         return (
@@ -320,53 +345,60 @@ function DecryptedMediaImage({
     }
 
     return (
-        <View style={[styles.mediaWrapper, { aspectRatio }, containerStyle,]}>
-            <Image
-                source={{ uri: displayUri }}
-                contentFit="cover"
-                blurRadius={resolvedUri && !resolvedPreviewUri ? 1 : 0}
-                style={[
-                    styles.mediaPhoto,
-                    shouldBlurPreview && styles.mediaPhotoBlurred,
-                ]}
-            />
-            {isDecrypting && (
-                <View style={styles.mediaDecryptingOverlay}>
-                    <ActivityIndicator size="small" color="#ffffff" />
-                </View>
-            )}
-            {showPlayIcon && shouldBlurPreview && (
-                <View style={styles.playOverlay}>
-                    <View style={{ padding: 10, borderRadius: 99, backgroundColor: 'rgba(255,255,255,0.2)' }}>
-                        <Icon source="play" color="#ffffff" size={32} />
+        <Pressable onPress={handlePreviewPress ?? undefined} disabled={!handlePreviewPress}>
+            <Animated.View
+                sharedTransitionTag={transitionTag}
+                style={[styles.mediaWrapper, { aspectRatio }, containerStyle,]}
+            >
+
+                <Animated.Image
+                    source={{ uri: displayUri }}
+                    resizeMode="cover"
+                    blurRadius={!resolvedUri && resolvedPreviewUri ? 1 : 0}
+                    style={[
+                        styles.mediaPhoto,
+                        shouldBlurPreview && styles.mediaPhotoBlurred,
+                    ]}
+                />
+
+                {isDecrypting && (
+                    <View style={styles.mediaDecryptingOverlay}>
+                        <ActivityIndicator size="small" color="#ffffff" />
                     </View>
-                </View>
-            )}
-            {showDownloadOverlay && (
-                <Pressable
-                    style={styles.playOverlay}
-                    onPress={isDownloading ? undefined : onDownload}
-                >
-                    <View style={styles.mediaDownloadButton}>
-                        {isDownloading ? (
-                            <ActivityIndicator size="small" color="#ffffff" />
-                        ) : (
-                            <Icon source="download" color="#ffffff" size={32} />
-                        )}
-                        <ThemedView style={styles.mediaDownloadTextContainer}>
-                            <ThemedText style={styles.mediaDownloadTitle}>
-                                {isDownloading ? "Downloading" : "Download"}
-                            </ThemedText>
-                            {downloadDetails ? (
-                                <ThemedText style={styles.mediaDownloadDetails}>
-                                    {downloadDetails}
+                )}
+                {showPlayIcon && shouldBlurPreview && (
+                    <View style={styles.playOverlay}>
+                        <View style={{ padding: 10, borderRadius: 99, backgroundColor: 'rgba(255,255,255,0.2)' }}>
+                            <Icon source="play" color="#ffffff" size={32} />
+                        </View>
+                    </View>
+                )}
+                {showDownloadOverlay && (
+                    <Pressable
+                        style={styles.playOverlay}
+                        onPress={isDownloading ? undefined : onDownload}
+                    >
+                        <View style={styles.mediaDownloadButton}>
+                            {isDownloading ? (
+                                <ActivityIndicator size="small" color="#ffffff" />
+                            ) : (
+                                <Icon source="download" color="#ffffff" size={32} />
+                            )}
+                            <ThemedView style={styles.mediaDownloadTextContainer}>
+                                <ThemedText style={styles.mediaDownloadTitle}>
+                                    {isDownloading ? "Downloading" : "Download"}
                                 </ThemedText>
-                            ) : null}
-                        </ThemedView>
-                    </View>
-                </Pressable>
-            )}
-        </View>
+                                {downloadDetails ? (
+                                    <ThemedText style={styles.mediaDownloadDetails}>
+                                        {downloadDetails}
+                                    </ThemedText>
+                                ) : null}
+                            </ThemedView>
+                        </View>
+                    </Pressable>
+                )}
+            </Animated.View>
+        </Pressable>
     );
 }
 
@@ -414,6 +446,9 @@ function VideoMessagePreview({
     isDownloading,
     downloadDetails,
     onDownload,
+    message_id,
+    senderName,
+    timeStamp
 }: {
     localVideoUri?: string | null;
     source?: string | null;
@@ -424,10 +459,14 @@ function VideoMessagePreview({
     isDownloading: boolean;
     downloadDetails?: string | null;
     onDownload?: () => void;
+    message_id: string;
+    senderName: string;
+    timeStamp: string;
 }) {
     const player = useVideoPlayer(
         localVideoUri ? { uri: localVideoUri } : null
     );
+    const videoDuration = formatAudioTime(player.duration ?? 0)
     const [thumbnail, setThumbnail] = useState<VideoThumbnail | null>(null);
 
     useEffect(() => {
@@ -457,18 +496,26 @@ function VideoMessagePreview({
 
     if (thumbnail) {
         return (
-            <View style={[styles.mediaWrapper, { aspectRatio }]}>
-                <Image
-                    source={thumbnail}
-                    contentFit="cover"
-                    style={styles.mediaPhoto}
-                />
-                <View style={styles.playOverlay}>
-                    <View style={styles.videoPlayBadge}>
-                        <Icon source="play" color="#ffffff" size={32} />
+            <Pressable onPress={() => router.push({ pathname: '/video-player', params: { videoUrl: localVideoUri, messageId: message_id, senderName: senderName, timeStamp: timeStamp } })}>
+                <Animated.View
+                    sharedTransitionTag={getMediaSharedTransitionTag("video", message_id)}
+                    style={[styles.mediaWrapper, { aspectRatio }]}>
+                    <Image
+                        source={thumbnail}
+                        contentFit="cover"
+                        style={styles.mediaPhoto}
+                    />
+                    <View style={styles.playOverlay}>
+                        <View style={styles.videoPlayBadge}>
+                            <Icon source="play" color="#ffffff" size={32} />
+                        </View>
+                        <ThemedView style={{ flexDirection: 'row', alignItems: 'center', gap: 6, backgroundColor: 'transparent', position: 'absolute', left: 8, bottom: 8, zIndex: 1 }}>
+                            <Icon source="video" color="#ffffff" size={20} />
+                            <ThemedText style={{ fontSize: 12, fontWeight: '500' }}>{videoDuration}</ThemedText>
+                        </ThemedView>
                     </View>
-                </View>
-            </View>
+                </Animated.View>
+            </Pressable>
         );
     }
 
@@ -485,6 +532,19 @@ function VideoMessagePreview({
             isDownloading={isDownloading}
             downloadDetails={downloadDetails}
             onDownload={onDownload}
+            message_id={message_id}
+            senderName={senderName}
+            timeStamp={timeStamp}
+            sharedTransitionTag={getMediaSharedTransitionTag("video", message_id)}
+            onPreviewPress={localVideoUri ? () => router.push({
+                pathname: '/video-player',
+                params: {
+                    videoUrl: localVideoUri,
+                    messageId: message_id,
+                    senderName,
+                    timeStamp,
+                },
+            }) : null}
         />
     );
 }
@@ -1011,7 +1071,6 @@ function Bubble({ message, currentUserId, isDark, showTail = true, isSelected, s
             onPress={() => onPress(message_id)}
         >
             <View
-                key={message_id}
                 style={[
                     styles.row,
                     sent ? styles.rowSent : styles.rowReceived,
@@ -1031,27 +1090,27 @@ function Bubble({ message, currentUserId, isDark, showTail = true, isSelected, s
                         style={[styles.replySwipeIcon, { borderColor: colors.card }, replyButtonAnimatedStyle]}
                     />
                 </Animated.View>
-                <View style={styles.messageContentRow}>
-                    {!sent && isGroupChat && (
-                        <View style={styles.groupAvatarColumn}>
-                            {showTail ? (
-                                <ChatAvatar
-                                    userId={senderGroupMember?.user_id ?? sender_user_id}
-                                    imageUrl={senderAvatar}
-                                    displayName={senderDisplayName}
-                                    contactPhone={senderPhone}
-                                    style={styles.groupSenderAvatar}
-                                    iconColor={groupSenderAccent}
-                                    backgroundColor={isDark ? "#182229" : "#e8f0ef"}
-                                    textColor={groupSenderAccent}
-                                />
-                            ) : (
-                                <View style={styles.groupSenderAvatarSpacer} />
-                            )}
-                        </View>
-                    )}
-                    <GestureDetector gesture={panGesture}>
-                        <Animated.View style={[styles.bubbleAndTailWrapper, bubbleAndTailAnimatedStyle]}>
+                <GestureDetector gesture={panGesture}>
+                    <Animated.View style={[styles.messageContentRow, bubbleAndTailAnimatedStyle]}>
+                        {!sent && isGroupChat && (
+                            <View style={styles.groupAvatarColumn}>
+                                {showTail ? (
+                                    <ChatAvatar
+                                        userId={senderGroupMember?.user_id ?? sender_user_id}
+                                        imageUrl={senderAvatar}
+                                        displayName={senderDisplayName}
+                                        contactPhone={senderPhone}
+                                        style={styles.groupSenderAvatar}
+                                        iconColor={groupSenderAccent}
+                                        backgroundColor={isDark ? "#182229" : "#e8f0ef"}
+                                        textColor={groupSenderAccent}
+                                    />
+                                ) : (
+                                    <View style={styles.groupSenderAvatarSpacer} />
+                                )}
+                            </View>
+                        )}
+                        <View style={styles.bubbleAndTailWrapper}>
                             {!sent && (showTail
                                 ? <Tail color={bubbleColor} sent={false} />
                                 : <View style={styles.tailSpacer} />
@@ -1177,6 +1236,9 @@ function Bubble({ message, currentUserId, isDark, showTail = true, isSelected, s
                                                 : "Too large"
                                         }
                                         onDownload={canDownloadFullMedia ? handleDownloadMedia : undefined}
+                                        message_id={message_id}
+                                        senderName={senderDisplayName}
+                                        timeStamp={formattedTime}
                                     />
                                 )}
                                 {attached_media === 'video' && (
@@ -1194,6 +1256,9 @@ function Bubble({ message, currentUserId, isDark, showTail = true, isSelected, s
                                                 : "Too large"
                                         }
                                         onDownload={canDownloadMediaFromBubble ? handleDownloadMedia : undefined}
+                                        message_id={message_id}
+                                        senderName={senderDisplayName}
+                                        timeStamp={formattedTime}
                                     />
                                 )}
                                 {attached_media === 'voice' && (
@@ -1295,9 +1360,9 @@ function Bubble({ message, currentUserId, isDark, showTail = true, isSelected, s
                                 ? <Tail color={bubbleColor} sent={true} />
                                 : <View style={styles.tailSpacer} />
                             )}
-                        </Animated.View>
-                    </GestureDetector>
-                </View>
+                        </View>
+                    </Animated.View>
+                </GestureDetector>
             </View>
         </TouchableWithoutFeedback>
     );
