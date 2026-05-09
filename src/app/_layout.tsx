@@ -6,6 +6,7 @@ import { getToken } from '@/helper/user-session';
 import { useChatRealtime } from '@/hooks/use-chat-realtime';
 import { authClient } from '@/lib/auth-client';
 import { deleteMobilePushToken, hydrateLocalChatCache, registerMobilePushToken, syncMobileChatsAndMessages } from '@/lib/chat-sync';
+import { syncMobileContacts } from '@/lib/contact-sync';
 import { retrieveSessionKeys } from '@/lib/crypto-storage';
 import { useAuthStore } from '@/store/auth-store';
 import { useNotificationStore } from '@/store/notification-store';
@@ -91,6 +92,7 @@ const AppLayout = () => {
     const { expoPushToken, setExpoPushToken, setNotification } = useNotificationStore();
     const registeredPushTokenRef = useRef<string | null>(null);
     const hydratedLocalCacheRef = useRef<string | null>(null);
+    const syncedContactsRef = useRef<string | null>(null);
     const handledNotificationResponseRef = useRef<string | null>(null);
 
     const refreshKeys = async () => {
@@ -133,6 +135,7 @@ const AppLayout = () => {
         if (!hasSession) {
             hydratedLocalCacheRef.current = null;
             registeredPushTokenRef.current = null;
+            syncedContactsRef.current = null;
             setLocalCacheReady(false);
         }
     }, [hasSession]);
@@ -178,8 +181,6 @@ const AppLayout = () => {
     }, [hasKeys, hasSession, session?.user.id, success]);
 
     const openChatFromNotification = useCallback((conversationId: string) => {
-        useActiveChatStore.getState().setSelectedChatId(conversationId);
-
         if (rightNavRef.isReady()) {
             rightNavRef.navigate('chatId', { chatId: conversationId });
             return;
@@ -246,9 +247,26 @@ const AppLayout = () => {
             });
     }, [hasSession, setExpoPushToken]);
 
-    // useEffect(() => {
-    //     RequestContact()
-    // }, [hasSession, hasKeys]);
+    useEffect(() => {
+        if (!hasSession || hasKeys !== true || !session?.user.id) {
+            syncedContactsRef.current = null;
+            return;
+        }
+
+        if (syncedContactsRef.current === session.user.id) {
+            return;
+        }
+
+        syncedContactsRef.current = session.user.id;
+
+        void syncMobileContacts({
+            currentUserId: session.user.id,
+            cookies: authClient.getCookie(),
+        }).catch((error) => {
+            syncedContactsRef.current = null;
+            console.log('Failed to sync device contacts:', error);
+        });
+    }, [hasKeys, hasSession, session?.user.id]);
 
     useEffect(() => {
         if (!hasSession || !session?.user.id || !expoPushToken) {
@@ -347,7 +365,7 @@ const AppLayout = () => {
                 <PaperProvider>
                     <ThemeProvider value={colorScheme === 'dark' ? DarkTheme : DefaultTheme}>
                         <CryptoProvider>
-                            {hasSession && !isNewUser && hasPin && hasName ? (
+                            {hasSession ? (
                                 <RealtimeBootstrap />
                             ) : null}
                             <AppStack

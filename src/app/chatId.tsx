@@ -12,11 +12,12 @@ import { rightNavRef } from '@/store/right-nav-ref';
 import { useActiveChatStore } from '@/store/use-active-chat-store';
 import { useRealtimeStore } from '@/store/use-realtime-store';
 import type { Message } from '@/types/messages';
+import { useFocusEffect, useIsFocused, useRoute } from '@react-navigation/native';
 import * as Haptics from 'expo-haptics';
 import { router, useLocalSearchParams } from 'expo-router';
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { FlatList, Keyboard, KeyboardAvoidingView, Platform, StyleSheet, TextInput, useColorScheme } from 'react-native';
-import { Appbar, TouchableRipple } from 'react-native-paper';
+import { ActivityIndicator, Appbar, Icon, TouchableRipple } from 'react-native-paper';
 
 const EMPTY_MESSAGES: Message[] = [];
 
@@ -28,7 +29,13 @@ const ChatId = () => {
     const isDark = scheme === 'dark';
     const colors = Colors[scheme === 'unspecified' ? 'light' : scheme ?? 'light']
     const params = useLocalSearchParams<{ chatId?: string | string[] }>();
-    const routeChatId = Array.isArray(params.chatId) ? params.chatId[0] : params.chatId;
+    const navigationRoute = useRoute();
+    const nativeChatId = (navigationRoute.params as { chatId?: string | string[] } | undefined)?.chatId;
+    const expoChatId = Array.isArray(params.chatId) ? params.chatId[0] : params.chatId;
+    const nativeRouteChatId = Array.isArray(nativeChatId) ? nativeChatId[0] : nativeChatId;
+    const routeChatId = expoChatId ?? nativeRouteChatId;
+    const isFocused = useIsFocused();
+    const realtimeStatus = useRealtimeStore((state) => state.status);
 
     const selectedChatId = useActiveChatStore((state) => state.selectedChatId);
     const setSelectedChatId = useActiveChatStore((state) => state.setSelectedChatId);
@@ -58,6 +65,7 @@ const ChatId = () => {
     );
     const chatTitle = activeChat?.display_name ?? activeChat?.contact_phone ?? 'Chat';
     const avatarTint = colors.text;
+    const isRealtimeConnecting = realtimeStatus === 'connecting';
 
     const [selectionMode, setSelectionMode] = useState(false);
     const [selectedMessageIds, setSelectedMessageIds] = useState<Set<string>>(new Set());
@@ -73,14 +81,29 @@ const ChatId = () => {
         selectionModeRef.current = selectionMode;
     }, [selectionMode]);
 
-    useEffect(() => {
-        if (routeChatId && routeChatId !== selectedChatId) {
-            setSelectedChatId(routeChatId);
-        }
-    }, [routeChatId, selectedChatId, setSelectedChatId]);
+    useFocusEffect(
+        useCallback(() => {
+            const focusedChatId =
+                routeChatId ?? useActiveChatStore.getState().selectedChatId;
+
+            if (!focusedChatId) {
+                return undefined;
+            }
+
+            setSelectedChatId(focusedChatId);
+
+            return () => {
+                const state = useActiveChatStore.getState();
+
+                if (state.selectedChatId === focusedChatId) {
+                    state.setSelectedChatId(null);
+                }
+            };
+        }, [routeChatId, setSelectedChatId])
+    );
 
     useEffect(() => {
-        if (!activeChatId) {
+        if (!activeChatId || !isFocused) {
             return;
         }
 
@@ -92,7 +115,7 @@ const ChatId = () => {
             type: 'MARK_READ',
             conversationId: activeChatId,
         });
-    }, [activeChatId]);
+    }, [activeChatId, isFocused]);
 
     useEffect(() => {
         const keyboardDidShowListener = Keyboard.addListener('keyboardDidShow', () => {
@@ -229,7 +252,7 @@ const ChatId = () => {
                         <Appbar.Action icon="trash-can-outline" onPress={() => { }} />
                         {selectedMessageIds.size < 2 && (
                             <>
-                                <Appbar.Action icon="content-copy" onPress={() => { }} />
+                                <Appbar.Action icon="emoticon-outline" onPress={() => { }} />
                                 <Appbar.Action icon="arrow-left-top" onPress={() => { }} /></>
                         )}
                     </>
@@ -259,6 +282,11 @@ const ChatId = () => {
                                 </TouchableRipple>
                             }
                         />
+                        {isRealtimeConnecting && (
+                            <ThemedView style={styles.headerConnectionIndicator}>
+                                <ActivityIndicator size="small" color={avatarTint} />
+                            </ThemedView>
+                        )}
                         <Appbar.Action icon="dots-vertical" onPress={() => { }} />
                     </>
                 )}
@@ -282,6 +310,20 @@ const ChatId = () => {
                     removeClippedSubviews={Platform.OS === 'android'}
                     onEndReached={handleLoadOlderMessages}
                     onEndReachedThreshold={0.25}
+                    ListFooterComponent={
+                        <ThemedView style={{ backgroundColor: 'transparent', paddingHorizontal: 16, paddingVertical: 8 }}>
+                            <ThemedView style={{ flexDirection: 'row', alignItems: 'center', width: 'auto', marginHorizontal: 'auto', gap: 8, paddingHorizontal: 10, paddingVertical: 6, borderRadius: 10, backgroundColor: scheme === 'dark' ? '#13181C' : '#fff' }}>
+                                <Icon
+                                    source="lock-check-outline"
+                                    color="#25D366"
+                                    size={20}
+                                />
+                                <ThemedText style={{ fontSize: 14, fontWeight: '400', color: colors.textSecondary }}>
+                                    All of your messages are end-to-end encrypted.
+                                </ThemedText>
+                            </ThemedView>
+                        </ThemedView>
+                    }
                 />
                 <ChatInputContainer
                     isReply={isReply}
@@ -308,6 +350,13 @@ const styles = StyleSheet.create({
         flexDirection: 'row',
         alignItems: 'center',
         gap: 10
+    },
+    headerConnectionIndicator: {
+        width: 40,
+        height: 48,
+        alignItems: 'center',
+        justifyContent: 'center',
+        backgroundColor: 'transparent',
     },
     avatar: {
         width: 44,

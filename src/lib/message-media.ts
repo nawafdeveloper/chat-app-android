@@ -8,8 +8,11 @@ import { Buffer } from "@craftzdog/react-native-buffer";
 import { eq, or } from "drizzle-orm";
 import {
     cacheDirectory,
+    deleteAsync,
+    documentDirectory,
     EncodingType,
     getInfoAsync,
+    readDirectoryAsync,
     writeAsStringAsync,
 } from "expo-file-system/legacy";
 
@@ -19,12 +22,19 @@ const MEDIA_API_PATHS = [
     "/api/media",
     "/api/encrypted-media",
     "/api/message-media",
+    "/api/message-media-preview",
     "/api/chat-media",
     "/api/attachments",
 ];
 
 const mediaFileCache = new Map<string, string>();
 const aesKeyCache = new Map<string, { key: string; iv: string }>();
+const MAX_JS_DECRYPT_MEDIA_BYTES = 12 * 1024 * 1024;
+const LOCAL_MEDIA_FILE_PREFIXES = [
+    "message_media_",
+    "profile_",
+    "encrypted_profile.",
+];
 
 type ManagedMediaSource = {
     objectKey: string;
@@ -80,6 +90,73 @@ function getExtensionFromSource(source?: string | null) {
     return null;
 }
 
+function getFallbackExtensionForMessage(message: Message, isPreview: boolean) {
+    if (isPreview) {
+        return "jpg";
+    }
+
+    switch (message.attached_media) {
+        case "photo":
+            return "jpg";
+        case "video":
+            return "mp4";
+        case "voice":
+            return "m4a";
+        case "file":
+            return (
+                getExtensionFromMimeType(message.client_local_media_mime_type) ??
+                getExtensionFromMimeType(message.media_mime_type) ??
+                getExtensionFromSource(message.media_file_name) ??
+                "bin"
+            );
+        default:
+            return "bin";
+    }
+}
+
+function getMessageFullMediaSource(message: Message) {
+    return (
+        message.media_url ??
+        message.media_object_key ??
+        message.encrypted_media?.object_key ??
+        null
+    );
+}
+
+function getMessagePreviewMediaSource(message: Message) {
+    return (
+        message.video_thumbnail ??
+        message.media_preview_url ??
+        message.media_preview_object_key ??
+        message.encrypted_media?.preview_object_key ??
+        null
+    );
+}
+
+const MEDIA_DIRECTORY = documentDirectory ?? cacheDirectory;
+
+export function isLocalMediaUri(source?: string | null) {
+    return Boolean(
+        source &&
+        (
+            source.startsWith("file:") ||
+            source.startsWith("content:") ||
+            source.startsWith("asset:") ||
+            source.startsWith("data:")
+        )
+    );
+}
+
+export function isMessageMediaSafeForJsDecrypt(message: Message) {
+    const size =
+        message.media_size_bytes ??
+        message.client_local_media_size ??
+        message.encrypted_media?.original_size_bytes ??
+        0;
+
+    return size <= 0 || size <= MAX_JS_DECRYPT_MEDIA_BYTES;
+}
+
 function getCachePath({
     objectKey,
     mimeType,
@@ -96,7 +173,7 @@ function getCachePath({
         getExtensionFromSource(source) ??
         fallbackExtension;
 
-    return `${cacheDirectory}message_media_${getSafeCacheName(objectKey)}.${extension}`;
+    return `${MEDIA_DIRECTORY ?? ""}message_media_${getSafeCacheName(objectKey)}.${extension}`;
 }
 
 function encodeObjectKeyForPath(objectKey: string) {
@@ -114,12 +191,7 @@ export function parseManagedMessageMediaUrl(
         return null;
     }
 
-    if (
-        source.startsWith("file:") ||
-        source.startsWith("content:") ||
-        source.startsWith("asset:") ||
-        source.startsWith("data:")
-    ) {
+    if (isLocalMediaUri(source)) {
         return null;
     }
 
@@ -504,9 +576,48 @@ export async function fetchAndDecryptMessageMedia({
         return null;
     }
 
-    const managedSource = parseManagedMessageMediaUrl(source);
+    const absoluteSource = source.startsWith('/')
+        ? `${API_BASE}${source}`
+        : source;
+
+    if (isPreview && absoluteSource.includes('/api/message-media-preview/')) {
+        const memoryCached = mediaFileCache.get(absoluteSource);
+        if (memoryCached) return memoryCached;
+
+        const cachePath = getCachePath({
+            objectKey: absoluteSource,
+            fallbackExtension,
+        });
+        const diskInfo = await getInfoAsync(cachePath);
+        if (diskInfo.exists) {
+            mediaFileCache.set(absoluteSource, cachePath);
+            return cachePath;
+        }
+
+        try {
+            const cookies = authClient.getCookie();
+            const response = await fetch(absoluteSource, {
+                headers: { Cookie: cookies ?? '' },
+                credentials: 'omit',
+            });
+            if (!response.ok) return absoluteSource;
+
+            const bytes = await response.arrayBuffer();
+            await writeAsStringAsync(
+                cachePath,
+                Buffer.from(bytes).toString('base64'),
+                { encoding: EncodingType.Base64 }
+            );
+            mediaFileCache.set(absoluteSource, cachePath);
+            return cachePath;
+        } catch {
+            return absoluteSource;
+        }
+    }
+
+    const managedSource = parseManagedMessageMediaUrl(absoluteSource);
     if (!managedSource) {
-        return source;
+        return absoluteSource;
     }
 
     const memoryCached = mediaFileCache.get(managedSource.objectKey);
@@ -536,7 +647,7 @@ export async function fetchAndDecryptMessageMedia({
     );
 
     if (!decryptionPayload) {
-        return source;
+        return absoluteSource;
     }
 
     if ("localPath" in decryptionPayload) {
@@ -545,7 +656,7 @@ export async function fetchAndDecryptMessageMedia({
 
     const encryptedBytes = await fetchEncryptedBytes(managedSource);
     if (!encryptedBytes) {
-        return source;
+        return absoluteSource;
     }
 
     const decryptedBytes = await decryptFileWithAes(
@@ -574,4 +685,136 @@ export async function fetchAndDecryptMessageMedia({
     });
 
     return finalCachePath;
+}
+
+export type MaterializeMessageMediaOptions = {
+    downloadFull?: boolean;
+    ignoreSizeLimit?: boolean;
+};
+
+export async function materializeMessageMedia(
+    message: Message,
+    options: MaterializeMessageMediaOptions = {}
+): Promise<Message> {
+    if (!message.attached_media) {
+        return message;
+    }
+
+    const supportsFullDownload = ["photo", "video", "voice", "file"].includes(
+        message.attached_media
+    );
+    const supportsPreview = ["photo", "video"].includes(message.attached_media);
+
+    if (!supportsFullDownload && !supportsPreview) {
+        return message;
+    }
+
+    await upsertEncryptedMediaMetadataForMessage(message);
+
+    let nextMessage = message;
+    const previewSource = getMessagePreviewMediaSource(message);
+
+    if (supportsPreview && previewSource && !isLocalMediaUri(previewSource)) {
+        const localPreviewUri = await fetchAndDecryptMessageMedia({
+            source: previewSource,
+            isPreview: true,
+            fallbackExtension: "jpg",
+        });
+
+        if (localPreviewUri && isLocalMediaUri(localPreviewUri)) {
+            nextMessage = {
+                ...nextMessage,
+                media_preview_url:
+                    message.attached_media === "photo"
+                        ? localPreviewUri
+                        : nextMessage.media_preview_url,
+                video_thumbnail:
+                    message.attached_media === "video"
+                        ? localPreviewUri
+                        : nextMessage.video_thumbnail,
+                encrypted_media: nextMessage.encrypted_media
+                    ? {
+                        ...nextMessage.encrypted_media,
+                        preview_local_path: localPreviewUri,
+                    }
+                    : nextMessage.encrypted_media,
+            };
+        }
+    }
+
+    const fullSource = getMessageFullMediaSource(message);
+    const shouldDownloadFull =
+        options.downloadFull === true ||
+        message.attached_media === "voice" ||
+        message.attached_media === "file";
+
+    if (!supportsFullDownload || !shouldDownloadFull || !fullSource) {
+        return nextMessage;
+    }
+
+    if (!options.ignoreSizeLimit && !isMessageMediaSafeForJsDecrypt(message)) {
+        return nextMessage;
+    }
+
+    if (isLocalMediaUri(fullSource)) {
+        return nextMessage;
+    }
+
+    const localFullUri = await fetchAndDecryptMessageMedia({
+        source: fullSource,
+        isPreview: false,
+        fallbackExtension: getFallbackExtensionForMessage(message, false),
+    });
+
+    if (!localFullUri || !isLocalMediaUri(localFullUri)) {
+        return nextMessage;
+    }
+
+    return {
+        ...nextMessage,
+        media_url: localFullUri,
+        encrypted_media: nextMessage.encrypted_media
+            ? {
+                ...nextMessage.encrypted_media,
+                local_path: localFullUri,
+            }
+            : nextMessage.encrypted_media,
+    };
+}
+
+export async function deleteCachedLocalMediaFiles() {
+    const directories = Array.from(
+        new Set([MEDIA_DIRECTORY, cacheDirectory].filter(Boolean) as string[])
+    );
+
+    await Promise.all(
+        directories.map(async (directory) => {
+            try {
+                const fileNames = await readDirectoryAsync(directory);
+                await Promise.all(
+                    fileNames
+                        .filter((fileName) =>
+                            LOCAL_MEDIA_FILE_PREFIXES.some((prefix) =>
+                                fileName.startsWith(prefix)
+                            )
+                        )
+                        .map((fileName) =>
+                            deleteAsync(`${directory}${fileName}`, {
+                                idempotent: true,
+                            }).catch((error) => {
+                                console.log(
+                                    "Failed to delete cached media file:",
+                                    error
+                                );
+                            })
+                        )
+                );
+            } catch (error) {
+                console.log("Failed to read cached media directory:", error);
+            }
+        })
+    );
+
+    mediaFileCache.clear();
+    aesKeyCache.clear();
 }

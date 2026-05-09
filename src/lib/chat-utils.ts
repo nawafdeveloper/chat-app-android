@@ -6,7 +6,6 @@ import {
     phoneValuesMatch,
     toContactDisplayName,
 } from "./contact-utils";
-import { isManagedProfileImageUrl } from "./profile-image";
 
 type RawChatItem = Omit<ChatItemType, "created_at" | "updated_at"> & {
     created_at: string | Date;
@@ -147,10 +146,7 @@ export function applyContactToSingleChat(
     }
 
     const nextDisplayName = toContactDisplayName(contact);
-    const nextContactAvatar =
-        contact.contact_avatar && !isManagedProfileImageUrl(contact.contact_avatar)
-            ? contact.contact_avatar
-            : "";
+    const nextContactAvatar = contact.contact_avatar ?? "";
     const nextAvatar = nextContactAvatar || chat.avatar;
     const nextRecipientUserId = contact.linked_user_id ?? chat.recipient_user_id ?? null;
     const nextRecipientPublicKey =

@@ -2,7 +2,6 @@ import {
     createContactSearchValue,
     deriveContactLetterGroup,
 } from "@/lib/contact-utils";
-import { isManagedProfileImageUrl } from "@/lib/profile-image";
 import { decryptText, encryptTextForRecipients, TextRecipientPublicKeyInput } from "@/lib/text-encryption";
 import type {
     Contact,
@@ -36,11 +35,7 @@ export async function decryptStoredContact(
         contact_second_name: parsed.contact_second_name?.trim() || undefined,
         contact_number:
             record.linked_user_phone_number || parsed.contact_number,
-        contact_avatar:
-            record.linked_user_image &&
-                !isManagedProfileImageUrl(record.linked_user_image)
-                ? record.linked_user_image
-                : parsed.contact_avatar,
+        contact_avatar: record.linked_user_image || parsed.contact_avatar,
         contact_bio: parsed.contact_bio?.trim() || undefined,
         contact_letter_group: deriveContactLetterGroup(parsed),
     };

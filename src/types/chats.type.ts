@@ -2,11 +2,21 @@
 import { StoredContactRecord } from "./contacts.type";
 import { RecipientEncryptedAesKey, TextEncryptionAlgorithm } from "./crypto.type";
 
+export type ChatGroupMember = {
+    user_id: string;
+    phone_number?: string | null;
+    public_key?: string | null;
+    name?: string | null;
+    avatar?: string | null;
+    is_admin?: boolean;
+};
+
 export type ChatItemType = {
     chat_id: string;
     chat_type: 'single' | 'group';
     avatar: string;
     display_name?: string | null;
+    group_members?: ChatGroupMember[] | null;
     recipient_user_id?: string | null;
     recipient_public_key?: string | null;
     contact_phone?: string | null;

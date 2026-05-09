@@ -1,14 +1,13 @@
 import { useCryptoKeys } from "@/context/crypto";
-import { showMessageNotification } from "@/helper/push-notification";
 import { authClient } from "@/lib/auth-client";
+import {
+    decryptMessageBatch,
+} from "@/lib/chat-e2ee";
 import {
     getDecryptedDbMessagePage,
     hydrateLocalChatCache,
     MESSAGE_PAGE_SIZE,
 } from "@/lib/chat-sync";
-import {
-    decryptMessageBatch,
-} from "@/lib/chat-e2ee";
 import {
     applyContactToSingleChat,
     buildChatFromMessage,
@@ -17,15 +16,23 @@ import {
     resolveDirectChatPartner,
 } from "@/lib/chat-utils";
 import { resolveDirectChatContact } from "@/lib/contact-display";
-import { getDbChat, markDbChatRead, upsertDbChats } from "@/lib/upsert-db-chats";
+import {
+    isMessageMediaSafeForJsDecrypt,
+    materializeMessageMedia,
+} from "@/lib/message-media";
+import { flushPendingRealtimeEvents } from "@/lib/realtime-outbox";
+import { markDbChatRead, upsertDbChats } from "@/lib/upsert-db-chats";
 import { getDbMessage, upsertDbMessages } from "@/lib/upsert-db-messages";
 import { useActiveChatStore } from "@/store/use-active-chat-store";
+import { useAuthStore } from "@/store/auth-store";
 import { useContactDirectoryStore } from "@/store/use-contact-directory-store";
 import { useRealtimeStore } from "@/store/use-realtime-store";
 import type { ChatItemType } from "@/types/chats.type";
 import type { Message } from "@/types/messages";
 import type { ServerRealtimeEvent } from "@/types/realtime-events";
+import * as Network from "expo-network";
 import { useCallback, useEffect, useRef } from "react";
+import { AppState } from "react-native";
 
 const REALTIME_URL =
     "wss://halabakk-web.nawaf-alhasosah.workers.dev/api/realtime?platform=mobile";
@@ -178,6 +185,7 @@ export function useChatMessages(chatIdOverride?: string | null) {
 export function useChatRealtime() {
     const { isReady } = useCryptoKeys();
     const { data: session } = authClient.useSession();
+    const hasSession = useAuthStore((state) => state.hasSession);
     const selectedChatId = useActiveChatStore((state) => state.selectedChatId);
     const contacts = useContactDirectoryStore((state) => state.contacts);
     const isMountedRef = useRef(false);
@@ -202,7 +210,19 @@ export function useChatRealtime() {
 
     const currentUserIdRef = useRef(currentUserId);
 
-    useEffect(() => { currentUserIdRef.current = currentUserId; }, [currentUserId]);
+    useEffect(() => {
+        if (currentUserId) {
+            currentUserIdRef.current = currentUserId;
+            return;
+        }
+
+        if (!hasSession) {
+            currentUserIdRef.current = null;
+        }
+    }, [currentUserId, hasSession]);
+
+    const connectionUserId =
+        currentUserId ?? (hasSession ? currentUserIdRef.current : null);
 
     const selectedChatIdRef = useRef<string | null>(selectedChatId);
     const joinedChatIdRef = useRef<string | null>(null);
@@ -234,10 +254,31 @@ export function useChatRealtime() {
     }, [contacts, applyKnownContactOverride, setChats]);
 
     const persistAndUpsertChat = useCallback(async (chat: ChatItemType) => {
-        await upsertDbChats([chat]);
-        const fromDb = await getDbChat(chat.chat_id);
-        const final = applyKnownContactOverride(fromDb ?? chat);
+        const state = useActiveChatStore.getState();
+        const existingChat = state.chats.find(
+            (item) => item.chat_id === chat.chat_id
+        );
+        const shouldKeepLocallyRead =
+            state.selectedChatId === chat.chat_id ||
+            (
+                existingChat?.last_message_id === chat.last_message_id &&
+                !existingChat?.is_unreaded_chat &&
+                (existingChat?.unreaded_messages_length ?? 0) === 0
+            );
+        const final = applyKnownContactOverride(
+            shouldKeepLocallyRead
+                ? {
+                    ...chat,
+                    is_unreaded_chat: false,
+                    unreaded_messages_length: 0,
+                }
+                : chat
+        );
+
         upsertChat(final);
+        void upsertDbChats([final]).catch((error) => {
+            console.log("Failed to persist realtime chat:", error);
+        });
         return final;
     }, [applyKnownContactOverride, upsertChat]);
 
@@ -251,6 +292,12 @@ export function useChatRealtime() {
     const disableGroupsNotifications = Boolean(
         (session?.user as any)?.disableGroupsNotifications
     );
+    const imageMediaAutoDownload = Boolean(
+        (session?.user as any)?.imageMediaAutoDownload
+    );
+    const videoMediaAutoDownload = Boolean(
+        (session?.user as any)?.videoMediaAutoDownload
+    );
 
     useEffect(() => {
         notificationSettingsRef.current = {
@@ -259,8 +306,50 @@ export function useChatRealtime() {
         };
     }, [disableMessagesNotifications, disableGroupsNotifications]);
 
+    const shouldDownloadRealtimeMedia = useCallback((message: Message) => {
+        if (!isMessageMediaSafeForJsDecrypt(message)) {
+            return false;
+        }
+
+        switch (message.attached_media) {
+            case "photo":
+                return imageMediaAutoDownload;
+            case "video":
+                return videoMediaAutoDownload || imageMediaAutoDownload;
+            case "voice":
+            case "file":
+                return true;
+            default:
+                return false;
+        }
+    }, [imageMediaAutoDownload, videoMediaAutoDownload]);
+
+    const scheduleRealtimeMediaMaterialization = useCallback((
+        message: Message,
+        currentUserId: string
+    ) => {
+        if (!message.attached_media) {
+            return;
+        }
+
+        void materializeMessageMedia(message, {
+            downloadFull: shouldDownloadRealtimeMedia(message),
+        })
+            .then((localMessage) => {
+                useActiveChatStore.getState().updateMessage(
+                    localMessage.chat_room_id,
+                    localMessage.message_id,
+                    () => localMessage
+                );
+                return upsertDbMessages([localMessage], currentUserId);
+            })
+            .catch((error) => {
+                console.log("Failed to save realtime media locally:", error);
+            });
+    }, [shouldDownloadRealtimeMedia]);
+
     useEffect(() => {
-        if (!currentUserId || !isReady) return;
+        if (!connectionUserId || !isReady) return;
 
         let isCancelled = false;
 
@@ -269,7 +358,7 @@ export function useChatRealtime() {
                 setChatsError(null);
 
                 await hydrateLocalChatCache({
-                    currentUserId,
+                    currentUserId: connectionUserId,
                     onChatsLoaded: (cachedChats) => {
                         if (!isCancelled) {
                             setChats(cachedChats.map(applyKnownContactOverride));
@@ -300,8 +389,8 @@ export function useChatRealtime() {
         };
     }, [
         applyKnownContactOverride,
+        connectionUserId,
         currentPhone,
-        currentUserId,
         isReady,
         setChats,
         setChatsError,
@@ -336,16 +425,15 @@ export function useChatRealtime() {
         }
     }, [currentPhone, markChatRead, selectedChatId, setRecipientPhone]);
 
-    useEffect(() => {
-        if (!currentUserId || !isReady) {
+    const handleServerEvent = useCallback(async (event: ServerRealtimeEvent) => {
+        const activeCurrentUserId = currentUserIdRef.current;
+        if (!activeCurrentUserId) {
             return;
         }
 
-        let isDisposed = false;
-        let socket: WebSocket | null = null;
+        const currentUserId = activeCurrentUserId;
 
-        const handleServerEvent = async (event: ServerRealtimeEvent) => {
-            switch (event.type) {
+        switch (event.type) {
                 case "MESSAGE_SENT": {
                     const normalizedMessage = normalizeMessage(event.message);
                     const [nextMessage] = await decryptMessageBatch({
@@ -378,7 +466,6 @@ export function useChatRealtime() {
                     );
 
                     await persistAndUpsertChat(nextChat);
-                    await upsertDbMessages([confirmedMessage], currentUserId);
 
                     const existingMessageId = (
                         useActiveChatStore
@@ -399,6 +486,13 @@ export function useChatRealtime() {
                     } else {
                         appendMessage(event.conversationId, confirmedMessage);
                     }
+                    void upsertDbMessages([confirmedMessage], currentUserId).catch((error) => {
+                        console.log("Failed to persist confirmed message:", error);
+                    });
+                    scheduleRealtimeMediaMaterialization(
+                        confirmedMessage,
+                        currentUserId
+                    );
                     break;
                 }
 
@@ -438,32 +532,15 @@ export function useChatRealtime() {
                         })
                     );
                     await persistAndUpsertChat(nextChat);
-                    await upsertDbMessages([incomingMessage], currentUserId);
-
                     appendMessage(event.conversationId, incomingMessage);
-                    const notificationSettings = notificationSettingsRef.current;
-                    const shouldNotify =
-                        incomingMessage.sender_user_id !== currentUserId &&
-                        !nextChat.is_muted_chat_notifications &&
-                        !notificationSettings.disableMessagesNotifications &&
-                        !(
-                            event.conversationType === "group" &&
-                            notificationSettings.disableGroupsNotifications
-                        );
+                    void upsertDbMessages([incomingMessage], currentUserId).catch((error) => {
+                        console.log("Failed to persist incoming message:", error);
+                    });
+                    scheduleRealtimeMediaMaterialization(
+                        incomingMessage,
+                        currentUserId
+                    );
 
-                    if (shouldNotify) {
-                        const isCurrentlyViewing =
-                            useActiveChatStore.getState().selectedChatId === event.conversationId;
-
-                        if (!isCurrentlyViewing) {
-                            await showMessageNotification(
-                                nextChat.display_name ?? 'New Message',
-                                nextChat.last_message_context ?? '',
-                                event.conversationId,
-                                incomingMessage.sender_user_id,
-                            );
-                        }
-                    }
                     if (isSelected) {
                         markChatRead(event.conversationId);
                         void markDbChatRead(event.conversationId).catch((error) => {
@@ -511,37 +588,12 @@ export function useChatRealtime() {
                         })
                     );
                     await persistAndUpsertChat(nextChat);
-                    await upsertDbMessages([conversationMessage], currentUserId);
                     if (isSelected) {
                         appendMessage(event.conversationId, conversationMessage);
                         markChatRead(event.conversationId);
                         void markDbChatRead(event.conversationId).catch((error) => {
                             console.log('Failed to mark chat read locally:', error);
                         });
-                    }
-
-                    const notificationSettings = notificationSettingsRef.current;
-                    const shouldNotify =
-                        conversationMessage.sender_user_id !== currentUserId &&
-                        !nextChat.is_muted_chat_notifications &&
-                        !notificationSettings.disableMessagesNotifications &&
-                        !(
-                            event.conversationType === "group" &&
-                            notificationSettings.disableGroupsNotifications
-                        );
-
-                    if (shouldNotify) {
-                        const isCurrentlyViewing =
-                            useActiveChatStore.getState().selectedChatId === event.conversationId;
-
-                        if (!isCurrentlyViewing) {
-                            await showMessageNotification(
-                                nextChat.display_name ?? 'New Message',
-                                nextChat.last_message_context ?? '',
-                                event.conversationId,
-                                conversationMessage.sender_user_id,
-                            );
-                        }
                     }
 
                     if (
@@ -554,6 +606,13 @@ export function useChatRealtime() {
                             messageId: conversationMessage.message_id,
                         });
                     }
+                    void upsertDbMessages([conversationMessage], currentUserId).catch((error) => {
+                        console.log("Failed to persist conversation message:", error);
+                    });
+                    scheduleRealtimeMediaMaterialization(
+                        conversationMessage,
+                        currentUserId
+                    );
                     break;
                 }
 
@@ -580,7 +639,7 @@ export function useChatRealtime() {
                     );
 
                     if (messageToPersist) {
-                        await upsertDbMessages(
+                        void upsertDbMessages(
                             [
                                 {
                                     ...messageToPersist,
@@ -589,7 +648,9 @@ export function useChatRealtime() {
                                 },
                             ],
                             currentUserId
-                        );
+                        ).catch((error) => {
+                            console.log("Failed to persist message reaction:", error);
+                        });
                     }
 
                     const existingChat = useActiveChatStore
@@ -660,6 +721,71 @@ export function useChatRealtime() {
                 default:
                     break;
             }
+        },
+        [
+            appendMessage,
+            applyKnownContactOverride,
+            markChatRead,
+            markMessagesReadByUser,
+            persistAndUpsertChat,
+            scheduleRealtimeMediaMaterialization,
+            sendEvent,
+            setChatsError,
+            setPresence,
+            setTypingUsers,
+        ]
+    );
+
+    const handleServerEventRef = useRef(handleServerEvent);
+
+    useEffect(() => {
+        handleServerEventRef.current = handleServerEvent;
+    }, [handleServerEvent]);
+
+    useEffect(() => {
+        if (!connectionUserId || !isReady) {
+            return;
+        }
+
+        let isDisposed = false;
+        let socket: WebSocket | null = null;
+        let networkSubscription: { remove: () => void } | null = null;
+        let appStateSubscription: { remove: () => void } | null = null;
+        let isNetworkReachable = true;
+
+        const clearReconnectTimeout = () => {
+            if (reconnectTimeoutRef.current) {
+                clearTimeout(reconnectTimeoutRef.current);
+                reconnectTimeoutRef.current = null;
+            }
+        };
+
+        const hasUsableNetwork = async () => {
+            try {
+                const networkState = await Network.getNetworkStateAsync();
+                return Boolean(
+                    networkState.isConnected !== false &&
+                    networkState.isInternetReachable !== false
+                );
+            } catch {
+                return true;
+            }
+        };
+
+        const scheduleReconnect = (connect: () => void) => {
+            if (isDisposed || !isNetworkReachable) {
+                return;
+            }
+
+            clearReconnectTimeout();
+
+            const reconnectDelay = reconnectDelayRef.current;
+            reconnectDelayRef.current = Math.min(
+                reconnectDelay * 2,
+                MAX_RECONNECT_DELAY_MS
+            );
+            setStatus("connecting");
+            reconnectTimeoutRef.current = setTimeout(connect, reconnectDelay);
         };
 
         const connect = () => {
@@ -671,93 +797,156 @@ export function useChatRealtime() {
                 return;
             }
 
-            setStatus("connecting");
+            void (async () => {
+                setStatus("connecting");
 
-            if (!currentUserIdRef.current) {
-                setStatus("error");
-                return;
-            }
-
-            const cookies = authClient.getCookie();
-
-            if (!cookies) {
-                setStatus("error");
-                return;
-            }
-
-            const SocketConstructor =
-                WebSocket as ReactNativeWebSocketConstructor;
-            const nextSocket = new SocketConstructor(REALTIME_URL, undefined, {
-                headers: {
-                    Cookie: cookies,
-                },
-            });
-
-            socket = nextSocket;
-            setSocket(nextSocket);
-
-            nextSocket.addEventListener("open", () => {
-                reconnectDelayRef.current = INITIAL_RECONNECT_DELAY_MS;
-                setStatus("connected");
-
-                if (selectedChatIdRef.current) {
-                    nextSocket.send(JSON.stringify({
-                        type: "JOIN_CONVERSATION",
-                        conversationId: selectedChatIdRef.current,
-                    }));
-                }
-            });
-
-            nextSocket.addEventListener("message", (messageEvent) => {
-                try {
-                    const payload = JSON.parse(messageEvent.data as string);
-                    void handleServerEvent(payload);
-                } catch (error) {
-                    console.error('[WebSocket] Parse error:', error);
-                }
-            });
-
-            nextSocket.addEventListener("error", () => {
-                setStatus("error");
-            });
-
-            nextSocket.addEventListener("close", (event) => {
-                if (socket === nextSocket) {
-                    socket = null;
-                    setSocket(null);
-                }
-
-                if (isDisposed) {
-                    return;
-                }
-
-                if (NON_RETRYABLE_CLOSE_CODES.has(event.code)) {
+                isNetworkReachable = await hasUsableNetwork();
+                if (!isNetworkReachable || isDisposed) {
                     setStatus("error");
                     return;
                 }
 
-                if (reconnectTimeoutRef.current) {
-                    clearTimeout(reconnectTimeoutRef.current);
+                if (!currentUserIdRef.current) {
+                    setStatus("error");
+                    return;
                 }
 
-                const reconnectDelay = reconnectDelayRef.current;
-                reconnectDelayRef.current = Math.min(
-                    reconnectDelay * 2,
-                    MAX_RECONNECT_DELAY_MS
-                );
-                setStatus("connecting");
-                reconnectTimeoutRef.current = setTimeout(connect, reconnectDelay);
-            });
+                const cookies = authClient.getCookie();
+
+                if (!cookies) {
+                    setStatus("error");
+                    return;
+                }
+
+                if (
+                    socket &&
+                    (socket.readyState === WebSocket.CONNECTING ||
+                        socket.readyState === WebSocket.OPEN)
+                ) {
+                    return;
+                }
+
+                const SocketConstructor =
+                    WebSocket as ReactNativeWebSocketConstructor;
+                const nextSocket = new SocketConstructor(REALTIME_URL, undefined, {
+                    headers: {
+                        Cookie: cookies,
+                    },
+                });
+
+                socket = nextSocket;
+                setSocket(nextSocket);
+
+                nextSocket.addEventListener("open", () => {
+                    reconnectDelayRef.current = INITIAL_RECONNECT_DELAY_MS;
+                    setStatus("connected");
+
+                    void flushPendingRealtimeEvents(nextSocket).catch((error) => {
+                        console.log("Failed to flush realtime outbox:", error);
+                    });
+
+                    if (selectedChatIdRef.current) {
+                        nextSocket.send(JSON.stringify({
+                            type: "JOIN_CONVERSATION",
+                            conversationId: selectedChatIdRef.current,
+                        }));
+                    }
+                });
+
+                nextSocket.addEventListener("message", (messageEvent) => {
+                    try {
+                        const payload = JSON.parse(messageEvent.data as string);
+                        void handleServerEventRef.current(payload);
+                    } catch (error) {
+                        console.error('[WebSocket] Parse error:', error);
+                    }
+                });
+
+                nextSocket.addEventListener("error", () => {
+                    setStatus("error");
+                });
+
+                nextSocket.addEventListener("close", (event) => {
+                    if (socket === nextSocket) {
+                        socket = null;
+                        setSocket(null);
+                    }
+
+                    if (isDisposed) {
+                        return;
+                    }
+
+                    if (NON_RETRYABLE_CLOSE_CODES.has(event.code)) {
+                        setStatus("error");
+                        return;
+                    }
+
+                    scheduleReconnect(connect);
+                });
+            })();
         };
+
+        networkSubscription = Network.addNetworkStateListener((networkState) => {
+            const nextIsReachable = Boolean(
+                networkState.isConnected !== false &&
+                networkState.isInternetReachable !== false
+            );
+
+            isNetworkReachable = nextIsReachable;
+
+            if (!nextIsReachable) {
+                clearReconnectTimeout();
+                setStatus("error");
+
+                if (
+                    socket?.readyState === WebSocket.OPEN ||
+                    socket?.readyState === WebSocket.CONNECTING
+                ) {
+                    socket.close();
+                }
+                return;
+            }
+
+            reconnectDelayRef.current = INITIAL_RECONNECT_DELAY_MS;
+            if (
+                !socket ||
+                socket.readyState === WebSocket.CLOSED ||
+                socket.readyState === WebSocket.CLOSING
+            ) {
+                connect();
+            }
+        });
+
+        appStateSubscription = AppState.addEventListener("change", (nextAppState) => {
+            if (nextAppState !== "active" || isDisposed) {
+                return;
+            }
+
+            reconnectDelayRef.current = INITIAL_RECONNECT_DELAY_MS;
+            void hasUsableNetwork().then((nextIsReachable) => {
+                isNetworkReachable = nextIsReachable;
+                if (!nextIsReachable || isDisposed) {
+                    setStatus("error");
+                    return;
+                }
+
+                if (
+                    !socket ||
+                    socket.readyState === WebSocket.CLOSED ||
+                    socket.readyState === WebSocket.CLOSING
+                ) {
+                    connect();
+                }
+            });
+        });
 
         connect();
 
         return () => {
             isDisposed = true;
-            if (reconnectTimeoutRef.current) {
-                clearTimeout(reconnectTimeoutRef.current);
-                reconnectTimeoutRef.current = null;
-            }
+            clearReconnectTimeout();
+            networkSubscription?.remove();
+            appStateSubscription?.remove();
 
             if (socket?.readyState === WebSocket.OPEN && selectedChatIdRef.current) {
                 socket.send(
@@ -772,21 +961,7 @@ export function useChatRealtime() {
             setSocket(null);
             setStatus("idle");
         };
-    }, [
-        appendMessage,
-        applyKnownContactOverride,
-        currentUserId,
-        isReady,
-        markChatRead,
-        markMessagesReadByUser,
-        persistAndUpsertChat,
-        sendEvent,
-        setChatsError,
-        setPresence,
-        setSocket,
-        setStatus,
-        setTypingUsers,
-    ]);
+    }, [connectionUserId, isReady, setSocket, setStatus]);
 
     useEffect(() => {
         const previousSelectedChatId = joinedChatIdRef.current;
@@ -801,13 +976,6 @@ export function useChatRealtime() {
         if (selectedChatId && previousSelectedChatId !== selectedChatId) {
             sendEvent({
                 type: "JOIN_CONVERSATION",
-                conversationId: selectedChatId,
-            });
-        }
-
-        if (selectedChatId) {
-            sendEvent({
-                type: "MARK_READ",
                 conversationId: selectedChatId,
             });
         }

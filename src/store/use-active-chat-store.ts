@@ -1,7 +1,6 @@
 import { buildDirectChatId } from "@/lib/chat-e2ee";
 import { sortChatsByRecent, sortMessagesChronologically } from "@/lib/chat-utils";
 import { applyMessageReadByUser } from "@/lib/message-read-receipts";
-import { isManagedProfileImageUrl } from "@/lib/profile-image";
 import type { ChatItemType } from "@/types/chats.type";
 import type { Contact } from "@/types/contacts.type";
 import type { Message, ReplyMessage } from "@/types/messages";
@@ -341,10 +340,7 @@ export const useActiveChatStore = create<ActiveChatState>((set) => ({
         }),
     openDirectContactChat: ({ contact, currentPhone, currentUserId }) => {
         const chatId = buildDirectChatId(currentPhone, contact.contact_number);
-        const contactAvatar =
-            contact.contact_avatar && !isManagedProfileImageUrl(contact.contact_avatar)
-                ? contact.contact_avatar
-                : "";
+        const contactAvatar = contact.contact_avatar ?? "";
 
         set((state) => {
             const existingChat = state.chats.find((chat) => chat.chat_id === chatId);

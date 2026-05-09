@@ -1,18 +1,30 @@
 import { Colors } from "@/constants/theme";
-import { fetchAndDecryptMessageMedia } from "@/lib/message-media";
+import { findContactByPhone, findContactByUserId, getContactDisplayName } from "@/lib/contact-display";
+import {
+    fetchAndDecryptMessageMedia,
+    isLocalMediaUri,
+    isMessageMediaSafeForJsDecrypt,
+    materializeMessageMedia,
+} from "@/lib/message-media";
+import { upsertDbMessages } from "@/lib/upsert-db-messages";
+import { useActiveChatStore } from "@/store/use-active-chat-store";
+import { useContactDirectoryStore } from "@/store/use-contact-directory-store";
 import { Message } from "@/types/messages";
+import Slider from "@react-native-community/slider";
+import { useAudioPlayer, useAudioPlayerStatus } from "expo-audio";
 import * as Haptics from 'expo-haptics';
 import { Image } from "expo-image";
-import { memo, useEffect, useMemo, useState } from "react";
+import { useVideoPlayer, type VideoThumbnail } from "expo-video";
+import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { ActivityIndicator, Pressable, StyleSheet, Text, TouchableWithoutFeedback, View } from "react-native";
 import { Gesture, GestureDetector } from "react-native-gesture-handler";
 import { Icon, IconButton, TouchableRipple } from "react-native-paper";
-import Animated, { Extrapolation, interpolate, SlideInLeft, SlideInRight, SlideOutLeft, SlideOutRight, useAnimatedStyle, useSharedValue, withSpring, ZoomIn, ZoomOut } from "react-native-reanimated";
+import Animated, { Extrapolation, interpolate, useAnimatedStyle, useSharedValue, withSpring } from "react-native-reanimated";
 import { Path, Svg } from 'react-native-svg';
 import { runOnJS } from "react-native-worklets";
+import { ChatAvatar } from "./decrypted-chat-avatar";
 import { ThemedText } from "./themed-text";
 import { ThemedView } from "./themed-view";
-import { ChatAvatar } from "./decrypted-chat-avatar";
 import { DarkFileIcon, LightFileIcon } from "./ui/file-icons";
 
 type BubbleProps = {
@@ -59,8 +71,49 @@ const TAIL_PATH = "M1.533,2.568L8,11.193V0L2.812,0C1.042,0,0.474,1.156,1.533,2.5
 const MAX_SWIPE_TRANSLATION = 56;
 const SWIPE_HARD_LIMIT = 72;
 const SWIPE_RESISTANCE = 0.18;
-const REACTION_EMOJIS = ["👍", "❤️", "😂", "😮", "😢", "🙏"];
 const AnimatedIconButton = Animated.createAnimatedComponent(IconButton);
+
+type ActiveVoicePlayback = {
+    messageId: string;
+    pause: () => void;
+    reset: () => void;
+};
+
+let activeVoicePlayback: ActiveVoicePlayback | null = null;
+let latestVoicePlayRequestId: string | null = null;
+
+const stopActiveVoicePlayback = (exceptMessageId?: string) => {
+    if (!activeVoicePlayback || activeVoicePlayback.messageId === exceptMessageId) {
+        return;
+    }
+
+    activeVoicePlayback.pause();
+    activeVoicePlayback.reset();
+    activeVoicePlayback = null;
+};
+
+const ignoreReleasedPlayerError = (error: unknown) => {
+    const message = error instanceof Error ? error.message : String(error);
+    if (message.includes("already released")) {
+        return;
+    }
+
+    console.log("Voice player operation failed:", error);
+};
+
+const getUserHue = (userId: string | null | undefined): number => {
+    if (!userId) {
+        return 0;
+    }
+
+    let hash = 0;
+    for (let i = 0; i < userId.length; i += 1) {
+        hash = (hash << 5) - hash + userId.charCodeAt(i);
+        hash |= 0;
+    }
+
+    return Math.abs(hash) % 360;
+};
 
 const formatBytes = (bytes?: number | null) => {
     if (!bytes || bytes <= 0) {
@@ -81,6 +134,23 @@ const formatBytes = (bytes?: number | null) => {
         : value.toFixed(1);
 
     return `${formatted} ${units[unitIndex]}`;
+};
+
+const formatAudioTime = (seconds?: number | null) => {
+    if (!seconds || !Number.isFinite(seconds) || seconds < 0) {
+        return "0:00";
+    }
+
+    const roundedSeconds = Math.floor(seconds);
+    const hours = Math.floor(roundedSeconds / 3600);
+    const minutes = Math.floor((roundedSeconds % 3600) / 60);
+    const remainingSeconds = roundedSeconds % 60;
+
+    if (hours > 0) {
+        return `${hours}:${minutes.toString().padStart(2, "0")}:${remainingSeconds.toString().padStart(2, "0")}`;
+    }
+
+    return `${minutes}:${remainingSeconds.toString().padStart(2, "0")}`;
 };
 
 const getFileExtension = (
@@ -109,54 +179,108 @@ const getAspectRatio = (message: Message) => {
 
 function DecryptedMediaImage({
     source,
-    isPreview,
+    previewSource,
+    sourceIsPreview = false,
     aspectRatio,
     isDark,
     showPlayIcon = false,
+    fallbackIcon = "image",
+    containerStyle,
+    showDownloadOverlay = false,
+    isDownloading = false,
+    downloadDetails,
+    onDownload,
 }: {
     source?: string | null;
-    isPreview?: boolean;
+    previewSource?: string | null;
+    sourceIsPreview?: boolean;
     aspectRatio: number;
     isDark: boolean;
     showPlayIcon?: boolean;
+    fallbackIcon?: "image" | "video";
+    containerStyle?: object;
+    showDownloadOverlay?: boolean;
+    isDownloading?: boolean;
+    downloadDetails?: string | null;
+    onDownload?: () => void;
 }) {
     const [resolvedUri, setResolvedUri] = useState<string | null>(null);
+    const [resolvedPreviewUri, setResolvedPreviewUri] = useState<string | null>(null);
     const [failed, setFailed] = useState(false);
+    const [isDecrypting, setIsDecrypting] = useState(false);
 
     useEffect(() => {
         let mounted = true;
 
         setResolvedUri(null);
+        setResolvedPreviewUri(null);
         setFailed(false);
+        setIsDecrypting(Boolean(source || previewSource));
 
-        if (!source) {
+        if (!source && !previewSource) {
             return () => {
                 mounted = false;
             };
         }
 
-        fetchAndDecryptMessageMedia({
-            source,
-            isPreview,
-            fallbackExtension: isPreview ? "jpg" : "jpg",
-        })
-            .then((uri) => {
-                if (mounted) {
-                    setResolvedUri(uri ?? null);
+        const load = async () => {
+            let hasDisplayableMedia = false;
+
+            try {
+                if (previewSource) {
+                    const previewUri = await fetchAndDecryptMessageMedia({
+                        source: previewSource,
+                        isPreview: true,
+                        fallbackExtension: "jpg",
+                    });
+
+                    if (mounted) {
+                        setResolvedPreviewUri(previewUri ?? null);
+                    }
+                    hasDisplayableMedia = Boolean(previewUri);
                 }
-            })
-            .catch(() => {
-                if (mounted) {
+            } catch {
+                if (mounted && previewSource) {
+                    setResolvedPreviewUri(previewSource);
+                    hasDisplayableMedia = true;
+                }
+            }
+
+            try {
+                if (source) {
+                    const uri = await fetchAndDecryptMessageMedia({
+                        source,
+                        isPreview: sourceIsPreview,
+                        fallbackExtension: "jpg",
+                    });
+
+                    if (mounted) {
+                        setResolvedUri(uri ?? null);
+                    }
+                    hasDisplayableMedia = Boolean(uri) || hasDisplayableMedia;
+                }
+            } catch {
+                if (mounted && !hasDisplayableMedia) {
                     setFailed(true);
                 }
-            });
+            } finally {
+                if (mounted) {
+                    setIsDecrypting(false);
+                }
+            }
+        };
+
+        void load();
 
         return () => {
             mounted = false;
         };
-    }, [isPreview, source]);
+    }, [previewSource, source, sourceIsPreview]);
 
-    if (!resolvedUri || failed) {
+    const displayUri = resolvedUri ?? resolvedPreviewUri;
+    const shouldBlurPreview = Boolean(!resolvedUri && resolvedPreviewUri);
+
+    if (!displayUri || failed) {
         return (
             <View
                 style={[
@@ -165,12 +289,28 @@ function DecryptedMediaImage({
                         aspectRatio,
                         backgroundColor: isDark ? "#182229" : "#edf2f7",
                     },
+                    containerStyle,
                 ]}
             >
-                {!failed && <ActivityIndicator size="small" color="#25D366" />}
-                {failed && (
+                {showDownloadOverlay ? (
+                    <Pressable
+                        onPress={isDownloading ? undefined : onDownload}
+                        style={styles.mediaPlaceholderDownload}
+                    >
+                        {isDownloading ? (
+                            <ActivityIndicator size="small" color="#ffffff" />
+                        ) : (
+                            <Icon source="download" color="#ffffff" size={28} />
+                        )}
+                        <ThemedText style={styles.mediaDownloadTitle}>
+                            {isDownloading ? "Downloading" : "Download"}
+                        </ThemedText>
+                    </Pressable>
+                ) : !failed ? (
+                    <ActivityIndicator size="small" color="#25D366" />
+                ) : (
                     <Icon
-                        source="image-broken-variant"
+                        source={fallbackIcon === "video" ? "video-off-outline" : "image-broken-variant"}
                         color={isDark ? "#8E9499" : "#64748b"}
                         size={28}
                     />
@@ -180,18 +320,449 @@ function DecryptedMediaImage({
     }
 
     return (
-        <View style={[styles.mediaWrapper, { aspectRatio }]}>
+        <View style={[styles.mediaWrapper, { aspectRatio }, containerStyle,]}>
             <Image
-                source={{ uri: resolvedUri }}
+                source={{ uri: displayUri }}
                 contentFit="cover"
-                style={styles.mediaPhoto}
+                blurRadius={resolvedUri && !resolvedPreviewUri ? 1 : 0}
+                style={[
+                    styles.mediaPhoto,
+                    shouldBlurPreview && styles.mediaPhotoBlurred,
+                ]}
             />
-            {showPlayIcon && (
-                <View style={styles.playOverlay}>
-                    <Icon source="play" color="#ffffff" size={32} />
+            {isDecrypting && (
+                <View style={styles.mediaDecryptingOverlay}>
+                    <ActivityIndicator size="small" color="#ffffff" />
                 </View>
             )}
+            {showPlayIcon && shouldBlurPreview && (
+                <View style={styles.playOverlay}>
+                    <View style={{ padding: 10, borderRadius: 99, backgroundColor: 'rgba(255,255,255,0.2)' }}>
+                        <Icon source="play" color="#ffffff" size={32} />
+                    </View>
+                </View>
+            )}
+            {showDownloadOverlay && (
+                <Pressable
+                    style={styles.playOverlay}
+                    onPress={isDownloading ? undefined : onDownload}
+                >
+                    <View style={styles.mediaDownloadButton}>
+                        {isDownloading ? (
+                            <ActivityIndicator size="small" color="#ffffff" />
+                        ) : (
+                            <Icon source="download" color="#ffffff" size={32} />
+                        )}
+                        <ThemedView style={styles.mediaDownloadTextContainer}>
+                            <ThemedText style={styles.mediaDownloadTitle}>
+                                {isDownloading ? "Downloading" : "Download"}
+                            </ThemedText>
+                            {downloadDetails ? (
+                                <ThemedText style={styles.mediaDownloadDetails}>
+                                    {downloadDetails}
+                                </ThemedText>
+                            ) : null}
+                        </ThemedView>
+                    </View>
+                </Pressable>
+            )}
         </View>
+    );
+}
+
+const API_BASE = "https://halabakk-web.nawaf-alhasosah.workers.dev";
+
+function ReplyPhotoThumbnail({ url, isDark }: { url?: string | null; isDark: boolean }) {
+    const [resolvedUri, setResolvedUri] = useState<string | null>(null);
+
+    useEffect(() => {
+        if (!url) return;
+        const absoluteUrl = url.startsWith('/') ? `${API_BASE}${url}` : url;
+        fetchAndDecryptMessageMedia({
+            source: absoluteUrl,
+            isPreview: true,
+            fallbackExtension: 'jpg',
+        }).then(uri => {
+            if (uri) setResolvedUri(uri);
+        });
+    }, [url]);
+
+    if (!resolvedUri) {
+        return (
+            <View style={{ width: 55, height: 55, backgroundColor: isDark ? '#182229' : '#edf2f7', justifyContent: 'center', alignItems: 'center' }}>
+                <ActivityIndicator size="small" color="#25D366" />
+            </View>
+        );
+    }
+
+    return (
+        <Image
+            source={{ uri: resolvedUri }}
+            contentFit="cover"
+            style={{ width: 55, height: 55 }}
+        />
+    );
+}
+
+function VideoMessagePreview({
+    localVideoUri,
+    source,
+    previewSource,
+    aspectRatio,
+    isDark,
+    showDownloadOverlay,
+    isDownloading,
+    downloadDetails,
+    onDownload,
+}: {
+    localVideoUri?: string | null;
+    source?: string | null;
+    previewSource?: string | null;
+    aspectRatio: number;
+    isDark: boolean;
+    showDownloadOverlay: boolean;
+    isDownloading: boolean;
+    downloadDetails?: string | null;
+    onDownload?: () => void;
+}) {
+    const player = useVideoPlayer(
+        localVideoUri ? { uri: localVideoUri } : null
+    );
+    const [thumbnail, setThumbnail] = useState<VideoThumbnail | null>(null);
+
+    useEffect(() => {
+        let mounted = true;
+
+        setThumbnail(null);
+        if (!localVideoUri) {
+            return () => {
+                mounted = false;
+            };
+        }
+
+        player.generateThumbnailsAsync(0, { maxWidth: 1280 })
+            .then((thumbnails) => {
+                if (mounted) {
+                    setThumbnail(thumbnails[0] ?? null);
+                }
+            })
+            .catch((error) => {
+                console.log("Failed to generate video thumbnail:", error);
+            });
+
+        return () => {
+            mounted = false;
+        };
+    }, [localVideoUri, player]);
+
+    if (thumbnail) {
+        return (
+            <View style={[styles.mediaWrapper, { aspectRatio }]}>
+                <Image
+                    source={thumbnail}
+                    contentFit="cover"
+                    style={styles.mediaPhoto}
+                />
+                <View style={styles.playOverlay}>
+                    <View style={styles.videoPlayBadge}>
+                        <Icon source="play" color="#ffffff" size={32} />
+                    </View>
+                </View>
+            </View>
+        );
+    }
+
+    return (
+        <DecryptedMediaImage
+            source={source}
+            previewSource={previewSource}
+            sourceIsPreview
+            aspectRatio={aspectRatio}
+            isDark={isDark}
+            showPlayIcon
+            fallbackIcon="video"
+            showDownloadOverlay={showDownloadOverlay}
+            isDownloading={isDownloading}
+            downloadDetails={downloadDetails}
+            onDownload={onDownload}
+        />
+    );
+}
+
+function VoiceMessagePreview({
+    messageId,
+    audioSource,
+    canLoadAudio,
+    isDark,
+    userId,
+    imageUrl,
+    displayName,
+    contactPhone,
+    iconColor,
+    textColor
+}: {
+    messageId: string;
+    audioSource?: string | null;
+    canLoadAudio: boolean;
+    isDark: boolean;
+    userId: string;
+    imageUrl: string;
+    displayName: string;
+    contactPhone: string | null;
+    iconColor: string | undefined;
+    textColor: string;
+}) {
+    const player = useAudioPlayer(null, { updateInterval: 250 });
+    const status = useAudioPlayerStatus(player);
+    const [resolvedAudioUri, setResolvedAudioUri] = useState<string | null>(null);
+    const [isAudioLoading, setIsAudioLoading] = useState(false);
+    const [isSeeking, setIsSeeking] = useState(false);
+    const [seekTime, setSeekTime] = useState(0);
+    const [resetPositionOverride, setResetPositionOverride] = useState(false);
+    const isMountedRef = useRef(true);
+    const trackColor = isDark ? "#6C757C" : "#94a3b8";
+    const fillColor = "#25D366";
+    const playButtonColor = isDark ? "#E9EDEF" : "#1F2A2E";
+    const duration = Number.isFinite(status.duration) && status.duration > 0
+        ? status.duration
+        : 0;
+    const currentTime = Number.isFinite(status.currentTime) && status.currentTime > 0
+        ? Math.min(status.currentTime, duration || status.currentTime)
+        : 0;
+    const displayedTime = resetPositionOverride
+        ? 0
+        : isSeeking
+            ? seekTime
+            : currentTime;
+    const isAudioBusy = isAudioLoading || (status.isBuffering && Boolean(resolvedAudioUri));
+    const isControlDisabled = !audioSource || !canLoadAudio || isAudioBusy;
+
+    const pausePlayerSafely = useCallback(() => {
+        try {
+            player.pause();
+        } catch (error) {
+            ignoreReleasedPlayerError(error);
+        }
+    }, [player]);
+
+    const playPlayerSafely = useCallback(() => {
+        try {
+            player.play();
+        } catch (error) {
+            ignoreReleasedPlayerError(error);
+        }
+    }, [player]);
+
+    const replacePlayerSourceSafely = useCallback((uri: string) => {
+        try {
+            player.replace({ uri });
+        } catch (error) {
+            ignoreReleasedPlayerError(error);
+        }
+    }, [player]);
+
+    const seekPlayerSafely = useCallback((seconds: number) => {
+        try {
+            void player.seekTo(seconds);
+        } catch (error) {
+            ignoreReleasedPlayerError(error);
+        }
+    }, [player]);
+
+    useEffect(() => {
+        isMountedRef.current = true;
+
+        return () => {
+            isMountedRef.current = false;
+            if (activeVoicePlayback?.messageId === messageId) {
+                activeVoicePlayback = null;
+            }
+            if (latestVoicePlayRequestId === messageId) {
+                latestVoicePlayRequestId = null;
+            }
+        };
+    }, [messageId]);
+
+    useEffect(() => {
+        setResolvedAudioUri(null);
+        setSeekTime(0);
+        setIsSeeking(false);
+        setResetPositionOverride(false);
+
+        if (audioSource && isLocalMediaUri(audioSource)) {
+            setResolvedAudioUri(audioSource);
+            replacePlayerSourceSafely(audioSource);
+        }
+    }, [audioSource, replacePlayerSourceSafely]);
+
+    useEffect(() => {
+        if (!status.didJustFinish) {
+            return;
+        }
+
+        if (activeVoicePlayback?.messageId === messageId) {
+            activeVoicePlayback = null;
+        }
+        if (latestVoicePlayRequestId === messageId) {
+            latestVoicePlayRequestId = null;
+        }
+        pausePlayerSafely();
+        seekPlayerSafely(0);
+        setSeekTime(0);
+        setResetPositionOverride(true);
+    }, [messageId, pausePlayerSafely, seekPlayerSafely, status.didJustFinish]);
+
+    const ensureAudioReady = useCallback(async () => {
+        if (!audioSource || !canLoadAudio) {
+            return null;
+        }
+
+        if (resolvedAudioUri) {
+            return resolvedAudioUri;
+        }
+
+        setIsAudioLoading(true);
+        try {
+            const uri = await fetchAndDecryptMessageMedia({
+                source: audioSource,
+                fallbackExtension: "m4a",
+            });
+
+            if (!uri || !isMountedRef.current) {
+                return null;
+            }
+
+            setResolvedAudioUri(uri);
+            replacePlayerSourceSafely(uri);
+            return uri;
+        } catch (error) {
+            console.log("Failed to load voice message:", error);
+            return null;
+        } finally {
+            if (isMountedRef.current) {
+                setIsAudioLoading(false);
+            }
+        }
+    }, [audioSource, canLoadAudio, replacePlayerSourceSafely, resolvedAudioUri]);
+
+    const handlePlayPause = useCallback(async () => {
+        if (isControlDisabled) {
+            return;
+        }
+
+        if (status.playing) {
+            pausePlayerSafely();
+            if (activeVoicePlayback?.messageId === messageId) {
+                activeVoicePlayback = null;
+            }
+            if (latestVoicePlayRequestId === messageId) {
+                latestVoicePlayRequestId = null;
+            }
+            return;
+        }
+
+        latestVoicePlayRequestId = messageId;
+        setResetPositionOverride(false);
+        stopActiveVoicePlayback(messageId);
+
+        const uri = await ensureAudioReady();
+        if (!uri || latestVoicePlayRequestId !== messageId || !isMountedRef.current) {
+            return;
+        }
+
+        activeVoicePlayback = {
+            messageId,
+            pause: pausePlayerSafely,
+            reset: () => {
+                seekPlayerSafely(0);
+            },
+        };
+        playPlayerSafely();
+    }, [ensureAudioReady, isControlDisabled, messageId, pausePlayerSafely, playPlayerSafely, seekPlayerSafely, status.playing]);
+
+    const handleSlidingStart = useCallback((value: number) => {
+        setResetPositionOverride(false);
+        setIsSeeking(true);
+        setSeekTime(value);
+    }, []);
+
+    const handleValueChange = useCallback((value: number) => {
+        setSeekTime(value);
+    }, []);
+
+    const handleSlidingComplete = useCallback((value: number) => {
+        const clampedValue = duration > 0
+            ? Math.min(Math.max(value, 0), duration)
+            : 0;
+
+        setIsSeeking(false);
+        setSeekTime(clampedValue);
+
+        if (duration > 0) {
+            seekPlayerSafely(clampedValue);
+        }
+    }, [duration, seekPlayerSafely]);
+
+    return (
+        <ThemedView style={styles.voiceCard}>
+            <ThemedView style={{ position: 'relative', backgroundColor: 'transparent' }}>
+                <ChatAvatar
+                    userId={userId}
+                    imageUrl={imageUrl}
+                    displayName={displayName}
+                    contactPhone={contactPhone}
+                    style={[styles.groupSenderAvatar, { width: 42, height: 42 }]}
+                    iconColor={iconColor}
+                    backgroundColor={isDark ? "#182229" : "#e8f0ef"}
+                    textColor={textColor}
+                />
+                <ThemedView style={{ position: 'absolute', backgroundColor: 'transparent', bottom: -6, right: -9, zIndex: 1 }}>
+                    <Icon
+                        source="microphone"
+                        color={isDark ? "#c8cece" : "#404242"}
+                        size={24}
+                    />
+                </ThemedView>
+            </ThemedView>
+            {isAudioBusy ? (
+                <ThemedView style={styles.voiceLoadingButton}>
+                    <ActivityIndicator size="small" color={fillColor} />
+                </ThemedView>
+            ) : (
+                <IconButton
+                    icon={status.playing ? "pause" : "play"}
+                    iconColor={playButtonColor}
+                    containerColor="transparent"
+                    mode="contained"
+                    size={28}
+                    disabled={!audioSource || !canLoadAudio}
+                    style={styles.voicePlayButton}
+                    onPress={handlePlayPause}
+                />
+            )}
+            <ThemedView style={styles.voiceBody}>
+                <ThemedView style={styles.voiceSliderRow}>
+                    <Slider
+                        style={styles.voiceSlider}
+                        minimumValue={0}
+                        maximumValue={duration > 0 ? duration : 1}
+                        value={duration > 0 ? displayedTime : 0}
+                        minimumTrackTintColor={fillColor}
+                        maximumTrackTintColor={trackColor}
+                        thumbTintColor={fillColor}
+                        disabled={!resolvedAudioUri || duration <= 0}
+                        onSlidingStart={handleSlidingStart}
+                        onValueChange={handleValueChange}
+                        onSlidingComplete={handleSlidingComplete}
+                    />
+                </ThemedView>
+                <ThemedView style={styles.voiceMetaRow}>
+                    <ThemedText style={[styles.voiceTimeText, { color: isDark ? "#9CA3AF" : "#64748b" }]}>
+                        {formatAudioTime(displayedTime)} / {formatAudioTime(duration)}
+                    </ThemedText>
+                </ThemedView>
+            </ThemedView>
+        </ThemedView>
     );
 }
 
@@ -224,6 +795,8 @@ function Bubble({ message, currentUserId, isDark, showTail = true, isSelected, s
         media_url,
         video_thumbnail,
         media_preview_url,
+        media_preview_object_key,
+        encrypted_media,
         media_size_bytes,
         media_file_name,
         client_local_media_name,
@@ -240,12 +813,19 @@ function Bubble({ message, currentUserId, isDark, showTail = true, isSelected, s
         () => created_at.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
         [created_at]
     );
+    const chats = useActiveChatStore((state) => state.chats);
+    const contacts = useContactDirectoryStore((state) => state.contacts);
+    const [isMediaDownloading, setIsMediaDownloading] = useState(false);
 
     const theme = isDark ? DARK : LIGHT;
     const colors = isDark ? Colors.dark : Colors.light;
     const sent = sender_user_id === currentUserId;
     const bubbleColor = sent ? theme.sentBubble : theme.receivedBubble;
     const swipeX = useSharedValue(0);
+
+    const activeChat =
+        chats.find((chat) => chat.chat_id === message.chat_room_id) ?? null;
+    const isGroupChat = activeChat?.chat_type === "group";
     const mediaAspectRatio = getAspectRatio(message);
     const fileName =
         media_file_name ??
@@ -262,8 +842,60 @@ function Bubble({ message, currentUserId, isDark, showTail = true, isSelected, s
         message_text_content ??
         "Shared contact";
     const sharedContactPhone = contact?.contact_phone ?? null;
-    const photoSource = media_url ?? media_preview_url ?? null;
-    const videoThumbnailSource = video_thumbnail ?? media_preview_url ?? null;
+    const photoSource = media_url ?? null;
+    const previewObjectKey =
+        media_preview_object_key ?? encrypted_media?.preview_object_key ?? null;
+    const photoPreviewSource = media_preview_url ?? previewObjectKey;
+    const videoThumbnailSource =
+        video_thumbnail ?? media_preview_url ?? previewObjectKey;
+    const videoPreviewSource =
+        media_preview_url && media_preview_url !== videoThumbnailSource
+            ? media_preview_url
+            : null;
+    const hasLocalFullMedia = isLocalMediaUri(media_url);
+    const shouldShowMediaDownloadOverlay =
+        (attached_media === "photo" || attached_media === "video") &&
+        Boolean(media_url) &&
+        !hasLocalFullMedia;
+    const canDownloadFullMedia = isMessageMediaSafeForJsDecrypt(message);
+    const canDownloadMediaFromBubble = canDownloadFullMedia;
+    const replySenderUserId =
+        message.reply_message?.original_sender_user_id ?? null;
+    const senderGroupMember =
+        isGroupChat
+            ? activeChat?.group_members?.find(
+                (member) => member.user_id === message.sender_user_id
+            ) ?? null
+            : null;
+    const replySenderGroupMember = isGroupChat
+        ? activeChat?.group_members?.find(
+            (member) => member.user_id === replySenderUserId
+        ) ?? null
+        : null;
+    const senderContact =
+        findContactByUserId(contacts, message.sender_user_id) ??
+        findContactByPhone(contacts, senderGroupMember?.phone_number);
+    const senderPhone =
+        senderContact?.contact_number ?? senderGroupMember?.phone_number ?? null;
+    const senderDisplayName = senderContact
+        ? getContactDisplayName(senderContact)
+        : senderGroupMember?.name?.trim() || senderGroupMember?.phone_number || "You";
+    const shouldShowSenderPhone = Boolean(!senderContact && senderPhone);
+    const senderAvatar =
+        senderContact?.contact_avatar || senderGroupMember?.avatar || "";
+    const senderHue = getUserHue(message.sender_user_id);
+    const groupSenderAccent = isDark
+        ? `hsl(${senderHue}, 80%, 65%)`
+        : `hsl(${senderHue}, 80%, 30%)`;
+    const replySenderContact = findContactByUserId(contacts, replySenderUserId);
+    const replySenderDisplayName =
+        replySenderUserId === currentUserId
+            ? "You"
+            : replySenderContact
+                ? getContactDisplayName(replySenderContact)
+                : isGroupChat && replySenderGroupMember
+                    ? (replySenderGroupMember.name?.trim() || replySenderGroupMember.phone_number) ?? ""
+                    : replySenderUserId ?? "";
 
     const swipeProgress = useAnimatedStyle(() => {
         const progress = interpolate(
@@ -326,7 +958,7 @@ function Bubble({ message, currentUserId, isDark, showTail = true, isSelected, s
                     : MAX_SWIPE_TRANSLATION + (finalTranslation - MAX_SWIPE_TRANSLATION) * SWIPE_RESISTANCE;
 
                 if (finalResistedTranslation >= MAX_SWIPE_TRANSLATION) {
-                    runOnJS(handleReply)(sender_user_id, message_text_content || '');
+                    runOnJS(handleReply)(senderDisplayName, message_text_content || '');
                 }
 
                 hasTriggered.value = false;
@@ -346,8 +978,32 @@ function Bubble({ message, currentUserId, isDark, showTail = true, isSelected, s
                     mass: 0.7,
                 });
             }),
-        [handleReply, hasTriggered, message_text_content, sender_user_id, swipeX]
+        [handleReply, hasTriggered, message_text_content, senderDisplayName, swipeX]
     );
+
+    const handleDownloadMedia = useCallback(async () => {
+        if (!currentUserId || isMediaDownloading) {
+            return;
+        }
+
+        setIsMediaDownloading(true);
+        try {
+            const localMessage = await materializeMessageMedia(message, {
+                downloadFull: true,
+            });
+
+            useActiveChatStore.getState().updateMessage(
+                localMessage.chat_room_id,
+                localMessage.message_id,
+                () => localMessage
+            );
+            await upsertDbMessages([localMessage], currentUserId);
+        } catch (error) {
+            console.log("Failed to download message media:", error);
+        } finally {
+            setIsMediaDownloading(false);
+        }
+    }, [currentUserId, isMediaDownloading, message]);
 
     return (
         <TouchableWithoutFeedback
@@ -361,21 +1017,6 @@ function Bubble({ message, currentUserId, isDark, showTail = true, isSelected, s
                     sent ? styles.rowSent : styles.rowReceived,
                 ]}
             >
-                {isSelected && selectedCount < 2 && (
-                    <Animated.View
-                        key={'animated-emojis-container'}
-                        entering={sent ? SlideInRight.duration(100) : SlideInLeft.duration(100)}
-                        exiting={sent ? SlideOutRight.duration(100) : SlideOutLeft.duration(100)}
-                        style={[styles.reactionContainer, { backgroundColor: theme.cardReceived, left: sent ? undefined : 30, right: sent ? 30 : undefined }]}>
-                        {REACTION_EMOJIS.map((item, index) => (
-                            <Animated.View key={`animated-emoji-${index}`} entering={ZoomIn.delay(index * 20).duration(100)} exiting={ZoomOut.delay(index * 20).duration(100)}>
-                                <TouchableRipple>
-                                    <ThemedText style={styles.emojis}>{item}</ThemedText>
-                                </TouchableRipple>
-                            </Animated.View>
-                        ))}
-                    </Animated.View>
-                )}
                 {isSelected && (
                     <ThemedView style={styles.selectOverlayer} />
                 )}
@@ -391,6 +1032,24 @@ function Bubble({ message, currentUserId, isDark, showTail = true, isSelected, s
                     />
                 </Animated.View>
                 <View style={styles.messageContentRow}>
+                    {!sent && isGroupChat && (
+                        <View style={styles.groupAvatarColumn}>
+                            {showTail ? (
+                                <ChatAvatar
+                                    userId={senderGroupMember?.user_id ?? sender_user_id}
+                                    imageUrl={senderAvatar}
+                                    displayName={senderDisplayName}
+                                    contactPhone={senderPhone}
+                                    style={styles.groupSenderAvatar}
+                                    iconColor={groupSenderAccent}
+                                    backgroundColor={isDark ? "#182229" : "#e8f0ef"}
+                                    textColor={groupSenderAccent}
+                                />
+                            ) : (
+                                <View style={styles.groupSenderAvatarSpacer} />
+                            )}
+                        </View>
+                    )}
                     <GestureDetector gesture={panGesture}>
                         <Animated.View style={[styles.bubbleAndTailWrapper, bubbleAndTailAnimatedStyle]}>
                             {!sent && (showTail
@@ -399,10 +1058,31 @@ function Bubble({ message, currentUserId, isDark, showTail = true, isSelected, s
                             )}
                             <View style={[
                                 styles.bubble,
-                                { backgroundColor: bubbleColor, paddingHorizontal: attached_media ? 4 : 10 },
+                                { backgroundColor: bubbleColor, paddingHorizontal: attached_media ? 4 : 10, paddingVertical: attached_media === 'voice' ? 8 : 4 },
                                 !sent && showTail && styles.receivedBubbleWithTail,
                                 sent && showTail && styles.sentBubbleWithTail,
                             ]}>
+                                {!sent && isGroupChat && (
+                                    <ThemedView style={styles.groupSenderHeader}>
+                                        <ThemedText
+                                            numberOfLines={1}
+                                            style={[styles.groupSenderName, { color: groupSenderAccent }]}
+                                        >
+                                            {senderDisplayName}
+                                        </ThemedText>
+                                        {shouldShowSenderPhone && senderPhone ? (
+                                            <ThemedText
+                                                numberOfLines={1}
+                                                style={[
+                                                    styles.groupSenderPhone,
+                                                    { color: isDark ? "#9CA3AF" : "#6B7280" },
+                                                ]}
+                                            >
+                                                {senderPhone}
+                                            </ThemedText>
+                                        ) : null}
+                                    </ThemedView>
+                                )}
                                 {is_forward_message && (
                                     <ThemedView style={styles.forwardContainer}>
                                         <Icon
@@ -414,11 +1094,19 @@ function Bubble({ message, currentUserId, isDark, showTail = true, isSelected, s
                                     </ThemedView>
                                 )}
                                 {reply_message && (
-                                    <ThemedView style={[styles.replyContainer, { backgroundColor: sent ? theme.cardSent : theme.cardReceived, borderLeftColor: '#25D366', marginHorizontal: attached_media ? 0 : -4 }]}>
-                                        <ThemedText style={{ fontSize: 14 }}>{reply_message.original_sender_user_id}</ThemedText>
-                                        <ThemedText numberOfLines={2} ellipsizeMode='tail' style={{ fontSize: 12, color: colors.textSecondary, minWidth: 0, lineHeight: 16 }}>
-                                            {reply_message.original_message_text}
-                                        </ThemedText>
+                                    <ThemedView style={{ flexDirection: 'row', flex: 1, minWidth: 120, alignItems: 'center', justifyContent: 'space-between', marginHorizontal: attached_media ? 0 : -4, marginBottom: 4, backgroundColor: sent ? theme.cardSent : theme.cardReceived, borderRadius: 7, overflow: 'hidden' }}>
+                                        <ThemedView style={[styles.replyContainer, { borderLeftColor: '#25D366', backgroundColor: 'transparent' }]}>
+                                            <ThemedText style={{ fontSize: 14 }}>{replySenderDisplayName}</ThemedText>
+                                            <ThemedText numberOfLines={2} ellipsizeMode='tail' style={{ fontSize: 12, color: colors.textSecondary, minWidth: 0, lineHeight: 16 }}>
+                                                {reply_message.original_message_text ? reply_message.original_message_text : (reply_message.original_attached_media === 'contact' ? '👤 Contact' : reply_message.original_attached_media === 'file' ? '📂 File' : reply_message.original_attached_media === 'photo' ? '🖼️ Photo' : reply_message.original_attached_media === 'video' ? '📽️ Video' : '🎤 Voice')}
+                                            </ThemedText>
+                                        </ThemedView>
+                                        {reply_message.original_attached_media === 'photo' && (
+                                            <ReplyPhotoThumbnail
+                                                url={reply_message.original_attached_media_url}
+                                                isDark={isDark}
+                                            />
+                                        )}
                                     </ThemedView>
                                 )}
                                 {open_graph_data && (
@@ -477,36 +1165,50 @@ function Bubble({ message, currentUserId, isDark, showTail = true, isSelected, s
                                 )}
                                 {attached_media === 'photo' && (
                                     <DecryptedMediaImage
-                                        source={photoSource}
+                                        source={hasLocalFullMedia ? photoSource : null}
+                                        previewSource={photoPreviewSource}
                                         aspectRatio={mediaAspectRatio}
                                         isDark={isDark}
+                                        showDownloadOverlay={shouldShowMediaDownloadOverlay}
+                                        isDownloading={isMediaDownloading}
+                                        downloadDetails={
+                                            canDownloadFullMedia
+                                                ? fileDetails || formatBytes(media_size_bytes)
+                                                : "Too large"
+                                        }
+                                        onDownload={canDownloadFullMedia ? handleDownloadMedia : undefined}
                                     />
                                 )}
                                 {attached_media === 'video' && (
-                                    <DecryptedMediaImage
+                                    <VideoMessagePreview
+                                        localVideoUri={hasLocalFullMedia ? media_url : null}
                                         source={videoThumbnailSource}
-                                        isPreview
+                                        previewSource={videoPreviewSource}
                                         aspectRatio={mediaAspectRatio}
                                         isDark={isDark}
-                                        showPlayIcon
+                                        showDownloadOverlay={shouldShowMediaDownloadOverlay}
+                                        isDownloading={isMediaDownloading}
+                                        downloadDetails={
+                                            canDownloadMediaFromBubble
+                                                ? fileDetails || formatBytes(media_size_bytes)
+                                                : "Too large"
+                                        }
+                                        onDownload={canDownloadMediaFromBubble ? handleDownloadMedia : undefined}
                                     />
                                 )}
                                 {attached_media === 'voice' && (
-                                    <ThemedView style={[styles.fileCard, { backgroundColor: sent ? theme.cardSent : theme.cardReceived }]}>
-                                        <Icon
-                                            source="microphone"
-                                            color={isDark ? '#E9EDEF' : '#111B21'}
-                                            size={28}
-                                        />
-                                        <ThemedView style={styles.innerFileCardContent}>
-                                            <ThemedText style={styles.fileName}>Voice message</ThemedText>
-                                            {fileDetails.length > 0 && (
-                                                <ThemedText style={[styles.fileDetails, { color: isDark ? '#6C757C' : 'gray' }]}>
-                                                    {fileDetails}
-                                                </ThemedText>
-                                            )}
-                                        </ThemedView>
-                                    </ThemedView>
+                                    <VoiceMessagePreview
+                                        messageId={message_id}
+                                        audioSource={media_url}
+                                        canLoadAudio={canDownloadFullMedia}
+                                        isDark={isDark}
+                                        userId={senderGroupMember?.user_id ?? sender_user_id}
+                                        imageUrl={senderAvatar}
+                                        displayName={senderDisplayName}
+                                        contactPhone={senderPhone}
+                                        iconColor={groupSenderAccent}
+                                        textColor={groupSenderAccent}
+                                    />
                                 )}
                                 {attached_media === 'location' && location && (
                                     <ThemedView style={[styles.locationCard, { backgroundColor: sent ? theme.cardSent : theme.cardReceived }]}>
@@ -643,6 +1345,7 @@ const styles = StyleSheet.create({
         flexDirection: 'row',
         alignItems: 'flex-start',
         overflow: 'visible',
+        maxWidth: 280,
     },
     rowSent: {
         justifyContent: 'flex-end',
@@ -683,7 +1386,48 @@ const styles = StyleSheet.create({
         alignItems: 'flex-start',
         position: 'relative',
         overflow: 'visible',
-        maxWidth: 280
+        maxWidth: 324
+    },
+    groupAvatarColumn: {
+        width: 38,
+        flexShrink: 0,
+        alignSelf: 'flex-start',
+        marginRight: 4,
+        backgroundColor: 'transparent',
+    },
+    groupSenderAvatar: {
+        width: 34,
+        height: 34,
+        borderRadius: 99,
+        alignItems: 'center',
+        justifyContent: 'center',
+    },
+    groupSenderAvatarSpacer: {
+        width: 34,
+        height: 34,
+    },
+    groupSenderHeader: {
+        flexDirection: 'row',
+        alignItems: 'baseline',
+        gap: 4,
+        maxWidth: '100%',
+        paddingHorizontal: 4,
+        paddingBottom: 2,
+        backgroundColor: 'transparent',
+    },
+    groupSenderName: {
+        flexShrink: 1,
+        minWidth: 0,
+        fontSize: 12,
+        lineHeight: 15,
+        fontWeight: '700',
+    },
+    groupSenderPhone: {
+        flexShrink: 1,
+        minWidth: 0,
+        fontSize: 11,
+        lineHeight: 14,
+        fontWeight: '500',
     },
     selectOverlayer: {
         ...StyleSheet.absoluteFill,
@@ -706,7 +1450,6 @@ const styles = StyleSheet.create({
     },
     bubble: {
         maxWidth: '100%',
-        paddingVertical: 4,
         minWidth: 80,
         borderRadius: BORDER_RADIUS,
         position: 'relative',
@@ -731,12 +1474,10 @@ const styles = StyleSheet.create({
     },
     replyContainer: {
         flexDirection: 'column',
-        borderRadius: 7,
         borderLeftWidth: 3,
         overflow: 'hidden',
         paddingHorizontal: 8,
         paddingVertical: 4,
-        marginBottom: 8,
     },
     openGraphContainer: {
         paddingHorizontal: 12,
@@ -819,6 +1560,15 @@ const styles = StyleSheet.create({
         width: '100%',
         height: '100%',
     },
+    mediaPhotoBlurred: {
+        transform: [{ scale: 1.04 }],
+    },
+    mediaDecryptingOverlay: {
+        ...StyleSheet.absoluteFillObject,
+        justifyContent: 'center',
+        alignItems: 'center',
+        backgroundColor: 'rgba(0,0,0,0.16)',
+    },
     mediaPlaceholder: {
         width: '100%',
         borderRadius: 6,
@@ -826,11 +1576,51 @@ const styles = StyleSheet.create({
         justifyContent: 'center',
         alignItems: 'center',
     },
+    mediaPlaceholderDownload: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        gap: 8,
+        paddingHorizontal: 14,
+        paddingVertical: 10,
+        borderRadius: 999,
+        backgroundColor: 'rgba(0,0,0,0.45)',
+    },
     playOverlay: {
         ...StyleSheet.absoluteFillObject,
         justifyContent: 'center',
         alignItems: 'center',
-        backgroundColor: 'rgba(0,0,0,0.18)',
+        backgroundColor: 'rgba(0,0,0,0.3)',
+    },
+    videoPlayBadge: {
+        padding: 10,
+        borderRadius: 99,
+        backgroundColor: 'rgba(255,255,255,0.2)',
+    },
+    mediaDownloadButton: {
+        padding: 10,
+        paddingRight: 16,
+        borderRadius: 999,
+        backgroundColor: 'rgba(0,0,0,0.45)',
+        flexDirection: 'row',
+        alignItems: 'center',
+        gap: 10,
+    },
+    mediaDownloadTextContainer: {
+        flexDirection: 'column',
+        justifyContent: 'flex-start',
+        alignItems: 'flex-start',
+        backgroundColor: 'transparent',
+    },
+    mediaDownloadTitle: {
+        color: 'white',
+        fontWeight: '600',
+        lineHeight: 16,
+    },
+    mediaDownloadDetails: {
+        color: 'white',
+        fontSize: 12,
+        lineHeight: 14,
+        fontWeight: '400',
     },
     messageText: {
         fontSize: 15,
@@ -882,6 +1672,76 @@ const styles = StyleSheet.create({
         alignItems: 'center',
         justifyContent: 'center',
         marginRight: 12,
+    },
+    voiceCard: {
+        minWidth: 260,
+        maxWidth: 280,
+        paddingHorizontal: 4,
+        paddingVertical: 6,
+        borderRadius: 8,
+        flexDirection: 'row',
+        alignItems: 'center',
+        gap: 8,
+        marginBottom: -14,
+        backgroundColor: 'transparent',
+        paddingRight: 18
+    },
+    voicePlayButton: {
+        margin: 0,
+        width: 42,
+        height: 42,
+    },
+    voiceLoadingButton: {
+        width: 42,
+        height: 42,
+        alignItems: 'center',
+        justifyContent: 'center',
+        backgroundColor: 'transparent',
+    },
+    voiceBody: {
+        flex: 1,
+        minWidth: 0,
+        backgroundColor: 'transparent',
+        gap: 5,
+        bottom: -10
+    },
+    voiceSliderRow: {
+        height: 26,
+        justifyContent: 'center',
+        backgroundColor: 'transparent',
+    },
+    voiceSlider: {
+        height: 34,
+        marginHorizontal: -10,
+    },
+    voiceTrack: {
+        height: 3,
+        borderRadius: 999,
+        position: 'relative',
+    },
+    voiceTrackFill: {
+        width: '18%',
+        height: 3,
+        borderRadius: 999,
+    },
+    voiceThumb: {
+        position: 'absolute',
+        left: '18%',
+        top: -4,
+        width: 11,
+        height: 11,
+        borderRadius: 999,
+        marginLeft: -5.5,
+    },
+    voiceMetaRow: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        justifyContent: 'space-between',
+        backgroundColor: 'transparent',
+    },
+    voiceTimeText: {
+        fontSize: 11,
+        lineHeight: 13,
     },
     fileCard: {
         paddingHorizontal: 12,

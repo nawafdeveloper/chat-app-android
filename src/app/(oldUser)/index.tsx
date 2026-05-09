@@ -4,6 +4,7 @@ import { Colors } from '@/constants/theme';
 import { useCrypto } from '@/hooks/use-crypto';
 import { authClient } from '@/lib/auth-client';
 import { preloadUserChatsAndMessages } from '@/lib/chat-sync';
+import { syncMobileContacts } from '@/lib/contact-sync';
 import { useActiveChatStore } from '@/store/use-active-chat-store';
 import { usePinOldUserStore } from '@/store/use-pin-old-user-store';
 import { triggerRefreshKeys } from '@/types/keys.module';
@@ -127,6 +128,12 @@ const OldUserPage = () => {
                         .getState()
                         .setHasOlderMessages(chatId, Boolean(hasOlderMessages))
                 },
+            })
+
+            await syncMobileContacts({
+                currentUserId,
+                cookies: authClient.getCookie(),
+                onLoadingTitleChange: setLoadingTitle,
             })
 
             setProcessing(false)

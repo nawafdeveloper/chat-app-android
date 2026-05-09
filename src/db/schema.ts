@@ -116,6 +116,9 @@ export const contacts = sqliteTable(
     {
         contact_id: text("contact_id").primaryKey(),
         linked_user_id: text("linked_user_id").notNull(),
+        linked_user_image: text("linked_user_image"),
+        linked_user_public_key: text("linked_user_public_key"),
+        linked_user_phone_number: text("linked_user_phone_number"),
         contact_ciphertext: text("contact_ciphertext").notNull(),
         contact_encrypted_aes_key: text("contact_encrypted_aes_key").notNull(),
         contact_iv: text("contact_iv").notNull(),
@@ -160,6 +163,25 @@ export const encryptedMedia = sqliteTable(
     ]
 );
 
+export const pendingRealtimeEvents = sqliteTable(
+    "pending_realtime_events",
+    {
+        id: text("id").primaryKey(),
+        event_type: text("event_type").notNull(),
+        dedupe_key: text("dedupe_key").notNull(),
+        event_json: text("event_json").notNull(),
+        attempts: integer("attempts").notNull().default(0),
+        last_error: text("last_error"),
+        created_at: text("created_at").notNull(),
+        updated_at: text("updated_at").notNull(),
+    },
+    (table) => [
+        uniqueIndex("pending_realtime_events_dedupe_unique").on(table.dedupe_key),
+        index("pending_realtime_events_created_at_idx").on(table.created_at),
+        index("pending_realtime_events_event_type_idx").on(table.event_type),
+    ]
+);
+
 export const chatsRelations = relations(chats, ({ many }) => ({
     messages: many(messages),
     media: many(encryptedMedia),
@@ -192,3 +214,7 @@ export const contactsRelations = relations(contacts, ({ one }) => ({
 
 export type DbChat = InferSelectModel<typeof chats>;
 export type DbChatInsert = InferInsertModel<typeof chats>;
+export type DbContact = InferSelectModel<typeof contacts>;
+export type DbContactInsert = InferInsertModel<typeof contacts>;
+export type DbPendingRealtimeEvent = InferSelectModel<typeof pendingRealtimeEvents>;
+export type DbPendingRealtimeEventInsert = InferInsertModel<typeof pendingRealtimeEvents>;

@@ -1,4 +1,9 @@
 import type { ClientRealtimeEvent } from "@/types/realtime-events";
+import {
+    enqueueRealtimeEvent,
+    flushPendingRealtimeEvents,
+    isDurableRealtimeEvent,
+} from "@/lib/realtime-outbox";
 import { create } from "zustand";
 
 type RealtimeStatus = "idle" | "connecting" | "connected" | "error";
@@ -18,6 +23,16 @@ export const useRealtimeStore = create<RealtimeState>((set, get) => ({
     setStatus: (status) => set({ status }),
     sendEvent: (event) => {
         const socket = get().socket;
+        const isDurable = isDurableRealtimeEvent(event);
+
+        if (isDurable) {
+            void enqueueRealtimeEvent(event)
+                .then(() => flushPendingRealtimeEvents(socket))
+                .catch((error) => {
+                    console.log("Failed to queue realtime event:", error);
+                });
+            return true;
+        }
 
         if (!socket || socket.readyState !== WebSocket.OPEN) {
             return false;

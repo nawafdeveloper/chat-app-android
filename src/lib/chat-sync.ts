@@ -15,6 +15,7 @@ import {
     getDbMessages,
     upsertDbMessages,
 } from "@/lib/upsert-db-messages";
+import { materializeMessageMedia } from "@/lib/message-media";
 import type { ChatItemType } from "@/types/chats.type";
 import type { Message } from "@/types/messages";
 
@@ -189,6 +190,23 @@ async function fetchMobileMessages({
     });
 }
 
+async function materializeMessageMediaBatch(messages: Message[]) {
+    const materializedMessages: Message[] = [];
+
+    for (const message of messages) {
+        try {
+            materializedMessages.push(
+                await materializeMessageMedia(message, { downloadFull: false })
+            );
+        } catch (error) {
+            console.log("Failed to save message media locally:", error);
+            materializedMessages.push(message);
+        }
+    }
+
+    return materializedMessages;
+}
+
 export async function getDecryptedDbMessagePage({
     chatId,
     currentUserId,
@@ -289,10 +307,13 @@ export async function syncMobileChatsAndMessages({
     const messagesToStore = mobileMessages.filter((message) =>
         chatIds.has(message.chat_room_id)
     );
+    onLoadingTitleChange?.("Saving media previews");
+    const localMessagesToStore =
+        await materializeMessageMediaBatch(messagesToStore);
 
-    await upsertDbMessages(messagesToStore, currentUserId);
+    await upsertDbMessages(localMessagesToStore, currentUserId);
 
-    const messagesByChatId = groupMessagesByChat(messagesToStore);
+    const messagesByChatId = groupMessagesByChat(localMessagesToStore);
     for (const chat of storedChats) {
         const chatMessages = messagesByChatId.get(chat.chat_id) ?? [];
         const recentMessages = chatMessages.slice(-MESSAGE_PAGE_SIZE);

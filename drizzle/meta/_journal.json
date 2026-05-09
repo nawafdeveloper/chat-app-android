@@ -15,6 +15,20 @@
       "when": 1777928709324,
       "tag": "0001_slow_absorbing_man",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "6",
+      "when": 1778210400000,
+      "tag": "0002_local_realtime_outbox",
+      "breakpoints": true
+    },
+    {
+      "idx": 3,
+      "version": "6",
+      "when": 1778296800000,
+      "tag": "0003_cached_contact_links",
+      "breakpoints": true
     }
   ]
 }

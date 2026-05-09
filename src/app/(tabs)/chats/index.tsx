@@ -4,24 +4,26 @@ import { ThemedText } from '@/components/themed-text'
 import { ThemedView } from '@/components/themed-view'
 import { Colors } from '@/constants/theme'
 import { db } from '@/db/client'
-import { contacts, currentUser, chats as dbChats, encryptedMedia, messages } from '@/db/schema'
+import { contacts, currentUser, chats as dbChats, encryptedMedia, messages, pendingRealtimeEvents } from '@/db/schema'
 import { deleteToken } from '@/helper/user-session'
 import { authClient } from '@/lib/auth-client'
 import { deleteMobilePushToken, getDecryptedDbMessagePage, MESSAGE_PAGE_SIZE } from '@/lib/chat-sync'
 import { clearAllSensitiveData } from '@/lib/crypto-storage'
-import { markDbChatRead } from '@/lib/upsert-db-chats'
+import { deleteCachedLocalMediaFiles } from '@/lib/message-media'
 import { useAuthStore } from '@/store/auth-store'
 import { useNotificationStore } from '@/store/notification-store'
 import { rightNavRef } from '@/store/right-nav-ref'
 import { useActiveChatStore } from '@/store/use-active-chat-store'
 import { useLogoutLoadingState } from '@/store/use-logout-loading-state'
+import { useRealtimeStore } from '@/store/use-realtime-store'
 import { ChatItemType } from '@/types/chats.type'
+import { BasicAlertDialog, Column, Button as ComposeButton, Text as ComposeText, Host, Row, Spacer, Surface, TextButton } from '@expo/ui/jetpack-compose'
+import { clip, fillMaxWidth, height, padding, Shapes, width, wrapContentHeight, wrapContentWidth } from '@expo/ui/jetpack-compose/modifiers'
 import { MaterialIcons } from '@expo/vector-icons'
 import * as Haptics from 'expo-haptics'
 import { router } from 'expo-router'
 import React, { useCallback, useMemo, useRef, useState } from 'react'
 import {
-    Alert,
     FlatList,
     InteractionManager,
     Platform,
@@ -31,7 +33,7 @@ import {
     useColorScheme,
     View
 } from 'react-native'
-import { ActivityIndicator, Appbar, Checkbox, Divider, FAB, Menu, Searchbar } from 'react-native-paper'
+import { ActivityIndicator, Appbar, Checkbox, Divider, FAB, Icon, Menu, Searchbar } from 'react-native-paper'
 
 const SCROLL_THRESHOLD = 10
 const APP_GREEN = '#25D366'
@@ -284,7 +286,7 @@ const ChatsPage = () => {
     const { data: session } = authClient.useSession();
     const chats = useActiveChatStore((state) => state.chats);
     const chatsLoading = useActiveChatStore((state) => state.chatsLoading);
-    const setSelectedChatId = useActiveChatStore((state) => state.setSelectedChatId);
+    const realtimeStatus = useRealtimeStore((state) => state.status);
     const { setHasSession } = useAuthStore();
 
     const scheme = useColorScheme()
@@ -298,6 +300,7 @@ const ChatsPage = () => {
     const [appbarBg, setAppbarBg] = useState<string>(colors.background)
     const [selectedChatIds, setSelectedChatIds] = useState<Set<string>>(new Set())
     const [visible, setVisible] = useState(false);
+    const [logoutDialogVisible, setLogoutDialogVisible] = useState(false);
     const ignoreNextChatPressRef = useRef<string | null>(null);
     const isScrolledRef = useRef(false);
 
@@ -357,16 +360,11 @@ const ChatsPage = () => {
             return;
         }
 
-        setSelectedChatId(chatId);
-        useActiveChatStore.getState().markChatRead(chatId);
-        void markDbChatRead(chatId).catch((error) => {
-            console.log('Failed to mark chat read locally:', error);
-        });
         openChat(chatId);
         InteractionManager.runAfterInteractions(() => {
             primeMessagesFromCache(chatId);
         });
-    }, [isSelectionMode, primeMessagesFromCache, setSelectedChatId]);
+    }, [isSelectionMode, primeMessagesFromCache]);
 
     const handleChatLongPress = useCallback((chatId: string) => {
         ignoreNextChatPressRef.current = chatId;
@@ -387,8 +385,11 @@ const ChatsPage = () => {
         try {
             setLogoutLoading(true);
 
+            await deleteCachedLocalMediaFiles();
+
             await db.transaction(async (tx) => {
                 await tx.delete(encryptedMedia);
+                await tx.delete(pendingRealtimeEvents);
                 await tx.delete(messages);
                 await tx.delete(dbChats);
                 await tx.delete(contacts);
@@ -417,14 +418,8 @@ const ChatsPage = () => {
     };
 
     const handleLogout = () => {
-        Alert.alert(
-            'Logout from account?',
-            'Are you sure you want to logout from account? All messages will be deleted from this device.',
-            [
-                { text: 'Cancel', style: 'cancel' },
-                { text: 'Logout', style: 'destructive', onPress: confirmLogout }
-            ]
-        );
+        closeMenu();
+        setLogoutDialogVisible(true);
     };
 
     const filteredChats = useMemo(() => chats.filter((chat) => {
@@ -489,6 +484,75 @@ const ChatsPage = () => {
 
     return (
         <ThemedView style={styles.main}>
+            <Host matchContents style={styles.logoutDialogHost} colorScheme={resolvedScheme}>
+                {logoutDialogVisible && (
+                    <BasicAlertDialog
+                        onDismissRequest={() => setLogoutDialogVisible(false)}
+                        properties={{
+                            dismissOnBackPress: true,
+                            dismissOnClickOutside: true,
+                            usePlatformDefaultWidth: true,
+                        }}
+                    >
+                        <Surface
+                            color={colors.background}
+                            contentColor={colors.text}
+                            tonalElevation={6}
+                            shadowElevation={8}
+                            modifiers={[
+                                wrapContentWidth(),
+                                wrapContentHeight(),
+                                clip(Shapes.RoundedCorner(18)),
+                            ]}
+                        >
+                            <Column modifiers={[padding(22, 20, 22, 18)]}>
+                                <ComposeText
+                                    color={colors.text}
+                                    style={{
+                                        typography: 'titleMedium',
+                                        fontWeight: '700',
+                                    }}
+                                >
+                                    Logout from account?
+                                </ComposeText>
+                                <Spacer modifiers={[height(10)]} />
+                                <ComposeText
+                                    color={colors.textSecondary}
+                                    style={{
+                                        typography: 'bodyMedium',
+                                        lineHeight: 20,
+                                    }}
+                                >
+                                    All chats, messages, images, videos, files, and cached media saved on this device will be deleted.
+                                </ComposeText>
+                                <Spacer modifiers={[height(22)]} />
+                                <Row
+                                    horizontalArrangement="end"
+                                    verticalAlignment="center"
+                                    modifiers={[fillMaxWidth()]}
+                                >
+                                    <TextButton onClick={() => setLogoutDialogVisible(false)}>
+                                        <ComposeText color={colors.textSecondary}>Cancel</ComposeText>
+                                    </TextButton>
+                                    <Spacer modifiers={[width(8)]} />
+                                    <ComposeButton
+                                        onClick={() => {
+                                            setLogoutDialogVisible(false);
+                                            void confirmLogout();
+                                        }}
+                                        colors={{
+                                            containerColor: '#D92D20',
+                                            contentColor: '#FFFFFF',
+                                        }}
+                                    >
+                                        <ComposeText color="#FFFFFF">Logout</ComposeText>
+                                    </ComposeButton>
+                                </Row>
+                            </Column>
+                        </Surface>
+                    </BasicAlertDialog>
+                )}
+            </Host>
             <Appbar.Header
                 style={[
                     styles.appbar,
@@ -550,6 +614,9 @@ const ChatsPage = () => {
                     </>
                 )}
             </Appbar.Header>
+            {realtimeStatus === 'connecting' && (
+                <ActivityIndicator size={'small'} color={APP_GREEN} />
+            )}
             <FlatList
                 data={recentChats}
                 keyExtractor={(item) => item.chat_id}
@@ -577,6 +644,20 @@ const ChatsPage = () => {
                         </View>
                     </View>
                 ) : null}
+                ListFooterComponent={
+                    <ThemedView style={{ backgroundColor: 'transparent', paddingHorizontal: 16, paddingVertical: 8 }}>
+                        <ThemedView style={{ flexDirection: 'row', alignItems: 'center', width: 'auto', marginHorizontal: 'auto', gap: 8, paddingHorizontal: 10, paddingVertical: 6, borderRadius: 10, backgroundColor: 'transparent' }}>
+                            <Icon
+                                source="lock-check-outline"
+                                color={colors.textSecondary}
+                                size={20}
+                            />
+                            <ThemedText style={{ fontSize: 14, fontWeight: '400', color: colors.textSecondary }}>
+                                All of your messages are end-to-end encrypted.
+                            </ThemedText>
+                        </ThemedView>
+                    </ThemedView>
+                }
             />
             {!isSelectionMode && (
                 <FAB
@@ -593,6 +674,10 @@ export default ChatsPage
 
 const styles = StyleSheet.create({
     main: { flex: 1 },
+    logoutDialogHost: {
+        position: 'absolute',
+        zIndex: 20,
+    },
     appbar: {
         paddingLeft: 16,
     },

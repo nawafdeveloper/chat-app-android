@@ -10,7 +10,7 @@ import { FlatList, Pressable, StyleSheet, useColorScheme } from 'react-native';
 import { Appbar, Icon, Searchbar } from 'react-native-paper';
 
 const ContactItem = memo(({ c, bgColor }: { c: Contact; bgColor: string }) => (
-    <Pressable style={styles.listItem}>
+    <Pressable style={[styles.listItem, { paddingHorizontal: 24 }]}>
         <ChatAvatar
             userId={c.contact_id}
             imageUrl={c.contact_avatar}
@@ -22,6 +22,7 @@ const ContactItem = memo(({ c, bgColor }: { c: Contact; bgColor: string }) => (
         </ThemedText>
     </Pressable>
 ));
+ContactItem.displayName = 'ContactItem';
 
 const CreateChat = () => {
     const scheme = useColorScheme()
@@ -37,21 +38,26 @@ const CreateChat = () => {
     ), [colors.background]);
 
     const renderHeader = useCallback(() => (
-        <ThemedView style={styles.headerButtons}>
-            <Pressable style={styles.listItem}>
-                <ThemedView style={[styles.avatar, { backgroundColor: '#25D366' }]}>
-                    <Icon source="account-multiple-plus" color={colors.background} size={28} />
-                </ThemedView>
-                <ThemedText>New group</ThemedText>
-            </Pressable>
-            <Pressable style={styles.listItem}>
-                <ThemedView style={[styles.avatar, { backgroundColor: '#25D366' }]}>
-                    <Icon source="account-plus" color={colors.background} size={28} />
-                </ThemedView>
-                <ThemedText>New contact</ThemedText>
-            </Pressable>
+        <ThemedView>
+            <ThemedView style={styles.headerButtons}>
+                <Pressable style={[styles.listItem, { paddingRight: 16, paddingLeft: 8 }]}>
+                    <ThemedView style={[styles.avatar, { backgroundColor: '#25D366' }]}>
+                        <Icon source="account-multiple-plus" color={colors.background} size={28} />
+                    </ThemedView>
+                    <ThemedText>New group</ThemedText>
+                </Pressable>
+                <Pressable style={[styles.listItem, { paddingRight: 16, paddingLeft: 8 }]}>
+                    <ThemedView style={[styles.avatar, { backgroundColor: '#25D366' }]}>
+                        <Icon source="account-plus" color={colors.background} size={28} />
+                    </ThemedView>
+                    <ThemedText>New contact</ThemedText>
+                </Pressable>
+            </ThemedView>
+            <ThemedText style={[styles.sectionHeader, { color: colors.textSecondary }]}>
+                CONTACTS
+            </ThemedText>
         </ThemedView>
-    ), [colors.background]);
+    ), [colors.background, colors.textSecondary]);
 
     const filteredContacts = searchQuery.trim()
         ? contacts.filter((c) =>
@@ -117,8 +123,6 @@ const styles = StyleSheet.create({
     listItem: {
         flexDirection: 'row',
         alignItems: 'center',
-        paddingLeft: 8,
-        paddingRight: 16,
         paddingVertical: 8,
     },
     avatar: {
@@ -128,6 +132,13 @@ const styles = StyleSheet.create({
         alignItems: 'center',
         justifyContent: 'center',
         marginRight: 12,
+    },
+    sectionHeader: {
+        fontSize: 12,
+        fontWeight: '600',
+        letterSpacing: 0.5,
+        paddingHorizontal: 24,
+        paddingVertical: 8,
     },
     listContent: {
         paddingBottom: 80,
