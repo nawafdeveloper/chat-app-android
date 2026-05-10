@@ -1,6 +1,7 @@
 import { ThemedText } from '@/components/themed-text'
 import { ThemedView } from '@/components/themed-view'
 import { Colors } from '@/constants/theme'
+import { Image } from 'expo-image'
 import { router, useLocalSearchParams } from 'expo-router'
 import React, { useState } from 'react'
 import { StyleSheet, useColorScheme, useWindowDimensions } from 'react-native'
@@ -227,12 +228,11 @@ const ImagePreview = () => {
 
                 <GestureDetector gesture={composed}>
                     <Animated.View
-                        sharedTransitionTag={previewMessageId ? getMediaSharedTransitionTag('image', previewMessageId) : undefined}
                         style={[styles.previewFrame, animatedImageStyle]}
                     >
-                        <Animated.Image
+                        <Image
                             source={{ uri: previewImageUrl }}
-                            resizeMode="contain"
+                            contentFit="contain"
                             style={styles.image}
                         />
                     </Animated.View>

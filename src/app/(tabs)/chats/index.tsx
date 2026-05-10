@@ -410,6 +410,7 @@ const ChatsPage = () => {
 
             await authClient.signOut();
             setHasSession(false);
+            authClient.getSession();
         } catch (error) {
             console.log(error);
         } finally {

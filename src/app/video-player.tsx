@@ -298,10 +298,8 @@ const VideoPlayer = () => {
                     </Animated.View>
                 )}
 
-                {/* GestureDetector only wraps the video — NOT the play button */}
                 <GestureDetector gesture={composed}>
                     <Animated.View
-                        sharedTransitionTag={previewMessageId ? getMediaSharedTransitionTag('video', previewMessageId) : undefined}
                         style={[styles.video, animatedImageStyle]}
                     >
                         <VideoView
@@ -407,7 +405,6 @@ const styles = StyleSheet.create({
     headerTitle: { fontWeight: '600' },
     headerDescription: { fontSize: 13, fontWeight: '400' },
     video: { width: '100%', flex: 1, backgroundColor: 'black' },
-    // Centered absolutely, sized to just the badge — taps outside reach GestureDetector
     playBadgeContainer: {
         position: 'absolute',
         zIndex: 100,

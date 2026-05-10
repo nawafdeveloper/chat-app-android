@@ -9,158 +9,161 @@ import { useActiveChatStore } from '@/store/use-active-chat-store';
 import { usePinOldUserStore } from '@/store/use-pin-old-user-store';
 import { triggerRefreshKeys } from '@/types/keys.module';
 import React, { useEffect, useRef, useState } from 'react';
-import { Keyboard, KeyboardAvoidingView, TextInput as RNTextInput, StyleSheet, useColorScheme, View } from 'react-native';
-import { ActivityIndicator, Button } from 'react-native-paper';
+import {
+    Keyboard, KeyboardAvoidingView, TextInput as RNTextInput,
+    StyleSheet, useColorScheme, View,
+} from 'react-native';
+import { ActivityIndicator, Button, Icon } from 'react-native-paper';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
-const PIN_LENGTH = 6
+const PIN_LENGTH = 6;
+
+const STEPS = ['Loading your chats', 'Syncing messages', 'Syncing contacts'] as const;
+type Step = typeof STEPS[number];
 
 const OldUserPage = () => {
     const insets = useSafeAreaInsets();
     const scheme = useColorScheme();
-    const colors = Colors[scheme === 'unspecified' ? 'light' : scheme ?? 'light']
+    const colors = Colors[scheme === 'unspecified' ? 'light' : scheme ?? 'light'];
     const { data: session } = authClient.useSession();
-    const {
-        pin,
-        canGoNext,
-        setError,
-        setProcessing,
-        isProcessing,
-        setPin,
-        error,
-    } = usePinOldUserStore()
-    const { unlock } = useCrypto()
+    const { pin, canGoNext, setError, setProcessing, isProcessing, setPin, error } = usePinOldUserStore();
+    const { unlock } = useCrypto();
 
     const [keyboardOffset, setKeyboardOffset] = useState(0);
     const [isPreloading, setIsPreloading] = useState(false);
-    const [loadingTitle, setLoadingTitle] = useState('Loading your chats');
+    const [loadingTitle, setLoadingTitle] = useState<Step>('Loading your chats');
+    const [completedSteps, setCompletedSteps] = useState<Set<Step>>(new Set());
     const [syncError, setSyncError] = useState<string | null>(null);
-    const inputRefs = useRef<(RNTextInput | null)[]>([])
+    const inputRefs = useRef<(RNTextInput | null)[]>([]);
 
-    const pinDigits = Array.from({ length: PIN_LENGTH }, (_, index) => pin[index] ?? '')
+    const pinDigits = Array.from({ length: PIN_LENGTH }, (_, index) => pin[index] ?? '');
+
+    const markStepDone = (step: Step) => {
+        setCompletedSteps(prev => new Set(prev).add(step));
+    };
 
     useEffect(() => {
-        const timer = setTimeout(() => inputRefs.current[0]?.focus(), 100)
-        return () => clearTimeout(timer)
+        const timer = setTimeout(() => inputRefs.current[0]?.focus(), 100);
+        return () => clearTimeout(timer);
     }, []);
 
     useEffect(() => {
-        const keyboardDidShowListener = Keyboard.addListener('keyboardDidShow', () => {
-            setKeyboardOffset(0);
-        });
-        const keyboardDidHideListener = Keyboard.addListener('keyboardDidHide', () => {
-            setKeyboardOffset(-100);
-        });
-
-        return () => {
-            keyboardDidShowListener.remove();
-            keyboardDidHideListener.remove();
-        };
+        const show = Keyboard.addListener('keyboardDidShow', () => setKeyboardOffset(0));
+        const hide = Keyboard.addListener('keyboardDidHide', () => setKeyboardOffset(-100));
+        return () => { show.remove(); hide.remove(); };
     }, []);
 
     const handlePinChange = (text: string, index: number) => {
-        const sanitized = text.replace(/[^0-9]/g, '')
-
+        const sanitized = text.replace(/[^0-9]/g, '');
         if (sanitized.length > 1) {
-            const newDigits = [...pinDigits]
+            const newDigits = [...pinDigits];
             sanitized.slice(0, PIN_LENGTH - index).split('').forEach((digit, offset) => {
-                newDigits[index + offset] = digit
-            })
-            setPin(newDigits.join(''))
-
-            const nextEmptyIndex = newDigits.findIndex((digit, currentIndex) => currentIndex >= index && !digit)
+                newDigits[index + offset] = digit;
+            });
+            setPin(newDigits.join(''));
+            const nextEmptyIndex = newDigits.findIndex((d, i) => i >= index && !d);
             if (nextEmptyIndex !== -1 && nextEmptyIndex < PIN_LENGTH) {
-                inputRefs.current[nextEmptyIndex]?.focus()
+                inputRefs.current[nextEmptyIndex]?.focus();
             } else {
-                inputRefs.current[PIN_LENGTH - 1]?.blur()
+                inputRefs.current[PIN_LENGTH - 1]?.blur();
             }
-            return
+            return;
         }
-
-        const newDigits = [...pinDigits]
-        newDigits[index] = sanitized
-        setPin(newDigits.join(''))
-
+        const newDigits = [...pinDigits];
+        newDigits[index] = sanitized;
+        setPin(newDigits.join(''));
         if (sanitized && index < PIN_LENGTH - 1) {
-            inputRefs.current[index + 1]?.focus()
+            inputRefs.current[index + 1]?.focus();
         }
-    }
+    };
 
     const verify = async () => {
-        if (!canGoNext) return
-
-        setProcessing(true)
-        setSyncError(null)
+        if (!canGoNext) return;
+        setProcessing(true);
+        setSyncError(null);
+        setCompletedSteps(new Set());
 
         try {
-            const ok = await unlock(pin)
-
+            const ok = await unlock(pin);
             if (!ok) {
-                setError(true)
-                setPin('')
-                setProcessing(false)
-                setSyncError('Incorrect PIN. Please try again.')
-                setTimeout(() => setError(false), 600)
-                return
+                setError(true);
+                setPin('');
+                setProcessing(false);
+                setSyncError('Incorrect PIN. Please try again.');
+                setTimeout(() => setError(false), 600);
+                return;
             }
 
             const currentUserId =
-                session?.user.id ?? (await authClient.getSession()).data?.user.id
+                session?.user.id ?? (await authClient.getSession()).data?.user.id;
+            if (!currentUserId) throw new Error('No user session found');
 
-            if (!currentUserId) {
-                throw new Error('No user session found')
-            }
-
-            Keyboard.dismiss()
-            setIsPreloading(true)
-            setLoadingTitle('Loading your chats')
+            Keyboard.dismiss();
+            setIsPreloading(true);
+            setLoadingTitle('Loading your chats');
 
             await preloadUserChatsAndMessages({
                 currentUserId,
                 cookies: authClient.getCookie(),
-                onLoadingTitleChange: setLoadingTitle,
+                onLoadingTitleChange: (title) => setLoadingTitle(title as Step),
                 onChatsLoaded: (chats) => {
-                    useActiveChatStore.getState().setChats(chats)
+                    useActiveChatStore.getState().setChats(chats);
                 },
                 onChatMessagesLoaded: (chatId, messages, hasOlderMessages) => {
-                    useActiveChatStore.getState().replaceMessages(chatId, messages)
-                    useActiveChatStore
-                        .getState()
-                        .setHasOlderMessages(chatId, Boolean(hasOlderMessages))
+                    useActiveChatStore.getState().replaceMessages(chatId, messages);
+                    useActiveChatStore.getState().setHasOlderMessages(chatId, Boolean(hasOlderMessages));
                 },
-            })
+            });
+            markStepDone('Loading your chats');
 
+            setLoadingTitle('Syncing messages');
+            markStepDone('Syncing messages');
+
+            setLoadingTitle('Syncing contacts');
             await syncMobileContacts({
                 currentUserId,
                 cookies: authClient.getCookie(),
-                onLoadingTitleChange: setLoadingTitle,
-            })
+                onLoadingTitleChange: (title) => setLoadingTitle(title as Step),
+            });
+            markStepDone('Syncing contacts');
 
-            setProcessing(false)
-            triggerRefreshKeys()
+            setProcessing(false);
+            triggerRefreshKeys();
         } catch {
-            setError(true)
-            setProcessing(false)
-            setIsPreloading(false)
-            setSyncError('Could not load your chats. Please try again.')
-            setPin('')
-            setTimeout(() => setError(false), 600)
+            setError(true);
+            setProcessing(false);
+            setIsPreloading(false);
+            setSyncError('Could not load your chats. Please try again.');
+            setPin('');
+            setTimeout(() => setError(false), 600);
         }
-    }
+    };
 
     if (isPreloading) {
         return (
-            <ThemedView style={[styles.loadingMain, { paddingTop: insets.top * 2, paddingBottom: Math.max(insets.bottom, 24) }]}>
-                <ThemedView style={styles.loadingTopContainer}>
-                    <ThemedText style={styles.loadingTitle}>
-                        {loadingTitle}
-                    </ThemedText>
-                </ThemedView>
-                <ThemedView style={styles.loadingBottomContainer}>
-                    <ActivityIndicator color='#25D366' size='large' />
-                </ThemedView>
+            <ThemedView style={styles.loadingMain}>
+                {STEPS.map((step) => {
+                    const isDone = completedSteps.has(step);
+                    return (
+                        <View key={step} style={styles.loadingStepRow}>
+                            {isDone ? (
+                                <Icon source="check-circle" size={20} color="#25D366" />
+                            ) : (
+                                <ActivityIndicator color={colors.text} size={16} />
+                            )}
+                            <ThemedText
+                                style={[
+                                    styles.loadingStepText,
+                                    isDone && styles.loadingStepDone,
+                                ]}
+                            >
+                                {step}
+                            </ThemedText>
+                        </View>
+                    );
+                })}
             </ThemedView>
-        )
+        );
     }
 
     return (
@@ -171,9 +174,7 @@ const OldUserPage = () => {
             <ThemedView style={[styles.main, { paddingTop: insets.top * 2, paddingBottom: insets.bottom }]}>
                 <ThemedView style={styles.topContainer}>
                     <ThemedView style={styles.contextContainer}>
-                        <ThemedText style={styles.title}>
-                            Enter your PIN
-                        </ThemedText>
+                        <ThemedText style={styles.title}>Enter your PIN</ThemedText>
                         <ThemedText style={styles.description}>
                             {syncError ?? 'Type your 6-digit PIN to continue.'}
                         </ThemedText>
@@ -182,7 +183,7 @@ const OldUserPage = () => {
                         {pinDigits.map((digit, index) => (
                             <RNTextInput
                                 key={index}
-                                ref={(ref) => { inputRefs.current[index] = ref }}
+                                ref={(ref) => { inputRefs.current[index] = ref; }}
                                 value={digit}
                                 onChangeText={(text) => handlePinChange(text, index)}
                                 keyboardType="number-pad"
@@ -214,37 +215,35 @@ const OldUserPage = () => {
                 </ThemedView>
             </ThemedView>
         </KeyboardAvoidingView>
-    )
-}
+    );
+};
 
-export default OldUserPage
+export default OldUserPage;
 
 const styles = StyleSheet.create({
     main: {
         flex: 1,
         paddingHorizontal: 16,
-        justifyContent: 'space-between'
+        justifyContent: 'space-between',
     },
     loadingMain: {
         flex: 1,
-        paddingHorizontal: 16,
-        justifyContent: 'space-between',
-    },
-    loadingTopContainer: {
-        width: '100%',
-        maxWidth: 400,
-        marginHorizontal: 'auto',
-        alignItems: 'flex-start',
-    },
-    loadingTitle: {
-        fontSize: 28,
-        fontWeight: '600',
-        lineHeight: 32,
-    },
-    loadingBottomContainer: {
-        width: '100%',
+        padding: 16,
+        justifyContent: 'center',
         alignItems: 'center',
-        justifyContent: 'flex-end',
+    },
+    loadingStepRow: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        gap: 10,
+        marginBottom: 16,
+    },
+    loadingStepText: {
+        fontSize: 18,
+        fontWeight: '500',
+    },
+    loadingStepDone: {
+        color: 'gray',
     },
     topContainer: {
         flex: 1,
@@ -252,28 +251,28 @@ const styles = StyleSheet.create({
         gap: 24,
         maxWidth: 400,
         marginHorizontal: 'auto',
-        width: '100%'
+        width: '100%',
     },
     contextContainer: {
         flexDirection: 'column',
         justifyContent: 'flex-start',
         alignItems: 'flex-start',
-        gap: 12
+        gap: 12,
     },
     title: {
         fontSize: 28,
         fontWeight: '600',
-        lineHeight: 28
+        lineHeight: 28,
     },
     description: {
         fontSize: 16,
         lineHeight: 16,
-        color: 'gray'
+        color: 'gray',
     },
     bottomContainer: {
         flexDirection: 'row',
         alignItems: 'flex-end',
-        justifyContent: 'flex-end'
+        justifyContent: 'flex-end',
     },
     otpContainer: {
         flexDirection: 'row',
@@ -290,4 +289,4 @@ const styles = StyleSheet.create({
         fontWeight: '600',
         textAlign: 'center',
     },
-})
+});

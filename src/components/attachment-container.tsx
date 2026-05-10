@@ -56,14 +56,6 @@ const AttachmentContainer = ({ visible }: Props) => {
             onPress: () => { }
         },
         {
-            key: 'location',
-            label: 'Location',
-            icon: 'map-marker',
-            iconColor: '#10B981',
-            backgroundColor: isDark ? '#022C22' : '#ECFDF5',
-            onPress: () => { }
-        },
-        {
             key: 'contact',
             label: 'Contact',
             icon: 'account-circle',
@@ -77,22 +69,6 @@ const AttachmentContainer = ({ visible }: Props) => {
             icon: 'file-document',
             iconColor: '#EF4444',
             backgroundColor: isDark ? '#450A0A' : '#FEF2F2',
-            onPress: () => { }
-        },
-        {
-            key: 'poll',
-            label: 'Poll',
-            icon: 'poll',
-            iconColor: '#F97316',
-            backgroundColor: isDark ? '#431407' : '#FFF7ED',
-            onPress: () => { }
-        },
-        {
-            key: 'event',
-            label: 'Event',
-            icon: 'calendar',
-            iconColor: '#14B8A6',
-            backgroundColor: isDark ? '#042F2E' : '#F0FDFA',
             onPress: () => { }
         }
     ];
@@ -237,8 +213,8 @@ const styles = StyleSheet.create({
         position: 'absolute',
         left: 10,
         right: 10,
-        top: -230,
-        height: 220,
+        top: -130,
+        height: 120,
         borderRadius: 12,
         overflow: 'hidden',
         backgroundColor: 'transparent',
