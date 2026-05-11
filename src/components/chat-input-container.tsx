@@ -1,4 +1,5 @@
 import { Colors } from '@/constants/theme'
+import { fetchAndDecryptMessageMedia } from '@/lib/message-media'
 import {
     AudioModule,
     RecordingPresets,
@@ -6,8 +7,9 @@ import {
     useAudioRecorder,
     useAudioRecorderState,
 } from 'expo-audio'
-import React, { useState } from 'react'
-import { StyleSheet, TextInput, useColorScheme } from 'react-native'
+import { Image } from 'expo-image'
+import React, { useEffect, useState } from 'react'
+import { ActivityIndicator, StyleSheet, TextInput, useColorScheme, View } from 'react-native'
 import { IconButton } from 'react-native-paper'
 import { useSafeAreaInsets } from 'react-native-safe-area-context'
 import AttachmentContainer from './attachment-container'
@@ -20,13 +22,48 @@ type Props = {
     handleClearReply: () => void;
     replyToUser: string;
     replyMessage: string;
+    replyMediaUrl: string;
+    replyMediaType: 'photo' | 'video' | 'voice' | 'file' | 'contact' | 'location' | null;
     inputRef: React.RefObject<TextInput | null>;
     onVoiceMessageRecorded?: (uri: string, durationMillis: number) => void;
 }
 
 const POLL_INTERVAL_MS = 80;
+const API_BASE = "https://halabakk-web.nawaf-alhasosah.workers.dev";
 
-const ChatInputContainer = ({ isReply, handleClearReply, replyMessage, replyToUser, inputRef, onVoiceMessageRecorded }: Props) => {
+function ReplyPhotoThumbnail({ url, isDark }: { url?: string | null; isDark: boolean }) {
+    const [resolvedUri, setResolvedUri] = useState<string | null>(null);
+
+    useEffect(() => {
+        if (!url) return;
+        const absoluteUrl = url.startsWith('/') ? `${API_BASE}${url}` : url;
+        fetchAndDecryptMessageMedia({
+            source: absoluteUrl,
+            isPreview: true,
+            fallbackExtension: 'jpg',
+        }).then(uri => {
+            if (uri) setResolvedUri(uri);
+        });
+    }, [url]);
+
+    if (!resolvedUri) {
+        return (
+            <View style={{ width: 55, height: 55, backgroundColor: isDark ? '#182229' : '#edf2f7', justifyContent: 'center', alignItems: 'center' }}>
+                <ActivityIndicator size="small" color="#25D366" />
+            </View>
+        );
+    }
+
+    return (
+        <Image
+            source={{ uri: resolvedUri }}
+            contentFit="cover"
+            style={{ width: 55, height: 55 }}
+        />
+    );
+}
+
+const ChatInputContainer = ({ isReply, handleClearReply, replyMessage, replyToUser, replyMediaType, replyMediaUrl, inputRef, onVoiceMessageRecorded }: Props) => {
     const insets = useSafeAreaInsets();
     const scheme = useColorScheme();
     const colors = Colors[scheme === 'unspecified' ? 'light' : scheme ?? 'light']
@@ -114,20 +151,29 @@ const ChatInputContainer = ({ isReply, handleClearReply, replyMessage, replyToUs
                 <ThemedView style={[styles.main, { paddingBottom: insets.bottom + 10 }]}>
                     <ThemedView style={[styles.mainInputContainer, { backgroundColor: scheme === 'dark' ? colors.card : colors.background, borderRadius: isReply ? 18 : 24 }]}>
                         {isReply && (
-                            <ThemedView style={[styles.replyContainer, { backgroundColor: colors.indicator, borderLeftColor: '#25D366' }]}>
-                                <ThemedView style={styles.topContainer}>
-                                    <ThemedText style={{ fontSize: 14 }}>{replyToUser}</ThemedText>
-                                    <IconButton
-                                        icon="close"
-                                        iconColor={colors.text}
-                                        size={16}
-                                        style={{ margin: 0, height: 'auto' }}
-                                        onPress={handleClearReply}
-                                    />
+                            <ThemedView style={[styles.replyMainContainer, { backgroundColor: colors.indicator, }]}>
+                                <ThemedView style={[styles.replyContextContainer, { borderLeftColor: '#25D366' }]}>
+                                    <ThemedView style={styles.topContainer}>
+                                        <ThemedText style={{ fontSize: 14 }}>{replyToUser}</ThemedText>
+                                        <IconButton
+                                            icon="close"
+                                            iconColor={colors.text}
+                                            size={16}
+                                            style={{ margin: 0, height: 'auto' }}
+                                            onPress={handleClearReply}
+                                        />
+                                    </ThemedView>
+                                    <ThemedText numberOfLines={2} ellipsizeMode='tail' style={{ fontSize: 12, color: colors.textSecondary, minWidth: 0, lineHeight: 16 }}>
+                                        {replyMessage ? replyMessage : null}
+                                        {replyMediaType === 'contact' ? '👤 Contact' : replyMediaType === 'file' ? '📂 File' : replyMediaType === 'location' ? 'Location' : replyMediaType === 'photo' ? '🖼️ Photo' : replyMediaType === 'video' ? '📽️ Video' : replyMediaType === 'voice' ? '🎤 Voice' : null}
+                                    </ThemedText>
                                 </ThemedView>
-                                <ThemedText numberOfLines={2} ellipsizeMode='tail' style={{ fontSize: 12, color: colors.textSecondary, minWidth: 0, lineHeight: 16 }}>
-                                    {replyMessage}
-                                </ThemedText>
+                                {replyMediaUrl && (
+                                    <ReplyPhotoThumbnail
+                                        url={replyMediaUrl}
+                                        isDark={scheme === 'dark'}
+                                    />
+                                )}
                             </ThemedView>
                         )}
                         <ThemedView style={[styles.inputContainer, { backgroundColor: scheme === 'dark' ? colors.card : colors.background }]}>
@@ -238,19 +284,27 @@ const styles = StyleSheet.create({
         maxHeight: 120,
         marginBottom: 4
     },
-    replyContainer: {
-        flexDirection: 'column',
-        borderRadius: 12,
-        margin: 2,
-        borderLeftWidth: 3,
+    replyMainContainer: {
         overflow: 'hidden',
-        paddingHorizontal: 8,
-        paddingVertical: 4
+        borderRadius: 16,
+        flexDirection: 'row',
+        alignItems: 'center',
+        justifyContent: 'space-between',
+        margin: 2
+    },
+    replyContextContainer: {
+        flexDirection: 'column',
+        borderLeftWidth: 6,
+        flex: 1,
+        backgroundColor: 'transparent',
+        paddingLeft: 12,
+        height: '100%',
+        padding: 4
     },
     topContainer: {
         flexDirection: 'row',
         alignItems: 'center',
         justifyContent: 'space-between',
-        backgroundColor: 'transparent'
+        backgroundColor: 'transparent',
     }
 })

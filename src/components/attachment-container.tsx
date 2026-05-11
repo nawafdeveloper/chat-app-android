@@ -1,6 +1,9 @@
 import { Colors } from '@/constants/theme';
+import { useImagePreviewBeforeSentStore } from '@/store/image-preview-before-sent';
+import { useVideoPreviewBeforeSentStore } from '@/store/video-preview-before-sent';
+import * as ImagePicker from 'expo-image-picker';
 import React, { useEffect } from 'react';
-import { StyleSheet, TouchableOpacity, useColorScheme, View } from 'react-native';
+import { Alert, StyleSheet, TouchableOpacity, useColorScheme, View } from 'react-native';
 import { Icon } from 'react-native-paper';
 import { IconSource } from 'react-native-paper/lib/typescript/components/Icon';
 import Animated, {
@@ -30,6 +33,8 @@ const AttachmentContainer = ({ visible }: Props) => {
     const scheme = useColorScheme();
     const colors = Colors[scheme === 'unspecified' ? 'light' : scheme ?? 'light']
     const isDark = scheme === 'dark';
+    const { setIsVisible, setImageUri } = useImagePreviewBeforeSentStore();
+    const { setIsVideoVisible, setVideoUrl } = useVideoPreviewBeforeSentStore();
 
     const maskScale = useSharedValue(0);
     const contentOpacity = useSharedValue(0);
@@ -46,6 +51,34 @@ const AttachmentContainer = ({ visible }: Props) => {
         useSharedValue(0)
     ];
 
+    const pickImage = async () => {
+        const { status } = await ImagePicker.requestMediaLibraryPermissionsAsync()
+        if (status !== 'granted') {
+            Alert.alert('Permission required', 'Please allow access to your photo library.')
+            return
+        }
+
+        const picked = await ImagePicker.launchImageLibraryAsync({
+            mediaTypes: ImagePicker.MediaTypeOptions.All,
+            allowsEditing: false,
+            allowsMultipleSelection: false,
+            quality: 0.8,
+        })
+
+        if (picked.canceled) return
+
+        const localUri = picked.assets[0].uri;
+        const mediaType = picked.assets[0].type;
+
+        if (mediaType === 'image') {
+            setImageUri(localUri);
+            setIsVisible(true);
+        } else if (mediaType === 'video' || mediaType === 'pairedVideo') {
+            setVideoUrl(localUri);
+            setIsVideoVisible(true);
+        }
+    };
+
     const itemButtons: ItemButton[] = [
         {
             key: 'photos',
@@ -53,7 +86,7 @@ const AttachmentContainer = ({ visible }: Props) => {
             icon: 'image-multiple',
             iconColor: '#3B82F6',
             backgroundColor: isDark ? '#172554' : '#EFF6FF',
-            onPress: () => { }
+            onPress: () => pickImage()
         },
         {
             key: 'contact',
@@ -170,7 +203,7 @@ const AttachmentContainer = ({ visible }: Props) => {
                         const ButtonAnim = getButtonStyle(idx);
                         return (
                             <Animated.View key={item.key} style={ButtonAnim}>
-                                <TouchableOpacity style={styles.itemButtonContainer}>
+                                <TouchableOpacity style={styles.itemButtonContainer} onPress={item.onPress}>
                                     <View style={[styles.iconContainer, { backgroundColor: item.backgroundColor }]}>
                                         <Icon
                                             source={item.icon}

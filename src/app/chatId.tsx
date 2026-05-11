@@ -1,16 +1,20 @@
 import ChatInputContainer from '@/components/chat-input-container';
 import { ChatAvatar } from '@/components/decrypted-chat-avatar';
+import ImagePreviewBeforeSent from '@/components/image-preview-before-sent';
 import Bubble from '@/components/message-bubble';
 import { TiledBackground } from '@/components/tailed-wallpaper';
 import { ThemedText } from '@/components/themed-text';
 import { ThemedView } from '@/components/themed-view';
+import VideoPreviewBeforeSent from '@/components/video-preview-before-sent';
 import { Colors } from '@/constants/theme';
 import { useChatMessages } from '@/hooks/use-chat-realtime';
 import { authClient } from '@/lib/auth-client';
 import { markDbChatRead } from '@/lib/upsert-db-chats';
+import { useImagePreviewBeforeSentStore } from '@/store/image-preview-before-sent';
 import { rightNavRef } from '@/store/right-nav-ref';
 import { useActiveChatStore } from '@/store/use-active-chat-store';
 import { useRealtimeStore } from '@/store/use-realtime-store';
+import { useVideoPreviewBeforeSentStore } from '@/store/video-preview-before-sent';
 import type { Message } from '@/types/messages';
 import { useFocusEffect, useIsFocused, useRoute } from '@react-navigation/native';
 import * as Haptics from 'expo-haptics';
@@ -36,6 +40,8 @@ const ChatId = () => {
     const routeChatId = expoChatId ?? nativeRouteChatId;
     const isFocused = useIsFocused();
     const realtimeStatus = useRealtimeStore((state) => state.status);
+    const { isVisible } = useImagePreviewBeforeSentStore();
+    const { isVideoVisible } = useVideoPreviewBeforeSentStore();
 
     const selectedChatId = useActiveChatStore((state) => state.selectedChatId);
     const setSelectedChatId = useActiveChatStore((state) => state.setSelectedChatId);
@@ -72,6 +78,8 @@ const ChatId = () => {
     const [isReply, setIsReply] = useState(false);
     const [replyToUser, setReplyToUser] = useState('');
     const [replyMessage, setReplyMessage] = useState('');
+    const [replyMediaType, setReplyMediaType] = useState<'photo' | 'video' | 'voice' | 'file' | 'contact' | 'location' | null>(null);
+    const [replyMediaUrl, setReplyMediaUrl] = useState('');
     const [keyboardOffset, setKeyboardOffset] = useState(-30);
     const selectedCount = selectedMessageIds.size;
     const selectionModeRef = useRef(selectionMode);
@@ -158,10 +166,26 @@ const ChatId = () => {
         });
     }, []);
 
-    const handleReply = useCallback((replyTo: string, replyMsg: string) => {
+    const handleReply = useCallback((
+        replyTo: string,
+        replyMsg: string | null,
+        replayMedia: string | null | undefined,
+        replyMediaType: 'photo' | 'video' | 'voice' | 'file' | 'contact' | 'location' | null
+    ) => {
+        setReplyToUser('');
+        setReplyMessage('');
+        setReplyMediaType(null);
+        setReplyMediaUrl('');
+
         setIsReply(true);
         setReplyToUser(replyTo);
-        setReplyMessage(replyMsg);
+        if (replyMsg) {
+            setReplyMessage(replyMsg);
+        }
+        setReplyMediaType(replyMediaType);
+        if (replayMedia) {
+            setReplyMediaUrl(replayMedia);
+        }
         inputRef.current?.focus();
     }, []);
 
@@ -169,6 +193,8 @@ const ChatId = () => {
         setIsReply(false);
         setReplyToUser('');
         setReplyMessage('');
+        setReplyMediaType(null);
+        setReplyMediaUrl('');
     }, []);
 
     const handleCancelSelectionMode = useCallback(() => {
@@ -229,6 +255,21 @@ const ChatId = () => {
         selectedMessageIds,
     ]);
 
+    if (isVisible) {
+        return <ImagePreviewBeforeSent />
+    }
+
+    if (isVideoVisible) {
+        return <VideoPreviewBeforeSent />
+    }
+
+    const handleOpenProfile = () => {
+        router.navigate({
+            pathname: '/targetUserProfile',
+            params: { chatId: activeChatId }
+        })
+    };
+
     return (
         <KeyboardAvoidingView
             behavior={'height'}
@@ -261,7 +302,7 @@ const ChatId = () => {
                         <Appbar.BackAction onPress={handleExitFromChat} />
                         <Appbar.Content
                             title={
-                                <TouchableRipple>
+                                <TouchableRipple onPress={handleOpenProfile}>
                                     <ThemedView style={styles.profileContainer}>
                                         <ChatAvatar
                                             userId={
@@ -330,6 +371,8 @@ const ChatId = () => {
                     handleClearReply={handleClearReply}
                     replyMessage={replyMessage}
                     replyToUser={replyToUser}
+                    replyMediaUrl={replyMediaUrl}
+                    replyMediaType={replyMediaType}
                     inputRef={inputRef}
                 />
             </TiledBackground>

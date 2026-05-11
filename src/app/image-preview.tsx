@@ -1,6 +1,7 @@
 import { ThemedText } from '@/components/themed-text'
 import { ThemedView } from '@/components/themed-view'
 import { Colors } from '@/constants/theme'
+import { saveMediaToGallery } from '@/helper/download-media'
 import { Image } from 'expo-image'
 import { router, useLocalSearchParams } from 'expo-router'
 import React, { useState } from 'react'
@@ -221,7 +222,7 @@ const ImagePreview = () => {
                                     </ThemedView>
                                 }
                             />
-                            <Appbar.Action icon="progress-download" onPress={() => { }} color={colors.text} />
+                            <Appbar.Action icon="progress-download" onPress={() => saveMediaToGallery(previewImageUrl)} color={colors.text} />
                         </Appbar.Header>
                     </Animated.View>
                 )}

@@ -1,6 +1,9 @@
 {
   "name": "chat-app-android",
-  "main": "expo-router/entry",
+  "main": "index.ts",
+  "expo": {
+    "config": "app.config.cjs"
+  },
   "version": "1.0.0",
   "reanimated": {
     "staticFeatureFlags": {
@@ -20,6 +23,8 @@
     "@expo/ui": "~55.0.12",
     "@notifee/react-native": "^9.1.8",
     "@react-native-community/slider": "5.1.2",
+    "@react-native-firebase/app": "^24.0.0",
+    "@react-native-firebase/messaging": "^24.0.0",
     "@react-native-vector-icons/material-design-icons": "^13.1.0",
     "@react-navigation/bottom-tabs": "^7.15.10",
     "@react-navigation/elements": "^2.9.10",
@@ -32,6 +37,7 @@
     "expo": "~55.0.16",
     "expo-audio": "~55.0.14",
     "expo-background-task": "~55.0.17",
+    "expo-build-properties": "~55.0.13",
     "expo-camera": "~55.0.18",
     "expo-clipboard": "~55.0.13",
     "expo-constants": "~55.0.16",
@@ -50,6 +56,7 @@
     "expo-linking": "~55.0.15",
     "expo-location": "~55.1.9",
     "expo-maps": "~55.0.17",
+    "expo-media-library": "~55.0.16",
     "expo-navigation-bar": "~55.0.12",
     "expo-network": "~55.0.13",
     "expo-notifications": "~55.0.22",
@@ -75,6 +82,7 @@
     "react-native-safe-area-context": "~5.6.2",
     "react-native-screens": "~4.23.0",
     "react-native-svg": "15.15.3",
+    "react-native-view-shot": "4.0.3",
     "react-native-web": "~0.21.0",
     "react-native-worklets": "0.7.4",
     "zustand": "^5.0.12"

@@ -1,11 +1,11 @@
-import * as Notifications from 'expo-notifications';
+import type { FirebaseMessagingTypes } from '@react-native-firebase/messaging';
 import { create } from 'zustand';
 
 interface NotificationState {
     expoPushToken: string;
-    notification: Notifications.Notification | undefined;
+    notification: FirebaseMessagingTypes.RemoteMessage | undefined;
     setExpoPushToken: (token: string) => void;
-    setNotification: (notification: Notifications.Notification | undefined) => void;
+    setNotification: (notification: FirebaseMessagingTypes.RemoteMessage | undefined) => void;
     resetNotification: () => void;
 }
 
@@ -15,7 +15,7 @@ export const useNotificationStore = create<NotificationState>((set) => ({
 
     setExpoPushToken: (token: string) => set({ expoPushToken: token }),
 
-    setNotification: (notification: Notifications.Notification | undefined) =>
+    setNotification: (notification: FirebaseMessagingTypes.RemoteMessage | undefined) =>
         set({ notification }),
 
     resetNotification: () => set({ notification: undefined }),

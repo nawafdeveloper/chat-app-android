@@ -27,13 +27,12 @@ import {
     FlatList,
     InteractionManager,
     Platform,
-    Pressable,
     StyleSheet,
     Text,
     useColorScheme,
     View
 } from 'react-native'
-import { ActivityIndicator, Appbar, Checkbox, Divider, FAB, Icon, Menu, Searchbar } from 'react-native-paper'
+import { ActivityIndicator, Appbar, Checkbox, Divider, FAB, Icon, Menu, Searchbar, TouchableRipple } from 'react-native-paper'
 
 const SCROLL_THRESHOLD = 10
 const APP_GREEN = '#25D366'
@@ -196,7 +195,7 @@ const ChatItem = ({
     )
 
     return (
-        <Pressable
+        <TouchableRipple
             onPress={() => onPress(item.chat_id)}
             onLongPress={() => onLongPress(item.chat_id)}
             style={[styles.chatRipple, { backgroundColor: isSelected ? colors.card : 'transparent' }]}>
@@ -276,7 +275,7 @@ const ChatItem = ({
                     </View>
                 </View>
             </View>
-        </Pressable>
+        </TouchableRipple>
     )
 }
 

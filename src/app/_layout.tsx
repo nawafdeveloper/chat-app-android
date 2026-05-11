@@ -1,6 +1,5 @@
 import { CryptoProvider, useCryptoKeys } from '@/context/crypto';
 import { TabletProvider } from '@/context/screen-checking-context';
-import { setupNotificationCategories } from '@/helper/push-notification';
 import { registerForPushNotificationsAsync } from '@/helper/request-for-push-notification';
 import { getToken } from '@/helper/user-session';
 import { useChatRealtime } from '@/hooks/use-chat-realtime';
@@ -8,35 +7,28 @@ import { authClient } from '@/lib/auth-client';
 import { deleteMobilePushToken, hydrateLocalChatCache, registerMobilePushToken, syncMobileChatsAndMessages } from '@/lib/chat-sync';
 import { syncMobileContacts } from '@/lib/contact-sync';
 import { retrieveSessionKeys } from '@/lib/crypto-storage';
+import { displayRemoteMessageNotification } from '@/lib/display-notifee-notification';
 import { useAuthStore } from '@/store/auth-store';
 import { useNotificationStore } from '@/store/notification-store';
 import { rightNavRef } from '@/store/right-nav-ref';
 import { useActiveChatStore } from '@/store/use-active-chat-store';
 import { setRefreshKeysHandler } from '@/types/keys.module';
+import notifee, { EventType } from '@notifee/react-native';
+import { getMessaging, onMessage } from '@react-native-firebase/messaging';
 import { DarkTheme, DefaultTheme, ThemeProvider } from '@react-navigation/native';
 import { useMigrations } from 'drizzle-orm/expo-sqlite/migrator';
-import * as Notifications from 'expo-notifications';
 import { router, Stack } from 'expo-router';
 import * as SplashScreen from 'expo-splash-screen';
 import React, { useCallback, useEffect, useRef, useState } from 'react';
-import { StatusBar, Text, useColorScheme, View } from 'react-native';
+import { Linking, StatusBar, Text, useColorScheme, View } from 'react-native';
 import { GestureHandlerRootView } from 'react-native-gesture-handler';
 import { PaperProvider } from 'react-native-paper';
 import { install } from 'react-native-quick-crypto';
 import migrations from '../../drizzle/migrations';
 import { db } from '../db/client';
-install()
 
-Notifications.setNotificationHandler({
-    handleNotification: async () => ({
-        shouldPlaySound: true,
-        shouldSetBadge: true,
-        shouldShowBanner: true,
-        shouldShowList: true,
-    }),
-});
-
-setupNotificationCategories();
+install();
+const firebaseMessaging = getMessaging();
 
 SplashScreen.preventAutoHideAsync();
 
@@ -46,6 +38,57 @@ type AppStackProps = {
     hasPin: boolean
     hasNoPin: boolean
     hasName: boolean
+}
+
+function optionalString(value: unknown) {
+    return typeof value === 'string' && value.length > 0 ? value : undefined;
+}
+
+function getNotificationChatId(data: Record<string, any>) {
+    return (
+        optionalString(data?.conversationId) ??
+        optionalString(data?.chatId) ??
+        optionalString(data?.chat_room_id) ??
+        optionalString(data?.chatRoomId) ??
+        optionalString(data?.roomId)
+    );
+}
+
+function getChatIdFromUrl(url: string) {
+    try {
+        const parsed = new URL(url);
+        const chatIdParam =
+            parsed.searchParams.get('chatId') ??
+            parsed.searchParams.get('conversationId') ??
+            parsed.searchParams.get('chat_room_id');
+
+        if (chatIdParam) {
+            return chatIdParam;
+        }
+
+        const host = parsed.hostname;
+        const pathParts = parsed.pathname.split('/').filter(Boolean);
+
+        if (host === 'conversation' && pathParts[0]) {
+            return decodeURIComponent(pathParts[0]);
+        }
+
+        if (host === 'chatId' && pathParts[0]) {
+            return decodeURIComponent(pathParts[0]);
+        }
+
+        if (pathParts[0] === 'conversation' && pathParts[1]) {
+            return decodeURIComponent(pathParts[1]);
+        }
+
+        if (pathParts[0] === 'chatId' && pathParts[1]) {
+            return decodeURIComponent(pathParts[1]);
+        }
+    } catch (error) {
+        console.log('Failed to parse notification link:', error);
+    }
+
+    return null;
 }
 
 const AppStack = ({ hasSession, isNewUser, hasPin, hasNoPin, hasName }: AppStackProps) => {
@@ -73,6 +116,7 @@ const AppStack = ({ hasSession, isNewUser, hasPin, hasNoPin, hasName }: AppStack
                 <Stack.Screen name='create-chat' options={{ headerShown: false }} />
                 <Stack.Screen name='video-player' options={{ headerShown: false, animation: 'fade' }} />
                 <Stack.Screen name='image-preview' options={{ headerShown: false, animation: 'fade' }} />
+                <Stack.Screen name='targetUserProfile' options={{ headerShown: false }} />
             </Stack.Protected>
         </Stack>
     );
@@ -183,6 +227,8 @@ const AppLayout = () => {
     }, [hasKeys, hasSession, session?.user.id, success]);
 
     const openChatFromNotification = useCallback((conversationId: string) => {
+        useActiveChatStore.getState().setSelectedChatId(conversationId);
+
         if (rightNavRef.isReady()) {
             rightNavRef.navigate('chatId', { chatId: conversationId });
             return;
@@ -214,23 +260,12 @@ const AppLayout = () => {
         });
     }, [hasKeys, session?.user.id]);
 
-    const getNotificationConversationId = useCallback((
-        notification: Notifications.Notification
-    ) => {
-        const data = notification.request.content.data as {
-            conversationId?: unknown;
-            roomId?: unknown;
-        };
-
-        const conversationId = data.conversationId ?? data.roomId;
-        return typeof conversationId === 'string' ? conversationId : null;
-    }, []);
-
+    // ─── Push token registration ──────────────────────────────────────────────
     useEffect(() => {
         registerForPushNotificationsAsync()
             .then(token => {
                 if (token) {
-                    setExpoPushToken(token);
+                    setExpoPushToken(token); // now stores FCM token
                 }
             })
             .catch((error) => {
@@ -249,6 +284,7 @@ const AppLayout = () => {
             });
     }, [hasSession, setExpoPushToken]);
 
+    // ─── Contacts sync ────────────────────────────────────────────────────────
     useEffect(() => {
         if (!hasSession || hasKeys !== true || !session?.user.id) {
             syncedContactsRef.current = null;
@@ -270,6 +306,7 @@ const AppLayout = () => {
         });
     }, [hasKeys, hasSession, session?.user.id]);
 
+    // ─── Token registration with server ──────────────────────────────────────
     useEffect(() => {
         if (!hasSession || !session?.user.id || !expoPushToken) {
             return;
@@ -293,6 +330,7 @@ const AppLayout = () => {
             });
     }, [expoPushToken, hasSession, session?.user.id]);
 
+    // ─── Notification listeners (notifee + FCM) ───────────────────────────────
     useEffect(() => {
         const syncFromNotification = () => {
             void syncMobileCache().catch((error) => {
@@ -300,18 +338,21 @@ const AppLayout = () => {
             });
         };
 
-        const handleNotificationResponse = (
-            response: Notifications.NotificationResponse
-        ) => {
-            const identifier = response.notification.request.identifier;
-            if (handledNotificationResponseRef.current === identifier) {
+        const handleNotificationPress = (data: Record<string, any>) => {
+            const identifier =
+                optionalString(data?.messageId) ??
+                optionalString(data?.message_id) ??
+                getNotificationChatId(data);
+
+            if (identifier && handledNotificationResponseRef.current === identifier) {
                 return;
             }
 
-            handledNotificationResponseRef.current = identifier;
+            if (identifier) {
+                handledNotificationResponseRef.current = identifier;
+            }
 
-            const conversationId = getNotificationConversationId(response.notification);
-
+            const conversationId = getNotificationChatId(data);
             if (conversationId) {
                 openChatFromNotification(conversationId);
             }
@@ -319,32 +360,61 @@ const AppLayout = () => {
             syncFromNotification();
         };
 
-        Notifications.getLastNotificationResponseAsync()
-            .then((response) => {
-                if (response) {
-                    handleNotificationResponse(response);
-                }
-            })
-            .catch((error) => {
-                console.log('Failed to read last notification response:', error);
-            });
-
-        const subscription = Notifications.addNotificationReceivedListener(
-            (notification) => {
-                setNotification(notification);
-                syncFromNotification();
+        const handleNotificationUrl = (url: string | null) => {
+            if (!url) {
+                return;
             }
-        );
 
-        const responseSubscription = Notifications.addNotificationResponseReceivedListener(
-            handleNotificationResponse
-        );
+            const conversationId = getChatIdFromUrl(url);
+            if (!conversationId) {
+                return;
+            }
+
+            if (handledNotificationResponseRef.current === url) {
+                return;
+            }
+
+            handledNotificationResponseRef.current = url;
+            openChatFromNotification(conversationId);
+            syncFromNotification();
+        };
+
+        // 1️⃣ App opened from a killed state via notification tap
+        notifee.getInitialNotification().then((initialNotification) => {
+            if (initialNotification) {
+                const data = initialNotification.notification.data ?? {};
+                handleNotificationPress(data);
+            }
+        });
+
+        Linking.getInitialURL().then(handleNotificationUrl);
+
+        // 2️⃣ Foreground FCM message → display via notifee
+        const unsubscribeFCM = onMessage(firebaseMessaging, async (remoteMessage) => {
+            console.log('[push] foreground FCM message received');
+            setNotification(remoteMessage); // keep store updated
+            await displayRemoteMessageNotification(remoteMessage);
+            syncFromNotification();
+        });
+
+        // 3️⃣ Foreground notification tap
+        const unsubscribeNotifee = notifee.onForegroundEvent(({ type, detail }) => {
+            if (type === EventType.PRESS) {
+                const data = detail.notification?.data ?? {};
+                handleNotificationPress(data);
+            }
+        });
+
+        const linkingSubscription = Linking.addEventListener('url', ({ url }) => {
+            handleNotificationUrl(url);
+        });
 
         return () => {
-            subscription.remove();
-            responseSubscription.remove();
+            unsubscribeFCM();
+            unsubscribeNotifee();
+            linkingSubscription.remove();
         };
-    }, [getNotificationConversationId, openChatFromNotification, setNotification, syncMobileCache]);
+    }, [openChatFromNotification, setNotification, syncMobileCache]);
 
     if (error) {
         return (

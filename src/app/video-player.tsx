@@ -1,6 +1,7 @@
 import { ThemedText } from '@/components/themed-text'
 import { ThemedView } from '@/components/themed-view'
 import { Colors } from '@/constants/theme'
+import { saveMediaToGallery } from '@/helper/download-media'
 import Slider from '@react-native-community/slider'
 import { router, useLocalSearchParams } from 'expo-router'
 import { useVideoPlayer, VideoView } from 'expo-video'
@@ -30,8 +31,6 @@ const MIN_SCALE = 1
 const MAX_SCALE = 5
 const DOUBLE_TAP_SCALE = 2.5
 const getParamValue = (value?: string | string[]) => Array.isArray(value) ? value[0] : value ?? ''
-const getMediaSharedTransitionTag = (mediaType: 'image' | 'video', messageId: string) =>
-    `${mediaType}-preview-${messageId}`
 
 const formatTime = (seconds: number) => {
     const m = Math.floor(seconds / 60)
@@ -293,7 +292,7 @@ const VideoPlayer = () => {
                                     </ThemedView>
                                 }
                             />
-                            <Appbar.Action icon="progress-download" onPress={() => { }} color={colors.text} />
+                            <Appbar.Action icon="progress-download" onPress={() => saveMediaToGallery(playerVideoUrl)} color={colors.text} />
                         </Appbar.Header>
                     </Animated.View>
                 )}

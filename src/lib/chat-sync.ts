@@ -18,6 +18,7 @@ import {
 import { materializeMessageMedia } from "@/lib/message-media";
 import type { ChatItemType } from "@/types/chats.type";
 import type { Message } from "@/types/messages";
+import { authClient } from "./auth-client";
 
 export const MESSAGE_PAGE_SIZE = 20;
 
@@ -335,32 +336,26 @@ export const preloadUserChatsAndMessages = syncMobileChatsAndMessages;
 
 export async function registerMobilePushToken({
     token,
-    cookies,
 }: PushTokenParams) {
     if (!token) {
         return;
     }
 
-    const response = await fetch(`${API_BASE_URL}/api/mobile/push-token`, {
-        method: "POST",
-        headers: getAuthHeaders(cookies),
-        credentials: "omit",
-        body: JSON.stringify({ token }),
+    const { error } = await authClient.updateUser({
+        yhlaPushToken: token,
     });
 
-    if (!response.ok) {
-        throw new Error("Failed to register push token");
+    if (error) {
+        throw new Error(error.message || "Failed to register push token");
     }
 }
 
-export async function deleteMobilePushToken({ cookies }: PushTokenParams) {
-    const response = await fetch(`${API_BASE_URL}/api/mobile/push-token`, {
-        method: "DELETE",
-        headers: getAuthHeaders(cookies),
-        credentials: "omit",
+export async function deleteMobilePushToken(_params: PushTokenParams) {
+    const { error } = await authClient.updateUser({
+        yhlaPushToken: "",
     });
 
-    if (!response.ok) {
-        throw new Error("Failed to delete push token");
+    if (error) {
+        throw new Error(error.message || "Failed to delete push token");
     }
 }

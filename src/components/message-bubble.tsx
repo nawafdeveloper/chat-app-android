@@ -37,7 +37,11 @@ type BubbleProps = {
     selectedCount: number;
     onLongPress: (messageId: string) => void;
     onPress: (messageId: string) => void;
-    handleReply: (replyTo: string, replyMsg: string) => void;
+    handleReply: (
+        replyTo: string, 
+        replyMsg: string | null, 
+        replayMedia: string | null | undefined, 
+        replyMediaType: 'photo' | 'video' | 'voice' | 'file' | 'contact' | 'location' | null) => void;
 };
 
 const DARK = {
@@ -1018,7 +1022,7 @@ function Bubble({ message, currentUserId, isDark, showTail = true, isSelected, s
                     : MAX_SWIPE_TRANSLATION + (finalTranslation - MAX_SWIPE_TRANSLATION) * SWIPE_RESISTANCE;
 
                 if (finalResistedTranslation >= MAX_SWIPE_TRANSLATION) {
-                    runOnJS(handleReply)(senderDisplayName, message_text_content || '');
+                    runOnJS(handleReply)(senderDisplayName, message_text_content, media_preview_url, attached_media);
                 }
 
                 hasTriggered.value = false;

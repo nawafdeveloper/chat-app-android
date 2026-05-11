@@ -1,55 +1,88 @@
-import Constants from 'expo-constants';
-import * as Device from 'expo-device';
-import * as Notifications from 'expo-notifications';
-import { Platform } from 'react-native';
+import notifee, { AndroidImportance } from "@notifee/react-native";
+import {
+    AuthorizationStatus,
+    getMessaging,
+    getToken,
+    isDeviceRegisteredForRemoteMessages,
+    registerDeviceForRemoteMessages,
+    requestPermission,
+} from "@react-native-firebase/messaging";
+import { PermissionsAndroid, Platform } from "react-native";
 
-function handleRegistrationError(errorMessage: string) {
-    alert(errorMessage);
-    throw new Error(errorMessage);
+const MESSAGES_CHANNEL_ID = "messages";
+const firebaseMessaging = getMessaging();
+
+async function ensureAndroidNotificationPermission() {
+    if (Platform.OS !== "android") {
+        return true;
+    }
+
+    if (Platform.Version < 33) {
+        return true;
+    }
+
+    const permission = PermissionsAndroid.PERMISSIONS.POST_NOTIFICATIONS;
+    const alreadyGranted = await PermissionsAndroid.check(permission);
+
+    if (alreadyGranted) {
+        return true;
+    }
+
+    const result = await PermissionsAndroid.request(permission);
+    return result === PermissionsAndroid.RESULTS.GRANTED;
 }
 
-export async function registerForPushNotificationsAsync() {
-    if (Platform.OS === 'android') {
-        await Notifications.setNotificationChannelAsync('default', {
-            name: 'default',
-            importance: Notifications.AndroidImportance.MAX,
-            vibrationPattern: [0, 250, 250, 250],
-            lightColor: '#FF231F7C',
-        });
+async function ensureIosNotificationPermission() {
+    if (Platform.OS !== "ios") {
+        return true;
     }
 
-    if (Device.isDevice) {
-        const { status } = (await Notifications.getPermissionsAsync()) as { status: string };
-        let finalStatus = status;
+    const authStatus = await requestPermission(firebaseMessaging);
+    return (
+        authStatus === AuthorizationStatus.AUTHORIZED ||
+        authStatus === AuthorizationStatus.PROVISIONAL
+    );
+}
 
-        if (finalStatus !== 'granted') {
-            const { status: requestedStatus } = (await Notifications.requestPermissionsAsync()) as { status: string };
-            finalStatus = requestedStatus;
-        }
-
-        if (finalStatus !== 'granted') {
-            handleRegistrationError('Permission not granted to get push token for push notification!');
-            return;
-        }
-
-        const projectId =
-            Constants?.expoConfig?.extra?.eas?.projectId ?? Constants?.easConfig?.projectId;
-        if (!projectId) {
-            handleRegistrationError('Project ID not found');
-            return;
-        }
-        try {
-            const pushTokenString = (
-                await Notifications.getExpoPushTokenAsync({
-                    projectId,
-                })
-            ).data;
-            console.log(pushTokenString);
-            return pushTokenString;
-        } catch (e: unknown) {
-            handleRegistrationError(`${e}`);
-        }
-    } else {
-        handleRegistrationError('Must use physical device for push notifications');
+async function ensureMessagesChannel() {
+    if (Platform.OS !== "android") {
+        return;
     }
+
+    await notifee.createChannel({
+        id: MESSAGES_CHANNEL_ID,
+        name: "Messages",
+        importance: AndroidImportance.HIGH,
+        sound: "default",
+        vibration: true,
+    });
+
+    console.log("[push-client] Android channel ready");
+}
+
+export async function registerForPushNotificationsAsync(): Promise<string | null> {
+    const enabled =
+        (await ensureAndroidNotificationPermission()) &&
+        (await ensureIosNotificationPermission());
+
+    if (!enabled) {
+        console.log("[push-client] Permission not granted");
+        throw new Error("Permission not granted");
+    }
+
+    await ensureMessagesChannel();
+
+    if (Platform.OS === "ios" && !isDeviceRegisteredForRemoteMessages(firebaseMessaging)) {
+        await registerDeviceForRemoteMessages(firebaseMessaging);
+    }
+
+    const fcmToken = await getToken(firebaseMessaging);
+
+    if (!fcmToken) {
+        console.log("[push-client] FCM token unavailable");
+        return null;
+    }
+
+    console.log("[push-client] FCM token:", fcmToken);
+    return fcmToken;
 }
