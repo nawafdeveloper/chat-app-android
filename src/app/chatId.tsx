@@ -317,6 +317,7 @@ const ChatId = () => {
                                             iconColor={avatarTint}
                                             backgroundColor={colors.card}
                                             textColor={avatarTint}
+                                            chatType={activeChat?.chat_type}
                                         />
                                         <ThemedText numberOfLines={1}>{chatTitle}</ThemedText>
                                     </ThemedView>

@@ -218,6 +218,7 @@ const ChatItem = ({
                     iconColor={avatarText}
                     backgroundColor={avatarBg}
                     textColor={avatarText}
+                    chatType={item.chat_type}
                 />
 
                 <View style={styles.chatBody}>

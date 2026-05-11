@@ -16,6 +16,7 @@ type Props = {
     iconColor?: string;
     backgroundColor?: string;
     textColor?: string;
+    chatType: "single" | "group" | undefined;
 };
 
 export function ChatAvatar({

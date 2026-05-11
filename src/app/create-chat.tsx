@@ -16,6 +16,7 @@ const ContactItem = memo(({ c, bgColor }: { c: Contact; bgColor: string }) => (
             imageUrl={c.contact_avatar}
             displayName={`${c.contact_first_name} ${c.contact_second_name}`}
             style={styles.avatar}
+            chatType={undefined}
         />
         <ThemedText>
             {`${c.contact_first_name} ${c.contact_second_name}`.trim() || c.contact_number}

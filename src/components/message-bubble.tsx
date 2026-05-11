@@ -14,16 +14,17 @@ import Slider from "@react-native-community/slider";
 import { useAudioPlayer, useAudioPlayerStatus } from "expo-audio";
 import * as Haptics from 'expo-haptics';
 import { Image } from "expo-image";
-import { router } from "expo-router";
-import { useVideoPlayer, type VideoThumbnail } from "expo-video";
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { ActivityIndicator, Pressable, StyleSheet, Text, TouchableWithoutFeedback, View } from "react-native";
+import { ActivityIndicator, Linking, Pressable, StyleSheet, Text, TouchableWithoutFeedback, View } from "react-native";
 import { Gesture, GestureDetector } from "react-native-gesture-handler";
 import { Icon, IconButton, TouchableRipple } from "react-native-paper";
 import Animated, { Extrapolation, interpolate, useAnimatedStyle, useSharedValue, withSpring } from "react-native-reanimated";
 import { Path, Svg } from 'react-native-svg';
 import { runOnJS } from "react-native-worklets";
 import { ChatAvatar } from "./decrypted-chat-avatar";
+import { DecryptedMediaImage } from "./decrypted-image-preview";
+import { VideoMessagePreview } from "./decrypted-video-image-preview";
+import { detectAndRenderLinks } from "./message-link-url-detector";
 import { ThemedText } from "./themed-text";
 import { ThemedView } from "./themed-view";
 import { DarkFileIcon, LightFileIcon } from "./ui/file-icons";
@@ -38,9 +39,9 @@ type BubbleProps = {
     onLongPress: (messageId: string) => void;
     onPress: (messageId: string) => void;
     handleReply: (
-        replyTo: string, 
-        replyMsg: string | null, 
-        replayMedia: string | null | undefined, 
+        replyTo: string,
+        replyMsg: string | null,
+        replayMedia: string | null | undefined,
         replyMediaType: 'photo' | 'video' | 'voice' | 'file' | 'contact' | 'location' | null) => void;
 };
 
@@ -77,8 +78,6 @@ const MAX_SWIPE_TRANSLATION = 56;
 const SWIPE_HARD_LIMIT = 72;
 const SWIPE_RESISTANCE = 0.18;
 const AnimatedIconButton = Animated.createAnimatedComponent(IconButton);
-const getMediaSharedTransitionTag = (mediaType: "image" | "video", messageId: string) =>
-    `${mediaType}-preview-${messageId}`;
 
 type ActiveVoicePlayback = {
     messageId: string;
@@ -88,6 +87,23 @@ type ActiveVoicePlayback = {
 
 let activeVoicePlayback: ActiveVoicePlayback | null = null;
 let latestVoicePlayRequestId: string | null = null;
+
+const formatAudioTime = (seconds?: number | null) => {
+    if (!seconds || !Number.isFinite(seconds) || seconds < 0) {
+        return "0:00";
+    }
+
+    const roundedSeconds = Math.floor(seconds);
+    const hours = Math.floor(roundedSeconds / 3600);
+    const minutes = Math.floor((roundedSeconds % 3600) / 60);
+    const remainingSeconds = roundedSeconds % 60;
+
+    if (hours > 0) {
+        return `${hours}:${minutes.toString().padStart(2, "0")}:${remainingSeconds.toString().padStart(2, "0")}`;
+    }
+
+    return `${minutes}:${remainingSeconds.toString().padStart(2, "0")}`;
+};
 
 const stopActiveVoicePlayback = (exceptMessageId?: string) => {
     if (!activeVoicePlayback || activeVoicePlayback.messageId === exceptMessageId) {
@@ -143,23 +159,6 @@ const formatBytes = (bytes?: number | null) => {
     return `${formatted} ${units[unitIndex]}`;
 };
 
-const formatAudioTime = (seconds?: number | null) => {
-    if (!seconds || !Number.isFinite(seconds) || seconds < 0) {
-        return "0:00";
-    }
-
-    const roundedSeconds = Math.floor(seconds);
-    const hours = Math.floor(roundedSeconds / 3600);
-    const minutes = Math.floor((roundedSeconds % 3600) / 60);
-    const remainingSeconds = roundedSeconds % 60;
-
-    if (hours > 0) {
-        return `${hours}:${minutes.toString().padStart(2, "0")}:${remainingSeconds.toString().padStart(2, "0")}`;
-    }
-
-    return `${minutes}:${remainingSeconds.toString().padStart(2, "0")}`;
-};
-
 const getFileExtension = (
     fileName?: string | null,
     mimeType?: string | null
@@ -183,228 +182,6 @@ const getAspectRatio = (message: Message) => {
 
     return 3 / 4;
 };
-
-function DecryptedMediaImage({
-    source,
-    previewSource,
-    sourceIsPreview = false,
-    aspectRatio,
-    isDark,
-    showPlayIcon = false,
-    fallbackIcon = "image",
-    containerStyle,
-    showDownloadOverlay = false,
-    isDownloading = false,
-    downloadDetails,
-    onDownload,
-    message_id,
-    senderName,
-    timeStamp,
-    onPreviewPress,
-    sharedTransitionTag
-}: {
-    source?: string | null;
-    previewSource?: string | null;
-    sourceIsPreview?: boolean;
-    aspectRatio: number;
-    isDark: boolean;
-    showPlayIcon?: boolean;
-    fallbackIcon?: "image" | "video";
-    containerStyle?: object;
-    showDownloadOverlay?: boolean;
-    isDownloading?: boolean;
-    downloadDetails?: string | null;
-    onDownload?: () => void;
-    message_id: string;
-    senderName: string;
-    timeStamp: string;
-    onPreviewPress?: (() => void) | null;
-    sharedTransitionTag?: string;
-}) {
-    const [resolvedUri, setResolvedUri] = useState<string | null>(null);
-    const [resolvedPreviewUri, setResolvedPreviewUri] = useState<string | null>(null);
-    const [failed, setFailed] = useState(false);
-    const [isDecrypting, setIsDecrypting] = useState(false);
-
-    useEffect(() => {
-        let mounted = true;
-
-        setResolvedUri(null);
-        setResolvedPreviewUri(null);
-        setFailed(false);
-        setIsDecrypting(Boolean(source || previewSource));
-
-        if (!source && !previewSource) {
-            return () => {
-                mounted = false;
-            };
-        }
-
-        const load = async () => {
-            let hasDisplayableMedia = false;
-
-            try {
-                if (previewSource) {
-                    const previewUri = await fetchAndDecryptMessageMedia({
-                        source: previewSource,
-                        isPreview: true,
-                        fallbackExtension: "jpg",
-                    });
-
-                    if (mounted) {
-                        setResolvedPreviewUri(previewUri ?? null);
-                    }
-                    hasDisplayableMedia = Boolean(previewUri);
-                }
-            } catch {
-                if (mounted && previewSource) {
-                    setResolvedPreviewUri(previewSource);
-                    hasDisplayableMedia = true;
-                }
-            }
-
-            try {
-                if (source) {
-                    const uri = await fetchAndDecryptMessageMedia({
-                        source,
-                        isPreview: sourceIsPreview,
-                        fallbackExtension: "jpg",
-                    });
-
-                    if (mounted) {
-                        setResolvedUri(uri ?? null);
-                    }
-                    hasDisplayableMedia = Boolean(uri) || hasDisplayableMedia;
-                }
-            } catch {
-                if (mounted && !hasDisplayableMedia) {
-                    setFailed(true);
-                }
-            } finally {
-                if (mounted) {
-                    setIsDecrypting(false);
-                }
-            }
-        };
-
-        void load();
-
-        return () => {
-            mounted = false;
-        };
-    }, [previewSource, source, sourceIsPreview]);
-
-    const displayUri = resolvedUri ?? resolvedPreviewUri;
-    const shouldBlurPreview = Boolean(!resolvedUri && resolvedPreviewUri);
-    const transitionTag = sharedTransitionTag ?? getMediaSharedTransitionTag("image", message_id);
-    const handlePreviewPress = onPreviewPress === undefined ? (() => {
-        router.push({
-            pathname: '/image-preview',
-            params: {
-                imageUrl: displayUri ?? "",
-                messageId: message_id,
-                senderName,
-                timeStamp,
-            },
-        });
-    }) : onPreviewPress;
-
-    if (!displayUri || failed) {
-        return (
-            <View
-                style={[
-                    styles.mediaPlaceholder,
-                    {
-                        aspectRatio,
-                        backgroundColor: isDark ? "#182229" : "#edf2f7",
-                    },
-                    containerStyle,
-                ]}
-            >
-                {showDownloadOverlay ? (
-                    <Pressable
-                        onPress={isDownloading ? undefined : onDownload}
-                        style={styles.mediaPlaceholderDownload}
-                    >
-                        {isDownloading ? (
-                            <ActivityIndicator size="small" color="#ffffff" />
-                        ) : (
-                            <Icon source="download" color="#ffffff" size={28} />
-                        )}
-                        <ThemedText style={styles.mediaDownloadTitle}>
-                            {isDownloading ? "Downloading" : "Download"}
-                        </ThemedText>
-                    </Pressable>
-                ) : !failed ? (
-                    <ActivityIndicator size="small" color="#25D366" />
-                ) : (
-                    <Icon
-                        source={fallbackIcon === "video" ? "video-off-outline" : "image-broken-variant"}
-                        color={isDark ? "#8E9499" : "#64748b"}
-                        size={28}
-                    />
-                )}
-            </View>
-        );
-    }
-
-    return (
-        <Pressable onPress={handlePreviewPress ?? undefined} disabled={!handlePreviewPress}>
-            <Animated.View
-                sharedTransitionTag={transitionTag}
-                style={[styles.mediaWrapper, { aspectRatio }, containerStyle,]}
-            >
-
-                <Animated.Image
-                    source={{ uri: displayUri }}
-                    resizeMode="cover"
-                    blurRadius={!resolvedUri && resolvedPreviewUri ? 1 : 0}
-                    style={[
-                        styles.mediaPhoto,
-                        shouldBlurPreview && styles.mediaPhotoBlurred,
-                    ]}
-                />
-
-                {isDecrypting && (
-                    <View style={styles.mediaDecryptingOverlay}>
-                        <ActivityIndicator size="small" color="#ffffff" />
-                    </View>
-                )}
-                {showPlayIcon && shouldBlurPreview && (
-                    <View style={styles.playOverlay}>
-                        <View style={{ padding: 10, borderRadius: 99, backgroundColor: 'rgba(255,255,255,0.2)' }}>
-                            <Icon source="play" color="#ffffff" size={32} />
-                        </View>
-                    </View>
-                )}
-                {showDownloadOverlay && (
-                    <Pressable
-                        style={styles.playOverlay}
-                        onPress={isDownloading ? undefined : onDownload}
-                    >
-                        <View style={styles.mediaDownloadButton}>
-                            {isDownloading ? (
-                                <ActivityIndicator size="small" color="#ffffff" />
-                            ) : (
-                                <Icon source="download" color="#ffffff" size={32} />
-                            )}
-                            <ThemedView style={styles.mediaDownloadTextContainer}>
-                                <ThemedText style={styles.mediaDownloadTitle}>
-                                    {isDownloading ? "Downloading" : "Download"}
-                                </ThemedText>
-                                {downloadDetails ? (
-                                    <ThemedText style={styles.mediaDownloadDetails}>
-                                        {downloadDetails}
-                                    </ThemedText>
-                                ) : null}
-                            </ThemedView>
-                        </View>
-                    </Pressable>
-                )}
-            </Animated.View>
-        </Pressable>
-    );
-}
 
 const API_BASE = "https://halabakk-web.nawaf-alhasosah.workers.dev";
 
@@ -440,119 +217,6 @@ function ReplyPhotoThumbnail({ url, isDark }: { url?: string | null; isDark: boo
     );
 }
 
-function VideoMessagePreview({
-    localVideoUri,
-    source,
-    previewSource,
-    aspectRatio,
-    isDark,
-    showDownloadOverlay,
-    isDownloading,
-    downloadDetails,
-    onDownload,
-    message_id,
-    senderName,
-    timeStamp
-}: {
-    localVideoUri?: string | null;
-    source?: string | null;
-    previewSource?: string | null;
-    aspectRatio: number;
-    isDark: boolean;
-    showDownloadOverlay: boolean;
-    isDownloading: boolean;
-    downloadDetails?: string | null;
-    onDownload?: () => void;
-    message_id: string;
-    senderName: string;
-    timeStamp: string;
-}) {
-    const player = useVideoPlayer(
-        localVideoUri ? { uri: localVideoUri } : null
-    );
-    const videoDuration = formatAudioTime(player.duration ?? 0)
-    const [thumbnail, setThumbnail] = useState<VideoThumbnail | null>(null);
-
-    useEffect(() => {
-        let mounted = true;
-
-        setThumbnail(null);
-        if (!localVideoUri) {
-            return () => {
-                mounted = false;
-            };
-        }
-
-        player.generateThumbnailsAsync(0, { maxWidth: 1280 })
-            .then((thumbnails) => {
-                if (mounted) {
-                    setThumbnail(thumbnails[0] ?? null);
-                }
-            })
-            .catch((error) => {
-                console.log("Failed to generate video thumbnail:", error);
-            });
-
-        return () => {
-            mounted = false;
-        };
-    }, [localVideoUri, player]);
-
-    if (thumbnail) {
-        return (
-            <Pressable onPress={() => router.push({ pathname: '/video-player', params: { videoUrl: localVideoUri, messageId: message_id, senderName: senderName, timeStamp: timeStamp } })}>
-                <Animated.View
-                    sharedTransitionTag={getMediaSharedTransitionTag("video", message_id)}
-                    style={[styles.mediaWrapper, { aspectRatio }]}>
-                    <Image
-                        source={thumbnail}
-                        contentFit="cover"
-                        style={styles.mediaPhoto}
-                    />
-                    <View style={styles.playOverlay}>
-                        <View style={styles.videoPlayBadge}>
-                            <Icon source="play" color="#ffffff" size={32} />
-                        </View>
-                        <ThemedView style={{ flexDirection: 'row', alignItems: 'center', gap: 6, backgroundColor: 'transparent', position: 'absolute', left: 8, bottom: 8, zIndex: 1 }}>
-                            <Icon source="video" color="#ffffff" size={20} />
-                            <ThemedText style={{ fontSize: 12, fontWeight: '500' }}>{videoDuration}</ThemedText>
-                        </ThemedView>
-                    </View>
-                </Animated.View>
-            </Pressable>
-        );
-    }
-
-    return (
-        <DecryptedMediaImage
-            source={source}
-            previewSource={previewSource}
-            sourceIsPreview
-            aspectRatio={aspectRatio}
-            isDark={isDark}
-            showPlayIcon
-            fallbackIcon="video"
-            showDownloadOverlay={showDownloadOverlay}
-            isDownloading={isDownloading}
-            downloadDetails={downloadDetails}
-            onDownload={onDownload}
-            message_id={message_id}
-            senderName={senderName}
-            timeStamp={timeStamp}
-            sharedTransitionTag={getMediaSharedTransitionTag("video", message_id)}
-            onPreviewPress={localVideoUri ? () => router.push({
-                pathname: '/video-player',
-                params: {
-                    videoUrl: localVideoUri,
-                    messageId: message_id,
-                    senderName,
-                    timeStamp,
-                },
-            }) : null}
-        />
-    );
-}
-
 function VoiceMessagePreview({
     messageId,
     audioSource,
@@ -563,7 +227,8 @@ function VoiceMessagePreview({
     displayName,
     contactPhone,
     iconColor,
-    textColor
+    textColor,
+    chatType
 }: {
     messageId: string;
     audioSource?: string | null;
@@ -575,6 +240,7 @@ function VoiceMessagePreview({
     contactPhone: string | null;
     iconColor: string | undefined;
     textColor: string;
+    chatType: "single" | "group" | undefined;
 }) {
     const player = useAudioPlayer(null, { updateInterval: 250 });
     const status = useAudioPlayerStatus(player);
@@ -779,6 +445,7 @@ function VoiceMessagePreview({
                     iconColor={iconColor}
                     backgroundColor={isDark ? "#182229" : "#e8f0ef"}
                     textColor={textColor}
+                    chatType={chatType}
                 />
                 <ThemedView style={{ position: 'absolute', backgroundColor: 'transparent', bottom: -6, right: -9, zIndex: 1 }}>
                     <Icon
@@ -1108,6 +775,7 @@ function Bubble({ message, currentUserId, isDark, showTail = true, isSelected, s
                                         iconColor={groupSenderAccent}
                                         backgroundColor={isDark ? "#182229" : "#e8f0ef"}
                                         textColor={groupSenderAccent}
+                                        chatType={activeChat.chat_type}
                                     />
                                 ) : (
                                     <View style={styles.groupSenderAvatarSpacer} />
@@ -1173,18 +841,26 @@ function Bubble({ message, currentUserId, isDark, showTail = true, isSelected, s
                                     </ThemedView>
                                 )}
                                 {open_graph_data && (
-                                    <ThemedView style={[styles.openGraphContainer, { backgroundColor: sent ? theme.cardSent : theme.cardReceived }]}>
-                                        <ThemedText style={styles.openGraphTitle}>{open_graph_data.og_title}</ThemedText>
-                                        <ThemedText numberOfLines={3} ellipsizeMode="tail" style={[styles.openGraphDescription, { color: colors.textSecondary }]}>{open_graph_data.og_description}</ThemedText>
+                                    <Pressable
+                                        onPress={() => {
+                                            if (open_graph_data.og_url?.startsWith('http://') || open_graph_data.og_url?.startsWith('https://')) {
+                                                Linking.openURL(open_graph_data.og_url);
+                                            } else {
+                                                Linking.openURL(`https://${open_graph_data.og_url}`);
+                                            }
+                                        }}
+                                        style={[styles.openGraphContainer, { backgroundColor: sent ? theme.cardSent : theme.cardReceived }]}>
+                                        <ThemedText style={styles.openGraphTitle} numberOfLines={1}>{open_graph_data.og_title}</ThemedText>
+                                        <ThemedText numberOfLines={2} ellipsizeMode="tail" style={[styles.openGraphDescription, { color: colors.textSecondary }]}>{open_graph_data.og_description}</ThemedText>
                                         <ThemedView style={styles.openGraphLinkContainer}>
                                             <Icon
                                                 source="link"
                                                 color={colors.textSecondary}
                                                 size={13}
                                             />
-                                            <ThemedText style={[styles.openGraphLink, { color: colors.textSecondary }]}>{open_graph_data.og_url}</ThemedText>
+                                            <ThemedText numberOfLines={1} ellipsizeMode="tail" style={[styles.openGraphLink, { color: colors.textSecondary }]}>{open_graph_data.og_url}</ThemedText>
                                         </ThemedView>
-                                    </ThemedView>
+                                    </Pressable>
                                 )}
                                 {attached_media === 'contact' && (
                                     <ThemedView style={[styles.contactCard, { backgroundColor: sent ? theme.cardSent : theme.cardReceived }]}>
@@ -1198,6 +874,7 @@ function Bubble({ message, currentUserId, isDark, showTail = true, isSelected, s
                                                 iconColor={colors.textSecondary}
                                                 backgroundColor={sent ? theme.cardSent : theme.cardReceived}
                                                 textColor={colors.text}
+                                                chatType={activeChat?.chat_type}
                                             />
                                             <ThemedView style={styles.contactTextContainer}>
                                                 <ThemedText numberOfLines={1}>{sharedContactName}</ThemedText>
@@ -1263,6 +940,7 @@ function Bubble({ message, currentUserId, isDark, showTail = true, isSelected, s
                                         message_id={message_id}
                                         senderName={senderDisplayName}
                                         timeStamp={formattedTime}
+                                        formatAudioTime={formatAudioTime}
                                     />
                                 )}
                                 {attached_media === 'voice' && (
@@ -1277,6 +955,7 @@ function Bubble({ message, currentUserId, isDark, showTail = true, isSelected, s
                                         contactPhone={senderPhone}
                                         iconColor={groupSenderAccent}
                                         textColor={groupSenderAccent}
+                                        chatType={activeChat?.chat_type}
                                     />
                                 )}
                                 {attached_media === 'location' && location && (
@@ -1321,7 +1000,11 @@ function Bubble({ message, currentUserId, isDark, showTail = true, isSelected, s
                                         styles.messageText,
                                         { color: sent ? theme.sentText : theme.receivedText },
                                     ]}>
-                                        {message_text_content}
+                                        {detectAndRenderLinks(
+                                            message_text_content,
+                                            { color: sent ? theme.sentText : theme.receivedText },
+                                            '#25D366'
+                                        )}
                                     </Text>
                                 )}
                                 <View style={styles.metaRow}>
@@ -1572,7 +1255,8 @@ const styles = StyleSheet.create({
         flexDirection: 'row',
         alignItems: 'center',
         gap: 6,
-        backgroundColor: 'transparent'
+        backgroundColor: 'transparent',
+        maxWidth: '80%'
     },
     openGraphLink: {
         fontSize: 13,
@@ -1618,78 +1302,8 @@ const styles = StyleSheet.create({
         fontSize: 12,
         lineHeight: 14,
     },
-    mediaWrapper: {
-        width: '100%',
-        borderRadius: 6,
-        marginBottom: 4,
-        overflow: 'hidden',
-        position: 'relative',
-    },
-    mediaPhoto: {
-        width: '100%',
-        height: '100%',
-    },
     mediaPhotoBlurred: {
         transform: [{ scale: 1.04 }],
-    },
-    mediaDecryptingOverlay: {
-        ...StyleSheet.absoluteFillObject,
-        justifyContent: 'center',
-        alignItems: 'center',
-        backgroundColor: 'rgba(0,0,0,0.16)',
-    },
-    mediaPlaceholder: {
-        width: '100%',
-        borderRadius: 6,
-        marginBottom: 4,
-        justifyContent: 'center',
-        alignItems: 'center',
-    },
-    mediaPlaceholderDownload: {
-        flexDirection: 'row',
-        alignItems: 'center',
-        gap: 8,
-        paddingHorizontal: 14,
-        paddingVertical: 10,
-        borderRadius: 999,
-        backgroundColor: 'rgba(0,0,0,0.45)',
-    },
-    playOverlay: {
-        ...StyleSheet.absoluteFillObject,
-        justifyContent: 'center',
-        alignItems: 'center',
-        backgroundColor: 'rgba(0,0,0,0.3)',
-    },
-    videoPlayBadge: {
-        padding: 10,
-        borderRadius: 99,
-        backgroundColor: 'rgba(255,255,255,0.2)',
-    },
-    mediaDownloadButton: {
-        padding: 10,
-        paddingRight: 16,
-        borderRadius: 999,
-        backgroundColor: 'rgba(0,0,0,0.45)',
-        flexDirection: 'row',
-        alignItems: 'center',
-        gap: 10,
-    },
-    mediaDownloadTextContainer: {
-        flexDirection: 'column',
-        justifyContent: 'flex-start',
-        alignItems: 'flex-start',
-        backgroundColor: 'transparent',
-    },
-    mediaDownloadTitle: {
-        color: 'white',
-        fontWeight: '600',
-        lineHeight: 16,
-    },
-    mediaDownloadDetails: {
-        color: 'white',
-        fontSize: 12,
-        lineHeight: 14,
-        fontWeight: '400',
     },
     messageText: {
         fontSize: 15,
