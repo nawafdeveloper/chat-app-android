@@ -448,7 +448,9 @@ const AppLayout = () => {
                                 hasName={hasName}
                             />
                         </CryptoProvider>
-                        <StatusBar barStyle={colorScheme === 'dark' ? 'light-content' : 'dark-content'} />
+                        <StatusBar 
+                        barStyle={colorScheme === 'dark' ? 'light-content' : 'dark-content'}
+                         />
                     </ThemeProvider>
                 </PaperProvider>
             </TabletProvider>

@@ -8,6 +8,7 @@ import { ThemedView } from '@/components/themed-view';
 import VideoPreviewBeforeSent from '@/components/video-preview-before-sent';
 import { Colors } from '@/constants/theme';
 import { useChatMessages } from '@/hooks/use-chat-realtime';
+import { useSendChatMessage } from '@/hooks/use-send-chat-message';
 import { authClient } from '@/lib/auth-client';
 import { markDbChatRead } from '@/lib/upsert-db-chats';
 import { useImagePreviewBeforeSentStore } from '@/store/image-preview-before-sent';
@@ -45,9 +46,12 @@ const ChatId = () => {
 
     const selectedChatId = useActiveChatStore((state) => state.selectedChatId);
     const setSelectedChatId = useActiveChatStore((state) => state.setSelectedChatId);
+    const setReplyDraft = useActiveChatStore((state) => state.setReplyDraft);
+    const clearReplyDraft = useActiveChatStore((state) => state.clearReplyDraft);
     const activeChatId = routeChatId ?? selectedChatId;
     const currentUserId = session?.user.id ?? null;
     const { loadOlderMessages } = useChatMessages(activeChatId);
+    const { retryMessage } = useSendChatMessage();
     const activeChat = useActiveChatStore((state) =>
         activeChatId
             ? state.chats.find((chat) => chat.chat_id === activeChatId) ?? null
@@ -166,12 +170,22 @@ const ChatId = () => {
         });
     }, []);
 
+    const handleRetryMessage = useCallback((message: Message) => {
+        void retryMessage(message);
+    }, [retryMessage]);
+
     const handleReply = useCallback((
         replyTo: string,
         replyMsg: string | null,
         replayMedia: string | null | undefined,
-        replyMediaType: 'photo' | 'video' | 'voice' | 'file' | 'contact' | 'location' | null
+        replyMediaType: 'photo' | 'video' | 'voice' | 'file' | 'contact' | 'location' | null,
+        originalMessageId: string,
+        originalSenderUserId: string
     ) => {
+        if (!activeChatId) {
+            return;
+        }
+
         setReplyToUser('');
         setReplyMessage('');
         setReplyMediaType(null);
@@ -186,8 +200,15 @@ const ChatId = () => {
         if (replayMedia) {
             setReplyMediaUrl(replayMedia);
         }
+        setReplyDraft(activeChatId, {
+            original_message_id: originalMessageId,
+            original_sender_user_id: originalSenderUserId,
+            original_message_text: replyMsg,
+            original_attached_media: replyMediaType,
+            original_attached_media_url: replayMedia ?? null,
+        });
         inputRef.current?.focus();
-    }, []);
+    }, [activeChatId, setReplyDraft]);
 
     const handleClearReply = useCallback(() => {
         setIsReply(false);
@@ -195,7 +216,10 @@ const ChatId = () => {
         setReplyMessage('');
         setReplyMediaType(null);
         setReplyMediaUrl('');
-    }, []);
+        if (activeChatId) {
+            clearReplyDraft(activeChatId);
+        }
+    }, [activeChatId, clearReplyDraft]);
 
     const handleCancelSelectionMode = useCallback(() => {
         selectionModeRef.current = false;
@@ -243,12 +267,14 @@ const ChatId = () => {
             selectedCount={selectedCount}
             onLongPress={handleLongPress}
             onPress={handleBubblePress}
+            onRetryMessage={handleRetryMessage}
             handleReply={handleReply}
         />
     ), [
         currentUserId,
         handleBubblePress,
         handleLongPress,
+        handleRetryMessage,
         handleReply,
         isDark,
         selectedCount,

@@ -1,5 +1,11 @@
 import { Colors } from '@/constants/theme'
+import { useChatTyping } from '@/hooks/use-chat-typing'
+import { useSendChatMessage } from '@/hooks/use-send-chat-message'
+import { authClient } from '@/lib/auth-client'
 import { fetchAndDecryptMessageMedia } from '@/lib/message-media'
+import { findFirstUrl } from '@/lib/url-links'
+import { useActiveChatStore } from '@/store/use-active-chat-store'
+import { OpenGraphData } from '@/types/messages'
 import {
     AudioModule,
     RecordingPresets,
@@ -8,7 +14,7 @@ import {
     useAudioRecorderState,
 } from 'expo-audio'
 import { Image } from 'expo-image'
-import React, { useEffect, useState } from 'react'
+import React, { useEffect, useMemo, useState } from 'react'
 import { ActivityIndicator, StyleSheet, TextInput, useColorScheme, View } from 'react-native'
 import { IconButton } from 'react-native-paper'
 import { useSafeAreaInsets } from 'react-native-safe-area-context'
@@ -30,6 +36,30 @@ type Props = {
 
 const POLL_INTERVAL_MS = 80;
 const API_BASE = "https://halabakk-web.nawaf-alhasosah.workers.dev";
+
+async function fetchOpenGraphPreview(
+    url: string,
+    signal?: AbortSignal
+): Promise<OpenGraphData | null> {
+    const response = await fetch(
+        `${API_BASE}/api/open-graph?url=${encodeURIComponent(url)}`,
+        {
+            cache: "no-store",
+            signal,
+            credentials: "omit",
+        }
+    );
+
+    if (!response.ok) {
+        return null;
+    }
+
+    const payload = (await response.json()) as {
+        openGraphData?: OpenGraphData | null;
+    };
+
+    return payload.openGraphData ?? null;
+}
 
 function ReplyPhotoThumbnail({ url, isDark }: { url?: string | null; isDark: boolean }) {
     const [resolvedUri, setResolvedUri] = useState<string | null>(null);
@@ -64,18 +94,44 @@ function ReplyPhotoThumbnail({ url, isDark }: { url?: string | null; isDark: boo
 }
 
 const ChatInputContainer = ({ isReply, handleClearReply, replyMessage, replyToUser, replyMediaType, replyMediaUrl, inputRef, onVoiceMessageRecorded }: Props) => {
+    const { data: session } = authClient.useSession();
     const insets = useSafeAreaInsets();
     const scheme = useColorScheme();
     const colors = Colors[scheme === 'unspecified' ? 'light' : scheme ?? 'light']
 
-    const [message, setMessage] = useState('');
+    const { sendMessage, sendVoiceMessage } = useSendChatMessage();
+    const selectedChatId = useActiveChatStore((state) => state.selectedChatId);
+    const setDraft = useActiveChatStore((state) => state.setDraft);
+    const { handleDraftChange, stopTyping } = useChatTyping(selectedChatId);
+    const draftValue = useActiveChatStore((state) =>
+        selectedChatId ? state.draftsByChatId[selectedChatId] ?? "" : ""
+    );
+    const linkPreviewDisabled = Boolean(
+        (
+            session?.user as
+            | {
+                disableLinkPreview?: boolean | null;
+            }
+            | undefined
+        )?.disableLinkPreview
+    );
+    const draftFirstUrl = useMemo(() => findFirstUrl(draftValue), [draftValue]);
+
     const [attachmentVisible, setAttachmentVisible] = useState(false);
     const [isRecording, setIsRecording] = useState(false);
+    const [isSendingText, setIsSendingText] = useState(false);
+    const [isSendingVoice, setIsSendingVoice] = useState(false);
+    const [openGraphPreview, setOpenGraphPreview] =
+        useState<OpenGraphData | null>(null);
+    const [openGraphPreviewUrl, setOpenGraphPreviewUrl] = useState<string | null>(
+        null
+    );
 
     const audioRecorder = useAudioRecorder({
         ...RecordingPresets.HIGH_QUALITY,
         isMeteringEnabled: true,
     });
+    const canSendText = draftValue.trim().length > 0;
 
     const recorderState = useAudioRecorderState(audioRecorder, POLL_INTERVAL_MS);
 
@@ -94,17 +150,26 @@ const ChatInputContainer = ({ isReply, handleClearReply, replyMessage, replyToUs
     };
 
     const stopRecording = async () => {
-        if (!recorderState.isRecording) return;
+        if (!recorderState.isRecording || isSendingVoice) return;
 
         const durationMillis = recorderState.durationMillis;
         await audioRecorder.stop();
 
         const uri = audioRecorder.uri;
+        setIsRecording(false);
         if (uri) {
+            setIsSendingVoice(true);
+            try {
+                await sendVoiceMessage({
+                    uri,
+                    durationMillis,
+                    chatId: selectedChatId,
+                });
+            } finally {
+                setIsSendingVoice(false);
+            }
             onVoiceMessageRecorded?.(uri, durationMillis);
         }
-
-        setIsRecording(false);
     };
 
     const cancelRecording = async () => {
@@ -114,7 +179,78 @@ const ChatInputContainer = ({ isReply, handleClearReply, replyMessage, replyToUs
         setIsRecording(false);
     };
 
+    const resolveOpenGraphPreviewForSend = async () => {
+        if (linkPreviewDisabled || !draftFirstUrl) {
+            return null;
+        }
+
+        if (openGraphPreviewUrl === draftFirstUrl && openGraphPreview) {
+            return openGraphPreview;
+        }
+
+        try {
+            return await fetchOpenGraphPreview(draftFirstUrl);
+        } catch {
+            return null;
+        }
+    };
+
+    useEffect(() => {
+        if (linkPreviewDisabled || !draftFirstUrl) {
+            setOpenGraphPreview(null);
+            setOpenGraphPreviewUrl(null);
+            return;
+        }
+
+        let isActive = true;
+        const controller = new AbortController();
+        setOpenGraphPreview(null);
+        setOpenGraphPreviewUrl(draftFirstUrl);
+
+        const timer = window.setTimeout(() => {
+            void fetchOpenGraphPreview(draftFirstUrl, controller.signal)
+                .then((preview) => {
+                    if (isActive) {
+                        setOpenGraphPreview(preview);
+                    }
+                })
+                .catch(() => {
+                    if (isActive) {
+                        setOpenGraphPreview(null);
+                    }
+                })
+        }, 300);
+
+        return () => {
+            isActive = false;
+            window.clearTimeout(timer);
+            controller.abort();
+        };
+    }, [draftFirstUrl, linkPreviewDisabled]);
+
     const handleToggleAttachment = () => setAttachmentVisible(prev => !prev);
+
+    const handleSend = async () => {
+        if (!selectedChatId || !canSendText || isSendingText) {
+            return;
+        }
+
+        setIsSendingText(true);
+        try {
+            const openGraphData = await resolveOpenGraphPreviewForSend();
+            stopTyping(selectedChatId);
+            const sent = await sendMessage({
+                text: draftValue,
+                chatId: selectedChatId,
+                openGraphData,
+            });
+            if (sent && isReply) {
+                handleClearReply();
+            }
+        } finally {
+            setIsSendingText(false);
+        }
+    };
 
     return (
         <ThemedView style={styles.container}>
@@ -142,6 +278,7 @@ const ChatInputContainer = ({ isReply, handleClearReply, replyMessage, replyToUs
                             iconColor={colors.background}
                             containerColor="#25D366"
                             size={26}
+                            disabled={isSendingVoice}
                             style={{ margin: 0 }}
                             onPress={stopRecording}
                         />
@@ -179,8 +316,14 @@ const ChatInputContainer = ({ isReply, handleClearReply, replyMessage, replyToUs
                         <ThemedView style={[styles.inputContainer, { backgroundColor: scheme === 'dark' ? colors.card : colors.background }]}>
                             <TextInput
                                 ref={inputRef}
-                                value={message}
-                                onChangeText={(text) => setMessage(text)}
+                                value={draftValue}
+                                onChangeText={(text) => {
+                                    if (!selectedChatId) {
+                                        return;
+                                    }
+                                    setDraft(selectedChatId, text);
+                                    handleDraftChange(text);
+                                }}
                                 placeholder='Message'
                                 multiline
                                 style={[styles.input, { color: colors.text }]}
@@ -189,12 +332,12 @@ const ChatInputContainer = ({ isReply, handleClearReply, replyMessage, replyToUs
                                 selectionColor='#25D366'
                             />
                             <IconButton
-                                icon={message.length > 0 ? "plus" : "microphone-outline"}
+                                icon={canSendText ? "plus" : "microphone-outline"}
                                 iconColor={colors.text}
                                 size={28}
                                 style={{ margin: 0, marginBottom: 2 }}
                                 onPress={() => {
-                                    if (message.length > 0) {
+                                    if (canSendText) {
                                         handleToggleAttachment();
                                     } else {
                                         startRecording();
@@ -205,14 +348,15 @@ const ChatInputContainer = ({ isReply, handleClearReply, replyMessage, replyToUs
                     </ThemedView>
                     <IconButton
                         onPress={() => {
-                            if (message.length === 0) {
+                            if (!canSendText) {
                                 handleToggleAttachment();
                             } else {
-                                // send text message
+                                handleSend();
                             }
                         }}
-                        icon={message.length > 0 ? "send" : "plus"}
+                        icon={canSendText ? "send" : "plus"}
                         mode='contained'
+                        disabled={isSendingText}
                         iconColor={colors.background}
                         containerColor='#25D366'
                         size={28}

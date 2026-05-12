@@ -38,11 +38,15 @@ type BubbleProps = {
     selectedCount: number;
     onLongPress: (messageId: string) => void;
     onPress: (messageId: string) => void;
+    onRetryMessage?: (message: Message) => void;
     handleReply: (
         replyTo: string,
         replyMsg: string | null,
         replayMedia: string | null | undefined,
-        replyMediaType: 'photo' | 'video' | 'voice' | 'file' | 'contact' | 'location' | null) => void;
+        replyMediaType: 'photo' | 'video' | 'voice' | 'file' | 'contact' | 'location' | null,
+        originalMessageId: string,
+        originalSenderUserId: string
+    ) => void;
 };
 
 const DARK = {
@@ -515,7 +519,7 @@ const Tail = memo(function Tail({ color, sent }: { color: string; sent: boolean 
     );
 });
 
-function Bubble({ message, currentUserId, isDark, showTail = true, isSelected, selectedCount, onLongPress, onPress, handleReply }: BubbleProps) {
+function Bubble({ message, currentUserId, isDark, showTail = true, isSelected, selectedCount, onLongPress, onPress, onRetryMessage, handleReply }: BubbleProps) {
     const {
         message_id,
         sender_user_id,
@@ -551,6 +555,17 @@ function Bubble({ message, currentUserId, isDark, showTail = true, isSelected, s
     const theme = isDark ? DARK : LIGHT;
     const colors = isDark ? Colors.dark : Colors.light;
     const sent = sender_user_id === currentUserId;
+    const isFailedOutgoing = sent && message.client_status === "failed";
+    const isPendingOutgoing =
+        sent &&
+        (message.client_status === "sending" || message.client_status === "pending");
+    const isReadOutgoing = sent && Boolean(message.is_read_by_recipient);
+    const statusIconSource = isPendingOutgoing ? "clock-outline" : "check-all";
+    const statusIconColor = isPendingOutgoing
+        ? theme.check
+        : isReadOutgoing
+            ? "#34B7F1"
+            : theme.check;
     const bubbleColor = sent ? theme.sentBubble : theme.receivedBubble;
     const swipeX = useSharedValue(0);
 
@@ -689,7 +704,14 @@ function Bubble({ message, currentUserId, isDark, showTail = true, isSelected, s
                     : MAX_SWIPE_TRANSLATION + (finalTranslation - MAX_SWIPE_TRANSLATION) * SWIPE_RESISTANCE;
 
                 if (finalResistedTranslation >= MAX_SWIPE_TRANSLATION) {
-                    runOnJS(handleReply)(senderDisplayName, message_text_content, media_preview_url, attached_media);
+                    runOnJS(handleReply)(
+                        senderDisplayName,
+                        message_text_content,
+                        media_preview_url,
+                        attached_media,
+                        message.message_id,
+                        message.sender_user_id
+                    );
                 }
 
                 hasTriggered.value = false;
@@ -709,7 +731,17 @@ function Bubble({ message, currentUserId, isDark, showTail = true, isSelected, s
                     mass: 0.7,
                 });
             }),
-        [handleReply, hasTriggered, message_text_content, senderDisplayName, swipeX]
+        [
+            attached_media,
+            handleReply,
+            hasTriggered,
+            media_preview_url,
+            message.message_id,
+            message.sender_user_id,
+            message_text_content,
+            senderDisplayName,
+            swipeX,
+        ]
     );
 
     const handleDownloadMedia = useCallback(async () => {
@@ -761,6 +793,21 @@ function Bubble({ message, currentUserId, isDark, showTail = true, isSelected, s
                         style={[styles.replySwipeIcon, { borderColor: colors.card }, replyButtonAnimatedStyle]}
                     />
                 </Animated.View>
+                {isFailedOutgoing && (
+                    <Pressable
+                        accessibilityRole="button"
+                        accessibilityLabel="Retry sending message"
+                        hitSlop={8}
+                        style={styles.retryButton}
+                        onPress={() => onRetryMessage?.(message)}
+                    >
+                        <Icon
+                            source="alert-circle"
+                            color="#ef4444"
+                            size={22}
+                        />
+                    </Pressable>
+                )}
                 <GestureDetector gesture={panGesture}>
                     <Animated.View style={[styles.messageContentRow, bubbleAndTailAnimatedStyle]}>
                         {!sent && isGroupChat && (
@@ -984,7 +1031,7 @@ function Bubble({ message, currentUserId, isDark, showTail = true, isSelected, s
                                                 style={[styles.pollOptionRow, { borderColor: sent ? theme.borderSent : theme.borderReceive }]}
                                             >
                                                 <ThemedText numberOfLines={1} style={styles.pollOptionText}>
-                                                    {option}
+                                                    {option.text}
                                                 </ThemedText>
                                             </ThemedView>
                                         ))}
@@ -1014,10 +1061,10 @@ function Bubble({ message, currentUserId, isDark, showTail = true, isSelected, s
                                     ]}>
                                         {formattedTime}
                                     </Text>
-                                    {sent && (
+                                    {sent && !isFailedOutgoing && (
                                         <Icon
-                                            source={'check-all'}
-                                            color={theme.check}
+                                            source={statusIconSource}
+                                            color={statusIconColor}
                                             size={14}
                                         />
                                     )}
@@ -1064,6 +1111,7 @@ function areBubblePropsEqual(previous: BubbleProps, next: BubbleProps) {
         previous.isSelected !== next.isSelected ||
         previous.onLongPress !== next.onLongPress ||
         previous.onPress !== next.onPress ||
+        previous.onRetryMessage !== next.onRetryMessage ||
         previous.handleReply !== next.handleReply
     ) {
         return false;
@@ -1139,6 +1187,17 @@ const styles = StyleSheet.create({
         position: 'relative',
         overflow: 'visible',
         maxWidth: 324
+    },
+    retryButton: {
+        width: 28,
+        height: 28,
+        borderRadius: 14,
+        alignItems: 'center',
+        justifyContent: 'center',
+        alignSelf: 'flex-end',
+        marginRight: 6,
+        marginBottom: 8,
+        backgroundColor: 'transparent',
     },
     groupAvatarColumn: {
         width: 38,

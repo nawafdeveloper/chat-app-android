@@ -1,6 +1,9 @@
-import { EncryptedContentEnvelope, RecipientEncryptedAesKeyInput } from "./crypto.type";
-import { Message, MessageReaction } from "./messages";
-
+import type { ChatItemType } from "./chats.type";
+import type {
+    EncryptedContentEnvelope,
+    RecipientEncryptedAesKeyInput,
+} from "./crypto.type";
+import type { Message, MessageReaction } from "./messages";
 
 type RealtimeMessage = Omit<Message, "created_at" | "updated_at"> & {
     created_at: string;
@@ -24,10 +27,12 @@ export type ClientRealtimeEvent =
         conversationType: "direct" | "group";
         senderUserId?: string;
         senderNickname?: string;
+        senderAvatarUrl?: string | null;
         recipientUserId?: string;
         senderPhone?: string;
         recipientPhone?: string;
         participantIds?: string[];
+        notificationPlaintext?: string | null;
         content?: string;
         messageTextContent?: string | null;
         attachedMedia?: Message["attached_media"];
@@ -38,6 +43,7 @@ export type ClientRealtimeEvent =
         mediaHeight?: number | null;
         mediaFileName?: string | null;
         videoThumbnail?: string | null;
+        isForwardMessage?: boolean;
         encryptedContent?: EncryptedContentEnvelope | null;
         recipientEncryptionKeys?: RecipientEncryptedAesKeyInput[] | null;
         encryptedChatPreview?: EncryptedContentEnvelope | null;
@@ -73,6 +79,13 @@ export type ClientRealtimeEvent =
 
 export type ServerRealtimeEvent =
     | {
+        type: "GROUP_CREATED";
+        chat: Omit<ChatItemType, "created_at" | "updated_at"> & {
+            created_at: string;
+            updated_at: string;
+        };
+    }
+    | {
         type: "MESSAGE_SENT";
         conversationId: string;
         conversationType: "direct" | "group";
@@ -101,6 +114,13 @@ export type ServerRealtimeEvent =
         reaction: MessageReaction;
         updatedAt: string;
         unreadCount?: number;
+    }
+    | {
+        type: "MESSAGE_FLAGS_UPDATED";
+        conversationId: string;
+        messageId: string;
+        userIdsPinIt: string[] | null;
+        updatedAt: string;
     }
     | {
         type: "CONVERSATION_PRESENCE";
