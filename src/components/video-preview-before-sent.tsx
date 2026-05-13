@@ -1,9 +1,11 @@
 import { Colors } from '@/constants/theme';
+import { useSendChatMessage } from '@/hooks/use-send-chat-message';
+import { createUploadFileFromLocalUri } from '@/lib/local-upload-file';
 import { useVideoPreviewBeforeSentStore } from '@/store/video-preview-before-sent';
 import Slider from '@react-native-community/slider';
 import { useVideoPlayer, VideoView } from 'expo-video';
 import React, { useCallback, useEffect, useRef, useState } from 'react';
-import { Keyboard, KeyboardAvoidingView, Pressable, StyleSheet, TextInput, useColorScheme, View } from 'react-native';
+import { ActivityIndicator, Keyboard, KeyboardAvoidingView, Pressable, StyleSheet, TextInput, useColorScheme, View } from 'react-native';
 import { Appbar, Icon, IconButton } from 'react-native-paper';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { ThemedText } from './themed-text';
@@ -20,6 +22,7 @@ const VideoPreviewBeforeSent = () => {
     const insets = useSafeAreaInsets();
     const resolvedScheme = scheme === 'unspecified' ? 'light' : scheme ?? 'light';
     const colors = Colors[resolvedScheme];
+    const { sendAttachment } = useSendChatMessage();
     const { videoMessageContext, setVideoMessageContext, videoUrl, setVideoUrl, setIsVideoVisible } = useVideoPreviewBeforeSentStore();
 
     const player = useVideoPlayer(videoUrl, (p) => {
@@ -33,6 +36,7 @@ const VideoPreviewBeforeSent = () => {
     const [currentTime, setCurrentTime] = useState(0)
     const [isSeeking, setIsSeeking] = useState(false)
     const [sliderValue, setSliderValue] = useState(0)
+    const [isSending, setIsSending] = useState(false)
 
     const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null)
 
@@ -119,6 +123,30 @@ const VideoPreviewBeforeSent = () => {
         setIsVideoVisible(false);
     };
 
+    const handleSendVideo = async () => {
+        if (!videoUrl || isSending) return;
+
+        setIsSending(true);
+        try {
+            const uploadFile = await createUploadFileFromLocalUri({
+                uri: videoUrl,
+                fallbackName: `video-${Date.now()}.mp4`,
+                mimeType: 'video/mp4',
+            });
+            const sent = await sendAttachment({
+                file: uploadFile,
+                attachedMedia: 'video',
+                text: videoMessageContext,
+            });
+
+            if (sent) {
+                handleDiscartVideo();
+            }
+        } finally {
+            setIsSending(false);
+        }
+    };
+
     const trackColor = scheme === 'dark' ? "#6C757C" : "#94a3b8"
 
     return (
@@ -196,10 +224,12 @@ const VideoPreviewBeforeSent = () => {
                     selectionColor='#25D366'
                 />
                 <IconButton
-                    icon="send"
+                    icon={isSending ? () => <ActivityIndicator size="small" color={Colors.dark.background} /> : "send"}
                     iconColor={Colors.dark.background}
                     containerColor='#25D366'
                     size={24}
+                    disabled={isSending}
+                    onPress={handleSendVideo}
                 />
             </View>
         </KeyboardAvoidingView>

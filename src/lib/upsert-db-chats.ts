@@ -1,5 +1,6 @@
 import { db } from "@/db/client";
 import { DbChat, DbChatInsert, chats as dbChats } from "@/db/schema";
+import { resolveAvatarSource } from "@/lib/avatar-source";
 import type { ChatItemType } from "@/types/chats.type";
 import { eq } from "drizzle-orm";
 
@@ -7,7 +8,7 @@ function toDbChatInsert(chat: ChatItemType): DbChatInsert {
     return {
         chat_id: chat.chat_id,
         chat_type: chat.chat_type,
-        avatar: chat.avatar || "",
+        avatar: resolveAvatarSource(chat.avatar) || "",
         last_message_id: chat.last_message_id ?? null,
         encrypted_preview_ciphertext: chat.encrypted_preview_ciphertext ?? null,
         encrypted_preview_iv: chat.encrypted_preview_iv ?? null,
@@ -46,7 +47,7 @@ function dbRowToChatItem(row: DbChat): ChatItemType {
     return {
         chat_id: row.chat_id,
         chat_type: row.chat_type as "single" | "group",
-        avatar: row.avatar,
+        avatar: resolveAvatarSource(row.avatar),
         display_name: row.display_name ?? null,
         recipient_user_id: row.recipient_user_id ?? null,
         recipient_public_key: null,

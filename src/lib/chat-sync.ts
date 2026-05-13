@@ -16,6 +16,7 @@ import {
     upsertDbMessages,
 } from "@/lib/upsert-db-messages";
 import { materializeMessageMedia } from "@/lib/message-media";
+import type { AvatarSource } from "@/lib/avatar-source";
 import type { ChatItemType } from "@/types/chats.type";
 import type { Message } from "@/types/messages";
 import { authClient } from "./auth-client";
@@ -24,7 +25,11 @@ export const MESSAGE_PAGE_SIZE = 20;
 
 const API_BASE_URL = "https://halabakk-web.nawaf-alhasosah.workers.dev";
 
-type RemoteChat = Omit<ChatItemType, "created_at" | "updated_at"> & {
+type RemoteChat = Omit<ChatItemType, "avatar" | "created_at" | "updated_at" | "group_members"> & {
+    avatar?: AvatarSource;
+    group_members?: (Omit<NonNullable<ChatItemType["group_members"]>[number], "avatar"> & {
+        avatar?: AvatarSource;
+    })[] | null;
     created_at: string | Date;
     updated_at: string | Date;
 };
@@ -300,7 +305,19 @@ export async function syncMobileChatsAndMessages({
     await upsertDbChats(syncedChats);
 
     const storedChats = await getDbChats();
-    onChatsLoaded?.(storedChats);
+    const syncedChatsById = new Map(syncedChats.map((chat) => [chat.chat_id, chat]));
+    const hydratedChats = storedChats.map((chat) => {
+        const syncedChat = syncedChatsById.get(chat.chat_id);
+
+        return syncedChat?.group_members?.length
+            ? {
+                ...chat,
+                group_members: syncedChat.group_members,
+            }
+            : chat;
+    });
+
+    onChatsLoaded?.(hydratedChats);
 
     onLoadingTitleChange?.("Loading your messages");
     const mobileMessages = await fetchMobileMessages({ currentUserId, cookies });
@@ -315,7 +332,7 @@ export async function syncMobileChatsAndMessages({
     await upsertDbMessages(localMessagesToStore, currentUserId);
 
     const messagesByChatId = groupMessagesByChat(localMessagesToStore);
-    for (const chat of storedChats) {
+    for (const chat of hydratedChats) {
         const chatMessages = messagesByChatId.get(chat.chat_id) ?? [];
         const recentMessages = chatMessages.slice(-MESSAGE_PAGE_SIZE);
 
@@ -327,7 +344,7 @@ export async function syncMobileChatsAndMessages({
     }
 
     return {
-        chatCount: storedChats.length,
+        chatCount: hydratedChats.length,
         messageCount: messagesToStore.length,
     };
 }

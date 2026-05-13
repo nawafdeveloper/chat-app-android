@@ -117,6 +117,10 @@ const AppStack = ({ hasSession, isNewUser, hasPin, hasNoPin, hasName }: AppStack
                 <Stack.Screen name='video-player' options={{ headerShown: false, animation: 'fade' }} />
                 <Stack.Screen name='image-preview' options={{ headerShown: false, animation: 'fade' }} />
                 <Stack.Screen name='targetUserProfile' options={{ headerShown: false }} />
+                <Stack.Screen name='create-group-select-members' options={{ headerShown: false }} />
+                <Stack.Screen name='create-new-group' options={{ headerShown: false }} />
+                <Stack.Screen name='create-new-contact' options={{ headerShown: false }} />
+                <Stack.Screen name='create-contact-select-country' options={{ headerShown: false, animation: 'fade_from_bottom', animationDuration: 100 }} />
             </Stack.Protected>
         </Stack>
     );

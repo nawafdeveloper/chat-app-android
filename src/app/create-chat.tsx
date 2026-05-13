@@ -3,6 +3,7 @@ import { ThemedText } from '@/components/themed-text';
 import { ThemedView } from '@/components/themed-view';
 import { Colors } from '@/constants/theme';
 import { useContactDirectoryStore } from '@/store/use-contact-directory-store';
+import { useNewGroupStore } from '@/store/use-new-group-store';
 import { Contact } from '@/types/contacts.type';
 import { router } from 'expo-router';
 import React, { memo, useCallback, useState } from 'react';
@@ -30,6 +31,7 @@ const CreateChat = () => {
     const resolvedScheme = scheme === 'unspecified' ? 'light' : scheme ?? 'light'
     const colors = Colors[resolvedScheme]
     const contacts = useContactDirectoryStore((state) => state.contacts);
+    const resetGroupStore = useNewGroupStore((state) => state.resetStore);
 
     const [isSearchFocus, setIsSearchFocus] = useState(false);
     const [searchQuery, setSearchQuery] = useState('');
@@ -41,13 +43,19 @@ const CreateChat = () => {
     const renderHeader = useCallback(() => (
         <ThemedView>
             <ThemedView style={styles.headerButtons}>
-                <Pressable style={[styles.listItem, { paddingRight: 16, paddingLeft: 8 }]}>
+                <Pressable
+                    onPress={() => {
+                        resetGroupStore();
+                        router.push('/create-group-select-members');
+                    }}
+                    style={[styles.listItem, { paddingRight: 16, paddingLeft: 8 }]}
+                >
                     <ThemedView style={[styles.avatar, { backgroundColor: '#25D366' }]}>
                         <Icon source="account-multiple-plus" color={colors.background} size={28} />
                     </ThemedView>
                     <ThemedText>New group</ThemedText>
                 </Pressable>
-                <Pressable style={[styles.listItem, { paddingRight: 16, paddingLeft: 8 }]}>
+                <Pressable onPress={() => router.push('/create-new-contact')} style={[styles.listItem, { paddingRight: 16, paddingLeft: 8 }]}>
                     <ThemedView style={[styles.avatar, { backgroundColor: '#25D366' }]}>
                         <Icon source="account-plus" color={colors.background} size={28} />
                     </ThemedView>
@@ -58,7 +66,7 @@ const CreateChat = () => {
                 CONTACTS
             </ThemedText>
         </ThemedView>
-    ), [colors.background, colors.textSecondary]);
+    ), [colors.background, colors.textSecondary, resetGroupStore]);
 
     const filteredContacts = searchQuery.trim()
         ? contacts.filter((c) =>

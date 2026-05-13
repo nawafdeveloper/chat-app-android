@@ -1,6 +1,7 @@
 import { useCryptoKeys } from "@/context/crypto";
 import { authClient } from "@/lib/auth-client";
 import {
+    decryptChatPreviewBatch,
     decryptMessageBatch,
 } from "@/lib/chat-e2ee";
 import {
@@ -12,6 +13,7 @@ import {
     applyContactToSingleChat,
     buildChatFromMessage,
     buildChatFromReaction,
+    normalizeChatItem,
     normalizeMessage,
     resolveDirectChatPartner,
 } from "@/lib/chat-utils";
@@ -434,6 +436,21 @@ export function useChatRealtime() {
         const currentUserId = activeCurrentUserId;
 
         switch (event.type) {
+                case "GROUP_CREATED": {
+                    const normalizedChat = normalizeChatItem(event.chat);
+                    const [decryptedChat] = await decryptChatPreviewBatch({
+                        chats: [normalizedChat],
+                        currentUserId,
+                    });
+
+                    await persistAndUpsertChat({
+                        ...decryptedChat,
+                        last_message_context:
+                            decryptedChat.last_message_context || "Group created",
+                    });
+                    break;
+                }
+
                 case "MESSAGE_SENT": {
                     const normalizedMessage = normalizeMessage(event.message);
                     const [nextMessage] = await decryptMessageBatch({

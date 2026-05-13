@@ -1,4 +1,5 @@
 import type { ChatItemType } from "./chats.type";
+import type { AvatarSource } from "@/lib/avatar-source";
 import type {
     EncryptedContentEnvelope,
     RecipientEncryptedAesKeyInput,
@@ -80,7 +81,11 @@ export type ClientRealtimeEvent =
 export type ServerRealtimeEvent =
     | {
         type: "GROUP_CREATED";
-        chat: Omit<ChatItemType, "created_at" | "updated_at"> & {
+        chat: Omit<ChatItemType, "avatar" | "created_at" | "updated_at" | "group_members"> & {
+            avatar?: AvatarSource;
+            group_members?: (Omit<NonNullable<ChatItemType["group_members"]>[number], "avatar"> & {
+                avatar?: AvatarSource;
+            })[] | null;
             created_at: string;
             updated_at: string;
         };

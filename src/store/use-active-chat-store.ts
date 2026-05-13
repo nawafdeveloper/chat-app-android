@@ -85,12 +85,21 @@ export const useActiveChatStore = create<ActiveChatState>((set) => ({
         })),
     upsertChat: (chat) =>
         set((state) => {
+            const existingChat = state.chats.find(
+                (item) => item.chat_id === chat.chat_id
+            );
             const existingWithoutChat = state.chats.filter(
                 (item) => item.chat_id !== chat.chat_id
             );
+            const nextChat =
+                chat.chat_type === "group" &&
+                    (!chat.group_members || chat.group_members.length === 0) &&
+                    existingChat?.group_members?.length
+                    ? { ...chat, group_members: existingChat.group_members }
+                    : chat;
 
             return {
-                chats: sortChatsByRecent([...existingWithoutChat, chat]),
+                chats: sortChatsByRecent([...existingWithoutChat, nextChat]),
             };
         }),
     setChatsLoading: (loading) => set({ chatsLoading: loading }),

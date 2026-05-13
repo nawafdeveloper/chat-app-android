@@ -1,4 +1,6 @@
 import { Colors } from '@/constants/theme';
+import { useSendChatMessage } from '@/hooks/use-send-chat-message';
+import { createUploadFileFromLocalUri } from '@/lib/local-upload-file';
 import { useImagePreviewBeforeSentStore } from '@/store/image-preview-before-sent';
 import {
     BasicAlertDialog,
@@ -26,6 +28,7 @@ import * as MediaLibrary from 'expo-media-library';
 import React, { useEffect, useRef, useState } from 'react';
 import {
     Alert,
+    ActivityIndicator,
     Dimensions,
     Keyboard,
     KeyboardAvoidingView,
@@ -86,6 +89,7 @@ const ImagePreviewBeforeSent = () => {
     const insets = useSafeAreaInsets();
     const resolvedScheme = scheme === 'unspecified' ? 'light' : scheme ?? 'light';
     const colors = Colors[resolvedScheme];
+    const { sendAttachment } = useSendChatMessage();
     const { messageContext, imageUri, setIsVisible, setMessageContext, setImageUri } =
         useImagePreviewBeforeSentStore();
 
@@ -111,6 +115,7 @@ const ImagePreviewBeforeSent = () => {
 
     // ── bottom message input ─────────────────────────────────────────────────
     const [messageInput, setMessageInput] = useState(messageContext ?? '');
+    const [isSending, setIsSending] = useState(false);
 
     // ── layout ───────────────────────────────────────────────────────────────
     const viewShotRef = useRef<ViewShot>(null);
@@ -118,7 +123,7 @@ const ImagePreviewBeforeSent = () => {
 
     // ── unified gesture state ─────────────────────────────────────────────────
     const draggingTextId = useRef<string | null>(null);
-    const [draggingTextIdState, setDraggingTextIdState] = useState<string | null>(null); // for re-renders if needed
+    const [, setDraggingTextIdState] = useState<string | null>(null);
 
     const longPressTimer = useRef<NodeJS.Timeout | null>(null);
     const dragStartTouch = useRef<{ x: number; y: number } | null>(null);
@@ -177,11 +182,35 @@ const ImagePreviewBeforeSent = () => {
         }
     };
 
-    const handleSendMessage = () => {
-        if (!messageInput.trim()) return;
-        setMessageContext(messageInput.trim());
-        // TODO: trigger actual send logic here
-        setIsVisible(false);
+    const handleSendMessage = async () => {
+        if (!imageUri || isSending) return;
+
+        setIsSending(true);
+        try {
+            const sourceUri = hasAnnotations
+                ? await viewShotRef.current?.capture?.()
+                : imageUri;
+            if (!sourceUri) return;
+
+            const uploadFile = await createUploadFileFromLocalUri({
+                uri: sourceUri,
+                fallbackName: `photo-${Date.now()}.jpg`,
+                mimeType: 'image/jpeg',
+            });
+            const sent = await sendAttachment({
+                file: uploadFile,
+                attachedMedia: 'photo',
+                text: messageInput,
+            });
+
+            if (sent) {
+                setMessageContext('');
+                setImageUri('');
+                setIsVisible(false);
+            }
+        } finally {
+            setIsSending(false);
+        }
     };
 
     // ── text helpers ──────────────────────────────────────────────────────────
@@ -733,10 +762,11 @@ const ImagePreviewBeforeSent = () => {
                                 selectionColor='#25D366'
                             />
                             <IconButton
-                                icon="send"
+                                icon={isSending ? () => <ActivityIndicator size="small" color={Colors.dark.background} /> : "send"}
                                 iconColor={Colors.dark.background}
                                 containerColor='#25D366'
                                 size={24}
+                                disabled={isSending}
                                 onPress={handleSendMessage}
                             />
                         </View>

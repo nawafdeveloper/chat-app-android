@@ -1,5 +1,7 @@
 import ChatInputContainer from '@/components/chat-input-container';
+import ContactPreviewBeforeSent from '@/components/contact-preview-before-sent';
 import { ChatAvatar } from '@/components/decrypted-chat-avatar';
+import FilePreviewBeforeSent from '@/components/file-preview-before-sent';
 import ImagePreviewBeforeSent from '@/components/image-preview-before-sent';
 import Bubble from '@/components/message-bubble';
 import { TiledBackground } from '@/components/tailed-wallpaper';
@@ -11,6 +13,8 @@ import { useChatMessages } from '@/hooks/use-chat-realtime';
 import { useSendChatMessage } from '@/hooks/use-send-chat-message';
 import { authClient } from '@/lib/auth-client';
 import { markDbChatRead } from '@/lib/upsert-db-chats';
+import { useContactPreviewBeforeSentStore } from '@/store/contact-preview-before-sent';
+import { useFilePreviewBeforeSentStore } from '@/store/file-preview-before-sent';
 import { useImagePreviewBeforeSentStore } from '@/store/image-preview-before-sent';
 import { rightNavRef } from '@/store/right-nav-ref';
 import { useActiveChatStore } from '@/store/use-active-chat-store';
@@ -21,7 +25,7 @@ import { useFocusEffect, useIsFocused, useRoute } from '@react-navigation/native
 import * as Haptics from 'expo-haptics';
 import { router, useLocalSearchParams } from 'expo-router';
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { FlatList, Keyboard, KeyboardAvoidingView, Platform, StyleSheet, TextInput, useColorScheme } from 'react-native';
+import { FlatList, Keyboard, KeyboardAvoidingView, Platform, Pressable, StyleSheet, TextInput, useColorScheme } from 'react-native';
 import { ActivityIndicator, Appbar, Icon, TouchableRipple } from 'react-native-paper';
 
 const EMPTY_MESSAGES: Message[] = [];
@@ -43,6 +47,8 @@ const ChatId = () => {
     const realtimeStatus = useRealtimeStore((state) => state.status);
     const { isVisible } = useImagePreviewBeforeSentStore();
     const { isVideoVisible } = useVideoPreviewBeforeSentStore();
+    const { isFileVisible } = useFilePreviewBeforeSentStore();
+    const { isContactVisible } = useContactPreviewBeforeSentStore();
 
     const selectedChatId = useActiveChatStore((state) => state.selectedChatId);
     const setSelectedChatId = useActiveChatStore((state) => state.setSelectedChatId);
@@ -85,9 +91,19 @@ const ChatId = () => {
     const [replyMediaType, setReplyMediaType] = useState<'photo' | 'video' | 'voice' | 'file' | 'contact' | 'location' | null>(null);
     const [replyMediaUrl, setReplyMediaUrl] = useState('');
     const [keyboardOffset, setKeyboardOffset] = useState(-30);
+    const [isReactionVisible, setIsReactionVisible] = useState(false);
     const selectedCount = selectedMessageIds.size;
     const selectionModeRef = useRef(selectionMode);
     const hasStartedMessageScrollRef = useRef(false);
+
+    const reactions = [
+        { key: '1', label: '👍' },
+        { key: '2', label: '❤️' },
+        { key: '3', label: '😂' },
+        { key: '4', label: '😮' },
+        { key: '5', label: '😢' },
+        { key: '6', label: '🙏' },
+    ];
 
     useEffect(() => {
         selectionModeRef.current = selectionMode;
@@ -142,6 +158,10 @@ const ChatId = () => {
             keyboardDidHideListener.remove();
         };
     }, []);
+
+    const toggleReactionContainer = () => {
+        setIsReactionVisible(prev => !prev);
+    };
 
     const handleLongPress = useCallback((messageId: string) => {
         void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
@@ -233,7 +253,7 @@ const ChatId = () => {
             return
         }
 
-        router.back();
+        router.dismissAll();
     };
 
     const handleLoadOlderMessages = useCallback(() => {
@@ -289,6 +309,14 @@ const ChatId = () => {
         return <VideoPreviewBeforeSent />
     }
 
+    if (isFileVisible) {
+        return <FilePreviewBeforeSent />
+    }
+
+    if (isContactVisible) {
+        return <ContactPreviewBeforeSent />
+    }
+
     const handleOpenProfile = () => {
         router.navigate({
             pathname: '/targetUserProfile',
@@ -315,11 +343,10 @@ const ChatId = () => {
                         <Appbar.Content title={<ThemedText>{selectedMessageIds.size}</ThemedText>} />
                         <Appbar.Action icon="arrow-right-top" onPress={() => { }} />
                         <Appbar.Action icon="star-outline" onPress={() => { }} />
-
-                        <Appbar.Action icon="trash-can-outline" onPress={() => { }} />
                         {selectedMessageIds.size < 2 && (
                             <>
-                                <Appbar.Action icon="emoticon-outline" onPress={() => { }} />
+                                <Appbar.Action icon="pin-outline" onPress={() => { }} />
+                                <Appbar.Action icon="emoticon-outline" onPress={toggleReactionContainer} />
                                 <Appbar.Action icon="arrow-left-top" onPress={() => { }} /></>
                         )}
                     </>
@@ -359,6 +386,15 @@ const ChatId = () => {
                     </>
                 )}
             </Appbar.Header>
+            {isReactionVisible && (
+                <ThemedView style={{ paddingVertical: 10, paddingHorizontal: 16, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-evenly' }}>
+                    {reactions.map((r) => (
+                        <Pressable key={r.key}>
+                            <ThemedText style={{ fontSize: 24 }}>{r.label}</ThemedText>
+                        </Pressable>
+                    ))}
+                </ThemedView>
+            )}
             <TiledBackground source={isDark ? require('@/assets/bg-pattern-dark.png') : require('@/assets/bg-pattern-light.png')} style={styles.background}>
                 <FlatList
                     ref={listRef}

@@ -211,7 +211,7 @@ const ChatItem = ({
                 )}
 
                 <ChatAvatar
-                    userId={item.recipient_user_id}
+                    userId={item.chat_type === 'group' ? item.chat_id : item.recipient_user_id}
                     imageUrl={item.avatar}
                     displayName={displayName}
                     style={styles.avatar}

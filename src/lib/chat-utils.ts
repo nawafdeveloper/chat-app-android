@@ -1,13 +1,19 @@
 import type { ChatItemType } from "@/types/chats.type";
+import type { AvatarSource } from "./avatar-source";
 import type { Contact } from "@/types/contacts.type";
 import { Message, MessageReaction } from "@/types/messages";
+import { resolveAvatarSource } from "./avatar-source";
 import {
     buildPhoneLookupVariants,
     phoneValuesMatch,
     toContactDisplayName,
 } from "./contact-utils";
 
-type RawChatItem = Omit<ChatItemType, "created_at" | "updated_at"> & {
+type RawChatItem = Omit<ChatItemType, "avatar" | "created_at" | "updated_at" | "group_members"> & {
+    avatar?: AvatarSource;
+    group_members?: (Omit<NonNullable<ChatItemType["group_members"]>[number], "avatar"> & {
+        avatar?: AvatarSource;
+    })[] | null;
     created_at: string | Date;
     updated_at: string | Date;
 };
@@ -20,6 +26,11 @@ type RawMessage = Omit<Message, "created_at" | "updated_at"> & {
 export function normalizeChatItem(chat: RawChatItem): ChatItemType {
     return {
         ...chat,
+        avatar: resolveAvatarSource(chat.avatar),
+        group_members: chat.group_members?.map((member) => ({
+            ...member,
+            avatar: resolveAvatarSource(member.avatar),
+        })) ?? null,
         recipient_last_seen: chat.recipient_last_seen
             ? new Date(chat.recipient_last_seen)
             : null,
@@ -206,6 +217,7 @@ export function buildChatFromMessage({
         chat_type: conversationType === "group" ? "group" : "single",
         avatar: fallbackExistingChat?.avatar ?? "",
         display_name: fallbackExistingChat?.display_name ?? null,
+        group_members: fallbackExistingChat?.group_members ?? null,
         recipient_user_id: fallbackExistingChat?.recipient_user_id ?? null,
         recipient_public_key: fallbackExistingChat?.recipient_public_key ?? null,
         contact_phone: fallbackExistingChat?.contact_phone ?? null,
@@ -289,6 +301,7 @@ export function buildChatFromReaction({
         chat_type: conversationType === "group" ? "group" : "single",
         avatar: fallbackExistingChat?.avatar ?? "",
         display_name: fallbackExistingChat?.display_name ?? null,
+        group_members: fallbackExistingChat?.group_members ?? null,
         recipient_user_id: fallbackExistingChat?.recipient_user_id ?? null,
         recipient_public_key: fallbackExistingChat?.recipient_public_key ?? null,
         contact_phone: fallbackExistingChat?.contact_phone ?? null,

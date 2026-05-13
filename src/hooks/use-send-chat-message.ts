@@ -90,6 +90,21 @@ type ConversationContext = {
     recipients: RecipientKeySource[];
 };
 
+type AttachmentUploadInput = File | MessageMediaUploadFile;
+
+function isDomFile(file: AttachmentUploadInput): file is File {
+    return (
+        typeof File !== "undefined" &&
+        file instanceof File &&
+        typeof document !== "undefined" &&
+        typeof URL.createObjectURL === "function"
+    );
+}
+
+function getLocalAttachmentUri(file: MessageMediaUploadFile) {
+    return file.uri ?? null;
+}
+
 function getJsonAuthHeaders(debugTraceId?: string) {
     const cookies = authClient.getCookie();
 
@@ -705,15 +720,19 @@ export function useSendChatMessage() {
         attachedMedia,
         chatId = selectedChatId,
         text = null,
+        mediaWidth = null,
+        mediaHeight = null,
         isForwardMessage = false,
     }: {
-        file: File;
+        file: AttachmentUploadInput;
         attachedMedia: Extract<
             Message["attached_media"],
             "photo" | "video" | "voice" | "file"
         >;
         chatId?: string | null;
         text?: string | null;
+        mediaWidth?: number | null;
+        mediaHeight?: number | null;
         isForwardMessage?: boolean;
     }) => {
         const currentUserId = session?.user.id;
@@ -736,9 +755,31 @@ export function useSendChatMessage() {
             return false;
         }
 
-        let preparedMedia: Awaited<ReturnType<typeof prepareMessageMediaFile>>;
+        let preparedMedia: {
+            file: MessageMediaUploadFile;
+            originalFile: MessageMediaUploadFile;
+            didCompress: boolean;
+        };
         try {
-            preparedMedia = await prepareMessageMediaFile(file, attachedMedia);
+            if (isDomFile(file)) {
+                preparedMedia = await prepareMessageMediaFile(file, attachedMedia);
+            } else {
+                if (file.size > MESSAGE_MEDIA_INPUT_MAX_BYTES) {
+                    throw new Error("Attachments must be 50 MB or smaller.");
+                }
+
+                if (file.size > MESSAGE_MEDIA_TARGET_MAX_BYTES) {
+                    throw new Error(
+                        "This attachment is over 5 MB. Images are compressed by the media picker; choose a smaller file."
+                    );
+                }
+
+                preparedMedia = {
+                    file,
+                    originalFile: file,
+                    didCompress: false,
+                };
+            }
         } catch (error) {
             logMediaDebug("client.attachment.rejected", {
                 attachedMedia,
@@ -758,11 +799,21 @@ export function useSendChatMessage() {
         const uploadFile = preparedMedia.file;
         const messageId = crypto.randomUUID();
         const debugTraceId = createMediaDebugTraceId(attachedMedia);
-        const localMediaUrl = URL.createObjectURL(uploadFile);
-        const mediaDimensions = await getMessageMediaDimensions(uploadFile);
-        const localPreviewBlob = await createMessageMediaPreview(uploadFile);
+        const localMediaUrl = isDomFile(uploadFile)
+            ? URL.createObjectURL(uploadFile)
+            : getLocalAttachmentUri(uploadFile);
+        const mediaDimensions = isDomFile(uploadFile)
+            ? await getMessageMediaDimensions(uploadFile)
+            : mediaWidth && mediaHeight
+                ? { width: mediaWidth, height: mediaHeight }
+                : null;
+        const localPreviewBlob = isDomFile(uploadFile)
+            ? await createMessageMediaPreview(uploadFile)
+            : null;
         const localPreviewUrl =
-            localPreviewBlob ? URL.createObjectURL(localPreviewBlob) : localMediaUrl;
+            localPreviewBlob && typeof URL.createObjectURL === "function"
+                ? URL.createObjectURL(localPreviewBlob)
+                : localMediaUrl;
         const trimmedText = text?.trim() ?? "";
         const encryptedMessage =
             trimmedText.length > 0

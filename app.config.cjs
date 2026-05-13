@@ -1,6 +1,6 @@
 module.exports = {
   expo: {
-    name: "chat-app-android",
+    name: "YaHla",
     slug: "chat-app-android",
     version: "1.0.0",
     orientation: "portrait",

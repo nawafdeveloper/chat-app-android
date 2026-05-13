@@ -1,15 +1,22 @@
+import type { AvatarSource } from "@/lib/avatar-source";
+import { resolveAvatarSource } from "@/lib/avatar-source";
+import {
+    fetchAndDecryptMessageMedia,
+    isLocalMediaUri,
+    parseManagedMessageMediaUrl,
+} from "@/lib/message-media";
 import {
     fetchAndDecryptProfileImage,
     parseManagedProfileImageUrl,
 } from "@/lib/profile-image";
 import { MaterialIcons } from "@expo/vector-icons";
 import { Image } from "expo-image";
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useMemo, useState } from "react";
 import { Text, useColorScheme, View } from "react-native";
 
 type Props = {
     userId: string | null | undefined;
-    imageUrl?: string | null;
+    imageUrl?: AvatarSource;
     displayName?: string | null;
     contactPhone?: string | null;
     style: any;
@@ -23,15 +30,19 @@ export function ChatAvatar({
     userId,
     imageUrl,
     displayName,
-    contactPhone,
     style,
     iconColor = "#999",
     backgroundColor = "#ccc",
     textColor = "#fff",
+    chatType,
 }: Props) {
     const [localUri, setLocalUri] = useState<string | null>(null);
     const [failed, setFailed] = useState(false);
     const schema = useColorScheme();
+    const avatarSource = useMemo(
+        () => resolveAvatarSource(imageUrl),
+        [imageUrl]
+    );
 
     const getHue = (userId: string | null | undefined): number => {
         if (!userId) {
@@ -62,18 +73,42 @@ export function ChatAvatar({
         let mounted = true;
 
         const load = async () => {
-            if (!imageUrl) {
-                if (mounted) setLocalUri(null);
+            if (!avatarSource) {
+                if (mounted) {
+                    setLocalUri(null);
+                    setFailed(false);
+                }
                 return;
             }
 
             setLocalUri(null);
             setFailed(false);
 
-            const managedImage = parseManagedProfileImageUrl(imageUrl);
+            const managedImage = parseManagedProfileImageUrl(avatarSource);
 
             if (!managedImage) {
-                if (mounted) setLocalUri(imageUrl || null);
+                const managedMessageMedia = parseManagedMessageMediaUrl(avatarSource);
+
+                if (!managedMessageMedia) {
+                    if (mounted) setLocalUri(avatarSource || null);
+                    return;
+                }
+
+                try {
+                    const decryptedUri = await fetchAndDecryptMessageMedia({
+                        source: avatarSource,
+                        fallbackExtension: "jpg",
+                    });
+                    if (!mounted) return;
+
+                    if (decryptedUri && isLocalMediaUri(decryptedUri)) {
+                        setLocalUri(decryptedUri);
+                    } else {
+                        setFailed(true);
+                    }
+                } catch {
+                    if (mounted) setFailed(true);
+                }
                 return;
             }
 
@@ -92,7 +127,7 @@ export function ChatAvatar({
         return () => {
             mounted = false;
         };
-    }, [imageUrl]);
+    }, [avatarSource]);
 
     // Case 1: Show image avatar (priority)
     if (localUri && !failed) {
@@ -101,7 +136,36 @@ export function ChatAvatar({
                 source={{ uri: localUri }}
                 contentFit="cover"
                 style={style}
+                onError={() => setFailed(true)}
             />
+        );
+    }
+
+    const fallbackBackgroundColor = userId
+        ? `hsl(${hue}, ${bgSaturation}%, ${bgLightness}%)`
+        : backgroundColor;
+    const fallbackForegroundColor = userId
+        ? `hsl(${hue}, ${fgSaturation}%, ${fgLightness}%)`
+        : iconColor;
+
+    if (chatType === "group") {
+        return (
+            <View
+                style={[
+                    style,
+                    {
+                        backgroundColor: fallbackBackgroundColor,
+                        justifyContent: "center",
+                        alignItems: "center",
+                    },
+                ]}
+            >
+                <MaterialIcons
+                    name="groups"
+                    size={style?.width ? style.width * 0.52 : 24}
+                    color={fallbackForegroundColor}
+                />
+            </View>
         );
     }
 
@@ -113,9 +177,7 @@ export function ChatAvatar({
                 style={[
                     style,
                     {
-                        backgroundColor: userId
-                            ? `hsl(${hue}, ${bgSaturation}%, ${bgLightness}%)`
-                            : backgroundColor,
+                        backgroundColor: fallbackBackgroundColor,
                         justifyContent: "center",
                         alignItems: "center",
                     },
@@ -142,9 +204,7 @@ export function ChatAvatar({
             style={[
                 style,
                 {
-                    backgroundColor: userId
-                        ? `hsl(${hue}, ${bgSaturation}%, ${bgLightness}%)`
-                        : backgroundColor,
+                    backgroundColor: fallbackBackgroundColor,
                     justifyContent: "center",
                     alignItems: "center",
                 },
@@ -153,9 +213,7 @@ export function ChatAvatar({
             <MaterialIcons
                 name="person"
                 size={style?.width ? style.width * 0.5 : 24}
-                color={userId
-                    ? `hsl(${hue}, ${fgSaturation}%, ${fgLightness}%)`
-                    : iconColor}
+                color={fallbackForegroundColor}
             />
         </View>
     );

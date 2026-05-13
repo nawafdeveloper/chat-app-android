@@ -1,8 +1,11 @@
 import { Colors } from '@/constants/theme';
+import { useContactPreviewBeforeSentStore } from '@/store/contact-preview-before-sent';
+import { useFilePreviewBeforeSentStore } from '@/store/file-preview-before-sent';
 import { useImagePreviewBeforeSentStore } from '@/store/image-preview-before-sent';
 import { useVideoPreviewBeforeSentStore } from '@/store/video-preview-before-sent';
+import * as DocumentPicker from 'expo-document-picker';
 import * as ImagePicker from 'expo-image-picker';
-import React, { useEffect } from 'react';
+import React, { useEffect, useMemo } from 'react';
 import { Alert, StyleSheet, TouchableOpacity, useColorScheme, View } from 'react-native';
 import { Icon } from 'react-native-paper';
 import { IconSource } from 'react-native-paper/lib/typescript/components/Icon';
@@ -29,12 +32,43 @@ type ItemButton = {
     onPress: () => void;
 }
 
+const AttachmentButton = ({
+    item,
+    scale,
+}: {
+    item: ItemButton;
+    scale: any;
+}) => {
+    const buttonStyle = useAnimatedStyle(() => ({
+        transform: [
+            { scale: scale.value },
+        ],
+    }));
+
+    return (
+        <Animated.View style={buttonStyle}>
+            <TouchableOpacity style={styles.itemButtonContainer} onPress={item.onPress}>
+                <View style={[styles.iconContainer, { backgroundColor: item.backgroundColor }]}>
+                    <Icon
+                        source={item.icon}
+                        color={item.iconColor}
+                        size={26}
+                    />
+                </View>
+                <ThemedText style={styles.labelButton}>{item.label}</ThemedText>
+            </TouchableOpacity>
+        </Animated.View>
+    );
+};
+
 const AttachmentContainer = ({ visible }: Props) => {
     const scheme = useColorScheme();
     const colors = Colors[scheme === 'unspecified' ? 'light' : scheme ?? 'light']
     const isDark = scheme === 'dark';
     const { setIsVisible, setImageUri } = useImagePreviewBeforeSentStore();
     const { setIsVideoVisible, setVideoUrl } = useVideoPreviewBeforeSentStore();
+    const showFilePreview = useFilePreviewBeforeSentStore((state) => state.show);
+    const showContactPreview = useContactPreviewBeforeSentStore((state) => state.show);
 
     const maskScale = useSharedValue(0);
     const contentOpacity = useSharedValue(0);
@@ -42,14 +76,30 @@ const AttachmentContainer = ({ visible }: Props) => {
     const elevationValue = useSharedValue(0);
     const borderRadiusValue = useSharedValue(500);
 
-    const buttonScales = [
-        useSharedValue(0),
-        useSharedValue(0),
-        useSharedValue(0),
-        useSharedValue(0),
-        useSharedValue(0),
-        useSharedValue(0)
-    ];
+    const buttonScale0 = useSharedValue(0);
+    const buttonScale1 = useSharedValue(0);
+    const buttonScale2 = useSharedValue(0);
+    const buttonScale3 = useSharedValue(0);
+    const buttonScale4 = useSharedValue(0);
+    const buttonScale5 = useSharedValue(0);
+    const buttonScales = useMemo(
+        () => [
+            buttonScale0,
+            buttonScale1,
+            buttonScale2,
+            buttonScale3,
+            buttonScale4,
+            buttonScale5,
+        ],
+        [
+            buttonScale0,
+            buttonScale1,
+            buttonScale2,
+            buttonScale3,
+            buttonScale4,
+            buttonScale5,
+        ]
+    );
 
     const pickImage = async () => {
         const { status } = await ImagePicker.requestMediaLibraryPermissionsAsync()
@@ -79,6 +129,23 @@ const AttachmentContainer = ({ visible }: Props) => {
         }
     };
 
+    const pickDocument = async () => {
+        const picked = await DocumentPicker.getDocumentAsync({
+            copyToCacheDirectory: true,
+            multiple: false,
+        });
+
+        if (picked.canceled || !picked.assets[0]) return;
+
+        const file = picked.assets[0];
+        showFilePreview({
+            uri: file.uri,
+            name: file.name,
+            mimeType: file.mimeType ?? null,
+            size: file.size ?? null,
+        });
+    };
+
     const itemButtons: ItemButton[] = [
         {
             key: 'photos',
@@ -94,7 +161,7 @@ const AttachmentContainer = ({ visible }: Props) => {
             icon: 'account-circle',
             iconColor: '#8B5CF6',
             backgroundColor: isDark ? '#3B0764' : '#F5F3FF',
-            onPress: () => { }
+            onPress: showContactPreview
         },
         {
             key: 'document',
@@ -102,7 +169,7 @@ const AttachmentContainer = ({ visible }: Props) => {
             icon: 'file-document',
             iconColor: '#EF4444',
             backgroundColor: isDark ? '#450A0A' : '#FEF2F2',
-            onPress: () => { }
+            onPress: () => void pickDocument()
         }
     ];
 
@@ -153,7 +220,15 @@ const AttachmentContainer = ({ visible }: Props) => {
                 scale.value = withTiming(0, { duration: 200 });
             });
         }
-    }, [visible]);
+    }, [
+        borderRadiusValue,
+        buttonScales,
+        contentOpacity,
+        elevationValue,
+        maskScale,
+        pointerEventsValue,
+        visible,
+    ]);
 
     const circleMaskStyle = useAnimatedStyle(() => ({
         transform: [{ scale: maskScale.value }],
@@ -174,14 +249,6 @@ const AttachmentContainer = ({ visible }: Props) => {
         zIndex: interpolate(elevationValue.value, [0, 10], [0, 999]),
     }));
 
-    const getButtonStyle = (index: number) => {
-        return useAnimatedStyle(() => ({
-            transform: [
-                { scale: buttonScales[index].value },
-            ],
-        }));
-    };
-
     return (
         <Animated.View
             style={[
@@ -199,42 +266,22 @@ const AttachmentContainer = ({ visible }: Props) => {
             />
             <Animated.View style={[styles.content, contentStyle]}>
                 <View style={styles.rowContent}>
-                    {itemButtons.slice(0, 3).map((item, idx) => {
-                        const ButtonAnim = getButtonStyle(idx);
-                        return (
-                            <Animated.View key={item.key} style={ButtonAnim}>
-                                <TouchableOpacity style={styles.itemButtonContainer} onPress={item.onPress}>
-                                    <View style={[styles.iconContainer, { backgroundColor: item.backgroundColor }]}>
-                                        <Icon
-                                            source={item.icon}
-                                            color={item.iconColor}
-                                            size={26}
-                                        />
-                                    </View>
-                                    <ThemedText style={styles.labelButton}>{item.label}</ThemedText>
-                                </TouchableOpacity>
-                            </Animated.View>
-                        );
-                    })}
+                    {itemButtons.slice(0, 3).map((item, idx) => (
+                        <AttachmentButton
+                            key={item.key}
+                            item={item}
+                            scale={buttonScales[idx]}
+                        />
+                    ))}
                 </View>
                 <View style={styles.rowContent}>
-                    {itemButtons.slice(3, 6).map((item, idx) => {
-                        const ButtonAnim = getButtonStyle(idx + 3);
-                        return (
-                            <Animated.View key={item.key} style={ButtonAnim}>
-                                <TouchableOpacity style={styles.itemButtonContainer}>
-                                    <View style={[styles.iconContainer, { backgroundColor: item.backgroundColor }]}>
-                                        <Icon
-                                            source={item.icon}
-                                            color={item.iconColor}
-                                            size={26}
-                                        />
-                                    </View>
-                                    <ThemedText style={styles.labelButton}>{item.label}</ThemedText>
-                                </TouchableOpacity>
-                            </Animated.View>
-                        );
-                    })}
+                    {itemButtons.slice(3, 6).map((item, idx) => (
+                        <AttachmentButton
+                            key={item.key}
+                            item={item}
+                            scale={buttonScales[idx + 3]}
+                        />
+                    ))}
                 </View>
             </Animated.View>
         </Animated.View>
