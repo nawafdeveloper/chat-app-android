@@ -20,15 +20,14 @@ import { ChatItemType } from '@/types/chats.type'
 import { BasicAlertDialog, Column, Button as ComposeButton, Text as ComposeText, Host, Row, Spacer, Surface, TextButton } from '@expo/ui/jetpack-compose'
 import { clip, fillMaxWidth, height, padding, Shapes, width, wrapContentHeight, wrapContentWidth } from '@expo/ui/jetpack-compose/modifiers'
 import { MaterialIcons } from '@expo/vector-icons'
+import { FlashList } from '@shopify/flash-list'
 import * as Haptics from 'expo-haptics'
 import { router } from 'expo-router'
-import React, { useCallback, useMemo, useRef, useState } from 'react'
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
-    FlatList,
     InteractionManager,
     Platform,
     StyleSheet,
-    Text,
     useColorScheme,
     View
 } from 'react-native'
@@ -36,6 +35,35 @@ import { ActivityIndicator, Appbar, Checkbox, Divider, FAB, Icon, Menu, Searchba
 
 const SCROLL_THRESHOLD = 10
 const APP_GREEN = '#25D366'
+const CHAT_DEBUG = true
+
+function debugChatsPage(stage: string, payload: Record<string, unknown> = {}) {
+    if (!CHAT_DEBUG) {
+        return
+    }
+
+    console.log(`[chat-debug][chats-index][${stage}]`, {
+        at: new Date().toISOString(),
+        ...payload,
+    })
+}
+
+function summarizeChatForDebug(chat: ChatItemType) {
+    return {
+        id: chat.chat_id,
+        type: chat.chat_type,
+        displayName: chat.display_name,
+        recipientUserId: chat.recipient_user_id,
+        lastMessageId: chat.last_message_id,
+        lastMessageMedia: chat.last_message_media,
+        lastMessageTextLength: chat.last_message_context?.length ?? 0,
+        unread: chat.unreaded_messages_length,
+        isUnread: chat.is_unreaded_chat,
+        updatedAt: chat.updated_at instanceof Date
+            ? chat.updated_at.toISOString()
+            : String(chat.updated_at),
+    }
+}
 
 type ThemeColors = typeof Colors.light | typeof Colors.dark
 
@@ -81,7 +109,7 @@ const MediaPreviewText = ({
     const text = getText()
     if (!text) return null
 
-    return <Text style={styles.mediaPreviewText}>{text}</Text>
+    return <ThemedText style={styles.mediaPreviewText}>{text}</ThemedText>
 }
 
 const MediaTypeIcon = ({
@@ -112,11 +140,20 @@ const MediaTypeIcon = ({
 }
 
 const openChat = (chatId: string) => {
+    debugChatsPage('open-chat-start', {
+        chatId,
+        rightNavReady: rightNavRef.isReady(),
+        previousSelectedChatId: useActiveChatStore.getState().selectedChatId,
+    })
+    useActiveChatStore.getState().setSelectedChatId(chatId)
+
     if (rightNavRef.isReady()) {
+        debugChatsPage('open-chat-right-nav', { chatId })
         rightNavRef.navigate('chatId', { chatId })
         return
     }
 
+    debugChatsPage('open-chat-router', { chatId })
     router.navigate({
         pathname: '/chatId',
         params: { chatId },
@@ -194,10 +231,33 @@ const ChatItem = ({
         [item.updated_at]
     )
 
+    useEffect(() => {
+        debugChatsPage('chat-item-rendered', {
+            chat: summarizeChatForDebug(item),
+            isSelected,
+            isSelectionMode,
+            hasMedia,
+            hasText,
+            messageStatus,
+        })
+    }, [hasMedia, hasText, isSelected, isSelectionMode, item, messageStatus])
+
     return (
         <TouchableRipple
-            onPress={() => onPress(item.chat_id)}
-            onLongPress={() => onLongPress(item.chat_id)}
+            onPress={() => {
+                debugChatsPage('chat-item-press', {
+                    chat: summarizeChatForDebug(item),
+                    isSelectionMode,
+                })
+                onPress(item.chat_id)
+            }}
+            onLongPress={() => {
+                debugChatsPage('chat-item-long-press', {
+                    chat: summarizeChatForDebug(item),
+                    isSelectionMode,
+                })
+                onLongPress(item.chat_id)
+            }}
             style={[styles.chatRipple, { backgroundColor: isSelected ? colors.card : 'transparent' }]}>
             <View style={styles.chatItem}>
                 {isSelectionMode && (
@@ -224,9 +284,9 @@ const ChatItem = ({
                 <View style={styles.chatBody}>
                     <View style={styles.chatTop}>
                         <View style={styles.chatNameContainer}>
-                            <Text style={[styles.chatName, { color: colors.text }]} numberOfLines={1}>
+                            <ThemedText style={[styles.chatName, { color: colors.text }]} numberOfLines={1}>
                                 {displayName}
-                            </Text>
+                            </ThemedText>
                             {item.is_muted_chat_notifications && (
                                 <MaterialIcons
                                     name="volume-off"
@@ -236,9 +296,9 @@ const ChatItem = ({
                                 />
                             )}
                         </View>
-                        <Text style={[styles.chatTime, { color: item.is_unreaded_chat ? APP_GREEN : colors.textSecondary }]}>
+                        <ThemedText style={[styles.chatTime, { color: item.is_unreaded_chat ? APP_GREEN : colors.textSecondary }]}>
                             {chatTime}
-                        </Text>
+                        </ThemedText>
                     </View>
 
                     <View style={styles.chatBottom}>
@@ -253,12 +313,12 @@ const ChatItem = ({
                             {hasText && item.last_message_sender_is_me && (
                                 <MessageStatusIcon status={messageStatus} />
                             )}
-                            <Text style={[styles.chatPreview, { color: colors.textSecondary }]} numberOfLines={1}>
+                            <ThemedText style={[styles.chatPreview, { color: colors.textSecondary }]} numberOfLines={1}>
                                 {hasMedia
                                     ? <MediaPreviewText mediaType={item.last_message_media} />
                                     : item.last_message_context
                                 }
-                            </Text>
+                            </ThemedText>
                         </View>
 
                         <View style={styles.rightContainer}>
@@ -267,9 +327,9 @@ const ChatItem = ({
                             )}
                             {item.unreaded_messages_length > 0 && (
                                 <View style={styles.badge}>
-                                    <Text style={[styles.badgeText, { color: colors.background }]}>
+                                    <ThemedText style={[styles.badgeText, { color: colors.background }]}>
                                         {item.unreaded_messages_length}
-                                    </Text>
+                                    </ThemedText>
                                 </View>
                             )}
                         </View>
@@ -310,6 +370,28 @@ const ChatsPage = () => {
 
     const isSelectionMode = selectedChatIds.size > 0
 
+    debugChatsPage('render', {
+        userId: session?.user.id,
+        chatsCount: chats.length,
+        chatsLoading,
+        realtimeStatus,
+        selectedChatIds: Array.from(selectedChatIds),
+        isSelectionMode,
+        isSearchFocus,
+        searchQueryLength: searchQuery.length,
+        firstChat: chats[0] ? summarizeChatForDebug(chats[0]) : null,
+        latestChat: chats.at(-1) ? summarizeChatForDebug(chats.at(-1) as ChatItemType) : null,
+    })
+
+    useEffect(() => {
+        debugChatsPage('store-state-updated', {
+            chatsCount: chats.length,
+            chatsLoading,
+            realtimeStatus,
+            chats: chats.slice(0, 8).map(summarizeChatForDebug),
+        })
+    }, [chats, chatsLoading, realtimeStatus])
+
     const handleScroll = useCallback((e: any) => {
         const offsetY = e.nativeEvent.contentOffset.y
         const isScrolled = offsetY > SCROLL_THRESHOLD
@@ -318,18 +400,30 @@ const ChatsPage = () => {
             return
         }
 
+        debugChatsPage('scroll-threshold-change', { offsetY, isScrolled })
         isScrolledRef.current = isScrolled
         setAppbarBg(isScrolled ? colors.card : colors.background)
     }, [colors.background, colors.card])
 
     const clearSelection = () => {
+        debugChatsPage('selection-clear', {
+            selectedChatIds: Array.from(selectedChatIds),
+        })
         setSelectedChatIds(new Set())
     }
 
     const primeMessagesFromCache = useCallback((chatId: string) => {
         const currentUserId = session?.user.id;
-        if (!currentUserId) return;
+        debugChatsPage('prime-cache-start', { chatId, currentUserId });
+        if (!currentUserId) {
+            debugChatsPage('prime-cache-skip-no-user', { chatId });
+            return;
+        }
         if ((useActiveChatStore.getState().messagesByChatId[chatId]?.length ?? 0) > 0) {
+            debugChatsPage('prime-cache-skip-already-loaded', {
+                chatId,
+                messagesCount: useActiveChatStore.getState().messagesByChatId[chatId]?.length ?? 0,
+            });
             return;
         }
 
@@ -337,6 +431,12 @@ const ChatsPage = () => {
             chatId,
             currentUserId,
         }).then((cachedMessages) => {
+            debugChatsPage('prime-cache-loaded', {
+                chatId,
+                cachedMessagesCount: cachedMessages.length,
+                firstMessageId: cachedMessages[0]?.message_id,
+                lastMessageId: cachedMessages.at(-1)?.message_id,
+            });
             if (cachedMessages.length === 0) return;
 
             const {
@@ -346,31 +446,44 @@ const ChatsPage = () => {
 
             setMessages(chatId, cachedMessages);
             setHasOlderMessages(chatId, cachedMessages.length === MESSAGE_PAGE_SIZE);
+        }).catch((error) => {
+            debugChatsPage('prime-cache-error', { chatId, error });
         });
     }, [session?.user.id]);
 
     const handleChatPress = useCallback((chatId: string) => {
+        debugChatsPage('handle-chat-press', {
+            chatId,
+            ignoreNextChatPress: ignoreNextChatPressRef.current,
+            isSelectionMode,
+        });
         if (ignoreNextChatPressRef.current === chatId) {
             ignoreNextChatPressRef.current = null;
+            debugChatsPage('handle-chat-press-ignored-after-long-press', { chatId });
             return;
         }
 
         if (isSelectionMode) {
+            debugChatsPage('handle-chat-press-toggle-selection', { chatId });
             setSelectedChatIds((currentSelection) => toggleSelection(currentSelection, chatId));
             return;
         }
 
+        debugChatsPage('handle-chat-press-open', { chatId });
         openChat(chatId);
         InteractionManager.runAfterInteractions(() => {
+            debugChatsPage('after-interactions-prime-cache', { chatId });
             primeMessagesFromCache(chatId);
         });
     }, [isSelectionMode, primeMessagesFromCache]);
 
     const handleChatLongPress = useCallback((chatId: string) => {
+        debugChatsPage('handle-chat-long-press', { chatId });
         ignoreNextChatPressRef.current = chatId;
         setTimeout(() => {
             if (ignoreNextChatPressRef.current === chatId) {
                 ignoreNextChatPressRef.current = null;
+                debugChatsPage('long-press-ignore-window-expired', { chatId });
             }
         }, 700);
         void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
@@ -382,6 +495,7 @@ const ChatsPage = () => {
     }, []);
 
     const confirmLogout = async () => {
+        debugChatsPage('logout-confirm-start', { userId: session?.user.id });
         try {
             setLogoutLoading(true);
 
@@ -412,13 +526,16 @@ const ChatsPage = () => {
             setHasSession(false);
             authClient.getSession();
         } catch (error) {
+            debugChatsPage('logout-confirm-error', { error });
             console.log(error);
         } finally {
+            debugChatsPage('logout-confirm-finish', { userId: session?.user.id });
             setLogoutLoading(false);
         }
     };
 
     const handleLogout = () => {
+        debugChatsPage('logout-menu-press', { userId: session?.user.id });
         closeMenu();
         setLogoutDialogVisible(true);
     };
@@ -434,11 +551,21 @@ const ChatsPage = () => {
     const pinnedChats = useMemo(() => filteredChats.filter((chat) => chat.is_pinned_chat), [filteredChats]);
     const recentChats = useMemo(() => filteredChats.filter((chat) => !chat.is_pinned_chat), [filteredChats]);
 
+    useEffect(() => {
+        debugChatsPage('derived-lists-updated', {
+            filteredCount: filteredChats.length,
+            pinnedCount: pinnedChats.length,
+            recentCount: recentChats.length,
+            pinnedIds: pinnedChats.map((chat) => chat.chat_id),
+            recentIds: recentChats.slice(0, 10).map((chat) => chat.chat_id),
+        })
+    }, [filteredChats, pinnedChats, recentChats])
+
     const renderHeader = useCallback(() => (
         <>
             {pinnedChats.length > 0 && (
                 <>
-                    <Text style={[styles.sectionLabel, { color: colors.textSecondary }]}>Pinned</Text>
+                    <ThemedText style={[styles.sectionLabel, { color: colors.textSecondary }]}>Pinned</ThemedText>
                     {pinnedChats.map((item) => (
                         <MemoChatItem
                             key={item.chat_id}
@@ -454,25 +581,34 @@ const ChatsPage = () => {
             )}
 
             {recentChats.length > 0 && (
-                <Text style={[styles.sectionLabel, { color: colors.textSecondary }]}>
+                <ThemedText style={[styles.sectionLabel, { color: colors.textSecondary }]}>
                     {pinnedChats.length > 0 ? 'Recent' : 'Chats'}
-                </Text>
+                </ThemedText>
             )}
         </>
     ), [pinnedChats, recentChats, colors, selectedChatIds, isSelectionMode, handleChatPress, handleChatLongPress]);
 
-    const renderItem = useCallback(({ item }: { item: ChatItemType }) => (
-        <MemoChatItem
-            item={item}
-            colors={colors}
-            isSelected={selectedChatIds.has(item.chat_id)}
-            isSelectionMode={isSelectionMode}
-            onPress={handleChatPress}
-            onLongPress={handleChatLongPress}
-        />
-    ), [colors, selectedChatIds, isSelectionMode, handleChatPress, handleChatLongPress]);
+    const renderItem = useCallback(({ item }: { item: ChatItemType }) => {
+        debugChatsPage('flash-list-render-item', {
+            chat: summarizeChatForDebug(item),
+            isSelected: selectedChatIds.has(item.chat_id),
+            isSelectionMode,
+        })
+
+        return (
+            <MemoChatItem
+                item={item}
+                colors={colors}
+                isSelected={selectedChatIds.has(item.chat_id)}
+                isSelectionMode={isSelectionMode}
+                onPress={handleChatPress}
+                onLongPress={handleChatLongPress}
+            />
+        )
+    }, [colors, selectedChatIds, isSelectionMode, handleChatPress, handleChatLongPress]);
 
     if (logoutLoading) {
+        debugChatsPage('render-logout-loading', { userId: session?.user.id })
         return (
             <ThemedView style={{ flex: 1, justifyContent: 'center', alignItems: 'center' }}>
                 <ThemedView style={{ flexDirection: 'row', alignItems: 'center', gap: 10 }}>
@@ -585,9 +721,13 @@ const ChatsPage = () => {
                 ) : isSearchFocus ? (
                     <Searchbar
                         placeholder="Search"
-                        onChangeText={setSearchQuery}
+                        onChangeText={(text) => {
+                            debugChatsPage('search-change', { textLength: text.length });
+                            setSearchQuery(text);
+                        }}
                         value={searchQuery}
                         onIconPress={() => {
+                            debugChatsPage('search-close', { searchQueryLength: searchQuery.length })
                             setIsSearchFocus(false)
                             setSearchQuery('')
                         }}
@@ -599,13 +739,19 @@ const ChatsPage = () => {
                 ) : (
                     <>
                         <Appbar.Content title="YaaHalaa" titleStyle={styles.appbarTitle} />
-                        <Appbar.Action icon="magnify" onPress={() => setIsSearchFocus(true)} />
+                        <Appbar.Action icon="magnify" onPress={() => {
+                            debugChatsPage('search-open', { chatsCount: chats.length })
+                            setIsSearchFocus(true)
+                        }} />
                         <Menu
                             visible={visible}
                             onDismiss={closeMenu}
                             anchorPosition='bottom'
                             contentStyle={{ backgroundColor: colors.background }}
-                            anchor={<Appbar.Action icon="dots-vertical" onPress={openMenu} />}>
+                            anchor={<Appbar.Action icon="dots-vertical" onPress={() => {
+                                debugChatsPage('menu-open', { userId: session?.user.id })
+                                openMenu()
+                            }} />}>
                             <Menu.Item onPress={() => { }} title="New group" leadingIcon={'account-multiple-plus-outline'} />
                             <Menu.Item onPress={() => { }} title="Starred messages" leadingIcon={'star-outline'} />
                             <Menu.Item onPress={() => { }} title="Mar all as read" leadingIcon={'message-badge-outline'} />
@@ -618,30 +764,26 @@ const ChatsPage = () => {
             {realtimeStatus === 'connecting' && (
                 <ActivityIndicator size={'small'} color={APP_GREEN} />
             )}
-            <FlatList
+            <FlashList
                 data={recentChats}
                 keyExtractor={(item) => item.chat_id}
                 ListHeaderComponent={renderHeader}
                 renderItem={renderItem}
                 onScroll={handleScroll}
                 scrollEventThrottle={16}
-                initialNumToRender={12}
-                maxToRenderPerBatch={8}
-                updateCellsBatchingPeriod={32}
-                windowSize={7}
                 removeClippedSubviews={Platform.OS === 'android'}
                 ListHeaderComponentStyle={{ gap: 6 }}
                 contentContainerStyle={styles.listContent}
                 ListEmptyComponent={!chatsLoading ? (
                     <View style={styles.emptyContainer}>
                         <View style={{ flexDirection: 'row', alignItems: 'center', flexWrap: 'wrap', gap: 4 }}>
-                            <Text style={[styles.emptyText, { color: colors.textSecondary }]}>
+                            <ThemedText style={[styles.emptyText, { color: colors.textSecondary }]}>
                                 You have no chats yet, to create a new chat press the
-                            </Text>
+                            </ThemedText>
                             <NewChatIcon size={18} color={colors.textSecondary} />
-                            <Text style={[styles.emptyText, { color: colors.textSecondary }]}>
+                            <ThemedText style={[styles.emptyText, { color: colors.textSecondary }]}>
                                 green floating button
-                            </Text>
+                            </ThemedText>
                         </View>
                     </View>
                 ) : null}
@@ -664,7 +806,10 @@ const ChatsPage = () => {
                 <FAB
                     icon={() => <NewChatFilledIcon size={24} color={colors.background} />}
                     style={styles.fab}
-                    onPress={() => router.push('/create-chat')}
+                    onPress={() => {
+                        debugChatsPage('create-chat-press', { userId: session?.user.id })
+                        router.push('/create-chat')
+                    }}
                 />
             )}
         </ThemedView>

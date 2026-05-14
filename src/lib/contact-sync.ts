@@ -1,5 +1,11 @@
 import { RequestContact } from "@/helper/request-contact";
 import { decryptStoredContact } from "@/lib/contact-crypto";
+import {
+    reportMappedByteProgress,
+    reportSyncProgress,
+    requestJsonWithProgress,
+    type SyncProgressCallback,
+} from "@/lib/http-progress";
 import { getDbContacts, upsertDbContacts } from "@/lib/upsert-db-contacts";
 import { useContactDirectoryStore } from "@/store/use-contact-directory-store";
 import type { Contact, StoredContactRecord } from "@/types/contacts.type";
@@ -16,6 +22,7 @@ type SyncMobileContactsParams = {
     currentUserId: string;
     cookies: string | null;
     onLoadingTitleChange?: (title: string) => void;
+    onProgress?: SyncProgressCallback;
     onContactsLoaded?: (contacts: Contact[]) => void;
 };
 
@@ -74,37 +81,58 @@ export async function syncMobileContacts({
     currentUserId,
     cookies,
     onLoadingTitleChange,
+    onProgress,
     onContactsLoaded,
 }: SyncMobileContactsParams) {
     onLoadingTitleChange?.("Loading your contacts");
+    reportSyncProgress(onProgress, "Loading your contacts", 0);
 
     const deviceContacts = await RequestContact();
+    reportSyncProgress(onProgress, "Loading your contacts", 15);
+
     const phoneNumbers = extractPhoneNumbers(deviceContacts);
+    reportSyncProgress(onProgress, "Syncing your contacts", 20);
 
     if (deviceContacts.length === 0 && phoneNumbers.length === 0) {
-        return hydrateLocalContacts({ currentUserId, onContactsLoaded });
+        const contacts = await hydrateLocalContacts({ currentUserId, onContactsLoaded });
+        reportSyncProgress(onProgress, "Loading your contacts", 100);
+        return contacts;
     }
 
     try {
-        const response = await fetch(`${API_BASE_URL}/api/mobile/contacts`, {
+        const payload = await requestJsonWithProgress<MobileContactsResponse>(`${API_BASE_URL}/api/mobile/contacts`, {
             method: "POST",
             headers: getAuthHeaders(cookies),
-            credentials: "omit",
             body: JSON.stringify({
                 contacts: deviceContacts,
                 phoneNumbers,
             }),
+            onUploadProgress: (progress) =>
+                reportMappedByteProgress({
+                    onProgress,
+                    title: "Syncing your contacts",
+                    start: 20,
+                    end: 45,
+                    ...progress,
+                }),
+            onDownloadProgress: (progress) =>
+                reportMappedByteProgress({
+                    onProgress,
+                    title: "Loading your contacts",
+                    start: 45,
+                    end: 75,
+                    ...progress,
+                }),
         });
 
-        if (!response.ok) {
-            throw new Error("Failed to sync contacts");
-        }
-
-        const payload = (await response.json()) as MobileContactsResponse;
+        reportSyncProgress(onProgress, "Saving your contacts", 80);
         await upsertDbContacts(payload.contacts);
+        reportSyncProgress(onProgress, "Saving your contacts", 90);
     } catch (error) {
         console.log("Failed to sync mobile contacts, using local cache:", error);
     }
 
-    return hydrateLocalContacts({ currentUserId, onContactsLoaded });
+    const contacts = await hydrateLocalContacts({ currentUserId, onContactsLoaded });
+    reportSyncProgress(onProgress, "Loading your contacts", 100);
+    return contacts;
 }

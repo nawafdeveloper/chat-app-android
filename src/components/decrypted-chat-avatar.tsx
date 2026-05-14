@@ -12,7 +12,8 @@ import {
 import { MaterialIcons } from "@expo/vector-icons";
 import { Image } from "expo-image";
 import React, { useEffect, useMemo, useState } from "react";
-import { Text, useColorScheme, View } from "react-native";
+import { useColorScheme, View } from "react-native";
+import { ThemedText } from "./themed-text";
 
 type Props = {
     userId: string | null | undefined;
@@ -183,17 +184,18 @@ export function ChatAvatar({
                     },
                 ]}
             >
-                <Text
+                <ThemedText
                     style={{
                         color: userId
                             ? `hsl(${hue}, ${fgSaturation}%, ${fgLightness}%)`
                             : textColor,
                         fontSize: style?.width ? style.width * 0.4 : 16,
+                        lineHeight: style?.width ? style.width * 0.4 : 16,
                         fontWeight: "bold",
                     }}
                 >
                     {firstLetter}
-                </Text>
+                </ThemedText>
             </View>
         );
     }

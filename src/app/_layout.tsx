@@ -17,14 +17,16 @@ import notifee, { EventType } from '@notifee/react-native';
 import { getMessaging, onMessage } from '@react-native-firebase/messaging';
 import { DarkTheme, DefaultTheme, ThemeProvider } from '@react-navigation/native';
 import { useMigrations } from 'drizzle-orm/expo-sqlite/migrator';
+import { useFonts } from 'expo-font';
 import { router, Stack } from 'expo-router';
 import * as SplashScreen from 'expo-splash-screen';
 import React, { useCallback, useEffect, useRef, useState } from 'react';
-import { Linking, StatusBar, Text, useColorScheme, View } from 'react-native';
+import { Linking, StatusBar, useColorScheme, View } from 'react-native';
 import { GestureHandlerRootView } from 'react-native-gesture-handler';
 import { PaperProvider } from 'react-native-paper';
 import { install } from 'react-native-quick-crypto';
 import migrations from '../../drizzle/migrations';
+import { ThemedText } from '../components/themed-text';
 import { db } from '../db/client';
 
 install();
@@ -145,6 +147,12 @@ const AppLayout = () => {
     const syncedContactsRef = useRef<string | null>(null);
     const handledNotificationResponseRef = useRef<string | null>(null);
 
+    const [fontsLoaded, fontError] = useFonts({
+        'Noto-Light': require('../../assets/fonts/NotoSansArabic-Light.ttf'),
+        'Noto-Regular': require('../../assets/fonts/NotoSansArabic-Regular.ttf'),
+        'Noto-Bold': require('../../assets/fonts/NotoSansArabic-Bold.ttf'),
+    });
+
     const refreshKeys = async () => {
         const keys = await retrieveSessionKeys();
         setHasKeys(!!keys);
@@ -175,11 +183,12 @@ const AppLayout = () => {
             isReady &&
             success &&
             hasKeys !== null &&
+            (fontsLoaded || fontError) &&
             (!shouldWaitForLocalCache || localCacheReady)
         ) {
             SplashScreen.hideAsync();
         }
-    }, [hasKeys, hasSession, isReady, localCacheReady, session?.user.id, success]);
+    }, [hasKeys, hasSession, isReady, localCacheReady, session?.user.id, success, fontsLoaded, fontError]);
 
     useEffect(() => {
         if (!hasSession) {
@@ -423,12 +432,12 @@ const AppLayout = () => {
     if (error) {
         return (
             <View style={{ flex: 1, justifyContent: 'center', alignItems: 'center' }}>
-                <Text>DB Error: {error.message}</Text>
+                <ThemedText>DB Error: {error.message}</ThemedText>
             </View>
         );
     }
 
-    if (!isReady || !success || hasKeys === null) return null;
+    if (!isReady || !success || hasKeys === null || (!fontsLoaded && !fontError)) return null;
 
     const isNewUser = session?.user.isNewUser === true;
     const hasName = !!session?.user.name?.trim();
@@ -452,9 +461,9 @@ const AppLayout = () => {
                                 hasName={hasName}
                             />
                         </CryptoProvider>
-                        <StatusBar 
-                        barStyle={colorScheme === 'dark' ? 'light-content' : 'dark-content'}
-                         />
+                        <StatusBar
+                            barStyle={colorScheme === 'dark' ? 'light-content' : 'dark-content'}
+                        />
                     </ThemeProvider>
                 </PaperProvider>
             </TabletProvider>

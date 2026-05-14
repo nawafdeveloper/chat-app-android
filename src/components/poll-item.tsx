@@ -1,7 +1,8 @@
 import { Poll, PollOption } from '@/types/messages';
 import React, { useState } from 'react';
 import { StyleSheet, View } from 'react-native';
-import { Avatar, ProgressBar, RadioButton, Text } from 'react-native-paper';
+import { Avatar, ProgressBar, RadioButton } from 'react-native-paper';
+import { ThemedText } from './themed-text';
 
 type PollComponentProps = {
     poll: Poll;
@@ -45,9 +46,9 @@ const PollComponent = ({ poll, onVote, isDark = false, isSent }: PollComponentPr
         <View>
             <View style={styles.headerRow}>
                 <View style={styles.titleContainer}>
-                    <Text variant="titleMedium" style={[styles.question, isDark && styles.textDark]}>
+                    <ThemedText style={[styles.question, isDark && styles.textDark]}>
                         {poll.poll_question}
-                    </Text>
+                    </ThemedText>
                 </View>
                 <View style={styles.avatarContainer}>
                     <Avatar.Text size={28} label="JD" style={styles.avatar} />
@@ -128,12 +129,12 @@ const PollOptionItem = ({
                     color="#25D366"
                     uncheckedColor={isDark ? '#888' : '#666'}
                 />
-                <Text variant="bodyMedium" style={[styles.optionText, isDark && styles.textDark]}>
+                <ThemedText style={[styles.optionText, isDark && styles.textDark]}>
                     {option.text}
-                </Text>
-                <Text variant="labelSmall" style={[styles.voteCount, isDark && styles.textSecondaryDark]}>
+                </ThemedText>
+                <ThemedText style={[styles.voteCount, isDark && styles.textSecondaryDark]}>
                     {option.votes}
-                </Text>
+                </ThemedText>
             </View>
             <ProgressBar
                 progress={percentage / 100}

@@ -1,4 +1,4 @@
-import { Colors } from '@/constants/theme'
+import { Colors, Fonts } from '@/constants/theme'
 import { useChatTyping } from '@/hooks/use-chat-typing'
 import { useSendChatMessage } from '@/hooks/use-send-chat-message'
 import { authClient } from '@/lib/auth-client'
@@ -24,6 +24,7 @@ import { ThemedText } from './themed-text'
 import { ThemedView } from './themed-view'
 
 type Props = {
+    chatId?: string | null;
     isReply: boolean;
     handleClearReply: () => void;
     replyToUser: string;
@@ -36,6 +37,18 @@ type Props = {
 
 const POLL_INTERVAL_MS = 80;
 const API_BASE = "https://halabakk-web.nawaf-alhasosah.workers.dev";
+const CHAT_DEBUG = true;
+
+function debugChatInput(stage: string, payload: Record<string, unknown> = {}) {
+    if (!CHAT_DEBUG) {
+        return;
+    }
+
+    console.log(`[chat-debug][chat-input][${stage}]`, {
+        at: new Date().toISOString(),
+        ...payload,
+    });
+}
 
 async function fetchOpenGraphPreview(
     url: string,
@@ -65,14 +78,21 @@ function ReplyPhotoThumbnail({ url, isDark }: { url?: string | null; isDark: boo
     const [resolvedUri, setResolvedUri] = useState<string | null>(null);
 
     useEffect(() => {
-        if (!url) return;
+        if (!url) {
+            debugChatInput('reply-thumbnail-skip-no-url');
+            return;
+        }
         const absoluteUrl = url.startsWith('/') ? `${API_BASE}${url}` : url;
+        debugChatInput('reply-thumbnail-load-start', { url: absoluteUrl });
         fetchAndDecryptMessageMedia({
             source: absoluteUrl,
             isPreview: true,
             fallbackExtension: 'jpg',
         }).then(uri => {
+            debugChatInput('reply-thumbnail-load-finish', { url: absoluteUrl, resolved: Boolean(uri) });
             if (uri) setResolvedUri(uri);
+        }).catch((error) => {
+            debugChatInput('reply-thumbnail-load-error', { url: absoluteUrl, error });
         });
     }, [url]);
 
@@ -93,7 +113,7 @@ function ReplyPhotoThumbnail({ url, isDark }: { url?: string | null; isDark: boo
     );
 }
 
-const ChatInputContainer = ({ isReply, handleClearReply, replyMessage, replyToUser, replyMediaType, replyMediaUrl, inputRef, onVoiceMessageRecorded }: Props) => {
+const ChatInputContainer = ({ chatId, isReply, handleClearReply, replyMessage, replyToUser, replyMediaType, replyMediaUrl, inputRef, onVoiceMessageRecorded }: Props) => {
     const { data: session } = authClient.useSession();
     const insets = useSafeAreaInsets();
     const scheme = useColorScheme();
@@ -101,10 +121,11 @@ const ChatInputContainer = ({ isReply, handleClearReply, replyMessage, replyToUs
 
     const { sendMessage, sendVoiceMessage } = useSendChatMessage();
     const selectedChatId = useActiveChatStore((state) => state.selectedChatId);
+    const activeChatId = chatId ?? selectedChatId;
     const setDraft = useActiveChatStore((state) => state.setDraft);
-    const { handleDraftChange, stopTyping } = useChatTyping(selectedChatId);
+    const { handleDraftChange, stopTyping } = useChatTyping(activeChatId);
     const draftValue = useActiveChatStore((state) =>
-        selectedChatId ? state.draftsByChatId[selectedChatId] ?? "" : ""
+        activeChatId ? state.draftsByChatId[activeChatId] ?? "" : ""
     );
     const linkPreviewDisabled = Boolean(
         (
@@ -135,8 +156,58 @@ const ChatInputContainer = ({ isReply, handleClearReply, replyMessage, replyToUs
 
     const recorderState = useAudioRecorderState(audioRecorder, POLL_INTERVAL_MS);
 
+    debugChatInput('render', {
+        propChatId: chatId,
+        selectedChatId,
+        activeChatId,
+        draftLength: draftValue.length,
+        canSendText,
+        isReply,
+        replyMediaType,
+        isRecording,
+        isSendingText,
+        isSendingVoice,
+        attachmentVisible,
+        openGraphPreviewUrl,
+        hasOpenGraphPreview: Boolean(openGraphPreview),
+        linkPreviewDisabled,
+        draftFirstUrl,
+    });
+
+    useEffect(() => {
+        debugChatInput('state-updated', {
+            propChatId: chatId,
+            selectedChatId,
+            activeChatId,
+            draftLength: draftValue.length,
+            canSendText,
+            isReply,
+            replyMediaType,
+            isRecording,
+            isSendingText,
+            isSendingVoice,
+            attachmentVisible,
+            draftFirstUrl,
+        });
+    }, [
+        activeChatId,
+        attachmentVisible,
+        canSendText,
+        chatId,
+        draftFirstUrl,
+        draftValue.length,
+        isRecording,
+        isReply,
+        isSendingText,
+        isSendingVoice,
+        replyMediaType,
+        selectedChatId,
+    ]);
+
     const startRecording = async () => {
+        debugChatInput('record-start-request', { activeChatId });
         const { granted } = await AudioModule.requestRecordingPermissionsAsync();
+        debugChatInput('record-permission-result', { activeChatId, granted });
         if (!granted) return;
 
         await setAudioModeAsync({
@@ -147,9 +218,16 @@ const ChatInputContainer = ({ isReply, handleClearReply, replyMessage, replyToUs
         await audioRecorder.prepareToRecordAsync();
         audioRecorder.record();
         setIsRecording(true);
+        debugChatInput('record-started', { activeChatId });
     };
 
     const stopRecording = async () => {
+        debugChatInput('record-stop-request', {
+            activeChatId,
+            isRecording: recorderState.isRecording,
+            isSendingVoice,
+            durationMillis: recorderState.durationMillis,
+        });
         if (!recorderState.isRecording || isSendingVoice) return;
 
         const durationMillis = recorderState.durationMillis;
@@ -160,43 +238,85 @@ const ChatInputContainer = ({ isReply, handleClearReply, replyMessage, replyToUs
         if (uri) {
             setIsSendingVoice(true);
             try {
+                debugChatInput('voice-send-start', { activeChatId, uri, durationMillis });
                 await sendVoiceMessage({
                     uri,
                     durationMillis,
-                    chatId: selectedChatId,
+                    chatId: activeChatId,
                 });
+                debugChatInput('voice-send-success', { activeChatId, uri, durationMillis });
+            } catch (error) {
+                debugChatInput('voice-send-error', { activeChatId, uri, durationMillis, error });
+                throw error;
             } finally {
                 setIsSendingVoice(false);
+                debugChatInput('voice-send-finish', { activeChatId });
             }
             onVoiceMessageRecorded?.(uri, durationMillis);
+        } else {
+            debugChatInput('record-stop-no-uri', { activeChatId, durationMillis });
         }
     };
 
     const cancelRecording = async () => {
+        debugChatInput('record-cancel-request', {
+            activeChatId,
+            isRecording: recorderState.isRecording,
+        });
         if (recorderState.isRecording) {
             await audioRecorder.stop();
         }
         setIsRecording(false);
+        debugChatInput('record-cancelled', { activeChatId });
     };
 
     const resolveOpenGraphPreviewForSend = async () => {
         if (linkPreviewDisabled || !draftFirstUrl) {
+            debugChatInput('open-graph-send-skip', {
+                activeChatId,
+                linkPreviewDisabled,
+                draftFirstUrl,
+            });
             return null;
         }
 
         if (openGraphPreviewUrl === draftFirstUrl && openGraphPreview) {
+            debugChatInput('open-graph-send-use-cached', {
+                activeChatId,
+                draftFirstUrl,
+            });
             return openGraphPreview;
         }
 
         try {
-            return await fetchOpenGraphPreview(draftFirstUrl);
-        } catch {
+            debugChatInput('open-graph-send-fetch-start', {
+                activeChatId,
+                draftFirstUrl,
+            });
+            const preview = await fetchOpenGraphPreview(draftFirstUrl);
+            debugChatInput('open-graph-send-fetch-finish', {
+                activeChatId,
+                draftFirstUrl,
+                hasPreview: Boolean(preview),
+            });
+            return preview;
+        } catch (error) {
+            debugChatInput('open-graph-send-fetch-error', {
+                activeChatId,
+                draftFirstUrl,
+                error,
+            });
             return null;
         }
     };
 
     useEffect(() => {
         if (linkPreviewDisabled || !draftFirstUrl) {
+            debugChatInput('open-graph-preview-reset', {
+                activeChatId,
+                linkPreviewDisabled,
+                draftFirstUrl,
+            });
             setOpenGraphPreview(null);
             setOpenGraphPreviewUrl(null);
             return;
@@ -206,16 +326,34 @@ const ChatInputContainer = ({ isReply, handleClearReply, replyMessage, replyToUs
         const controller = new AbortController();
         setOpenGraphPreview(null);
         setOpenGraphPreviewUrl(draftFirstUrl);
+        debugChatInput('open-graph-preview-schedule', {
+            activeChatId,
+            draftFirstUrl,
+        });
 
         const timer = window.setTimeout(() => {
+            debugChatInput('open-graph-preview-fetch-start', {
+                activeChatId,
+                draftFirstUrl,
+            });
             void fetchOpenGraphPreview(draftFirstUrl, controller.signal)
                 .then((preview) => {
                     if (isActive) {
+                        debugChatInput('open-graph-preview-fetch-finish', {
+                            activeChatId,
+                            draftFirstUrl,
+                            hasPreview: Boolean(preview),
+                        });
                         setOpenGraphPreview(preview);
                     }
                 })
-                .catch(() => {
+                .catch((error) => {
                     if (isActive) {
+                        debugChatInput('open-graph-preview-fetch-error', {
+                            activeChatId,
+                            draftFirstUrl,
+                            error,
+                        });
                         setOpenGraphPreview(null);
                     }
                 })
@@ -225,30 +363,71 @@ const ChatInputContainer = ({ isReply, handleClearReply, replyMessage, replyToUs
             isActive = false;
             window.clearTimeout(timer);
             controller.abort();
+            debugChatInput('open-graph-preview-cleanup', {
+                activeChatId,
+                draftFirstUrl,
+            });
         };
-    }, [draftFirstUrl, linkPreviewDisabled]);
+    }, [activeChatId, draftFirstUrl, linkPreviewDisabled]);
 
-    const handleToggleAttachment = () => setAttachmentVisible(prev => !prev);
+    const handleToggleAttachment = () => {
+        debugChatInput('attachment-toggle', {
+            activeChatId,
+            nextVisible: !attachmentVisible,
+        });
+        setAttachmentVisible(prev => !prev);
+    };
 
     const handleSend = async () => {
-        if (!selectedChatId || !canSendText || isSendingText) {
+        debugChatInput('send-press', {
+            activeChatId,
+            canSendText,
+            isSendingText,
+            draftLength: draftValue.length,
+            draftPreview: draftValue.slice(0, 80),
+        });
+        if (!activeChatId || !canSendText || isSendingText) {
+            debugChatInput('send-abort', {
+                activeChatId,
+                canSendText,
+                isSendingText,
+                draftLength: draftValue.length,
+            });
             return;
         }
 
         setIsSendingText(true);
         try {
             const openGraphData = await resolveOpenGraphPreviewForSend();
-            stopTyping(selectedChatId);
+            debugChatInput('send-stop-typing', { activeChatId });
+            stopTyping(activeChatId);
+            debugChatInput('send-message-start', {
+                activeChatId,
+                draftLength: draftValue.length,
+                hasOpenGraphData: Boolean(openGraphData),
+            });
             const sent = await sendMessage({
                 text: draftValue,
-                chatId: selectedChatId,
+                chatId: activeChatId,
                 openGraphData,
+            });
+            debugChatInput('send-message-result', {
+                activeChatId,
+                sent,
+                isReply,
             });
             if (sent && isReply) {
                 handleClearReply();
             }
+        } catch (error) {
+            debugChatInput('send-message-error', {
+                activeChatId,
+                error,
+            });
+            throw error;
         } finally {
             setIsSendingText(false);
+            debugChatInput('send-finish', { activeChatId });
         }
     };
 
@@ -318,10 +497,21 @@ const ChatInputContainer = ({ isReply, handleClearReply, replyMessage, replyToUs
                                 ref={inputRef}
                                 value={draftValue}
                                 onChangeText={(text) => {
-                                    if (!selectedChatId) {
+                                    if (!activeChatId) {
+                                        debugChatInput('draft-change-skip-no-active-chat', {
+                                            selectedChatId,
+                                            propChatId: chatId,
+                                            textLength: text.length,
+                                        });
                                         return;
                                     }
-                                    setDraft(selectedChatId, text);
+                                    debugChatInput('draft-change', {
+                                        activeChatId,
+                                        previousLength: draftValue.length,
+                                        nextLength: text.length,
+                                        hasUrl: Boolean(findFirstUrl(text)),
+                                    });
+                                    setDraft(activeChatId, text);
                                     handleDraftChange(text);
                                 }}
                                 placeholder='Message'
@@ -337,6 +527,11 @@ const ChatInputContainer = ({ isReply, handleClearReply, replyMessage, replyToUs
                                 size={28}
                                 style={{ margin: 0, marginBottom: 2 }}
                                 onPress={() => {
+                                    debugChatInput('left-action-press', {
+                                        activeChatId,
+                                        canSendText,
+                                        action: canSendText ? 'attachment' : 'record',
+                                    });
                                     if (canSendText) {
                                         handleToggleAttachment();
                                     } else {
@@ -348,6 +543,12 @@ const ChatInputContainer = ({ isReply, handleClearReply, replyMessage, replyToUs
                     </ThemedView>
                     <IconButton
                         onPress={() => {
+                            debugChatInput('right-action-press', {
+                                activeChatId,
+                                canSendText,
+                                isSendingText,
+                                action: canSendText ? 'send' : 'attachment',
+                            });
                             if (!canSendText) {
                                 handleToggleAttachment();
                             } else {
@@ -426,7 +627,9 @@ const styles = StyleSheet.create({
     input: {
         flex: 1,
         maxHeight: 120,
-        marginBottom: 4
+        fontFamily: Fonts.regular,
+        marginBottom: -4,
+        marginTop: -4
     },
     replyMainContainer: {
         overflow: 'hidden',

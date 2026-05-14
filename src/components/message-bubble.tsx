@@ -15,7 +15,7 @@ import { useAudioPlayer, useAudioPlayerStatus } from "expo-audio";
 import * as Haptics from 'expo-haptics';
 import { Image } from "expo-image";
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { ActivityIndicator, Linking, Pressable, StyleSheet, Text, TouchableWithoutFeedback, View } from "react-native";
+import { ActivityIndicator, Linking, Pressable, StyleSheet, TouchableWithoutFeedback, View } from "react-native";
 import { Gesture, GestureDetector } from "react-native-gesture-handler";
 import { Icon, IconButton, TouchableRipple } from "react-native-paper";
 import Animated, { Extrapolation, interpolate, useAnimatedStyle, useSharedValue, withSpring } from "react-native-reanimated";
@@ -82,6 +82,34 @@ const MAX_SWIPE_TRANSLATION = 56;
 const SWIPE_HARD_LIMIT = 72;
 const SWIPE_RESISTANCE = 0.18;
 const AnimatedIconButton = Animated.createAnimatedComponent(IconButton);
+const CHAT_DEBUG = true;
+
+function debugBubble(stage: string, payload: Record<string, unknown> = {}) {
+    if (!CHAT_DEBUG) {
+        return;
+    }
+
+    console.log(`[chat-debug][message-bubble][${stage}]`, {
+        at: new Date().toISOString(),
+        ...payload,
+    });
+}
+
+function summarizeBubbleMessage(message: Message) {
+    return {
+        id: message.message_id,
+        chatId: message.chat_room_id,
+        sender: message.sender_user_id,
+        media: message.attached_media,
+        hasText: Boolean(message.message_text_content?.trim()),
+        textLength: message.message_text_content?.length ?? 0,
+        hasMediaUrl: Boolean(message.media_url),
+        hasPreviewUrl: Boolean(message.media_preview_url || message.media_preview_object_key),
+        status: message.client_status,
+        readByRecipient: message.is_read_by_recipient,
+        createdAt: message.created_at?.toISOString?.() ?? String(message.created_at),
+    };
+}
 
 type ActiveVoicePlayback = {
     messageId: string;
@@ -193,14 +221,21 @@ function ReplyPhotoThumbnail({ url, isDark }: { url?: string | null; isDark: boo
     const [resolvedUri, setResolvedUri] = useState<string | null>(null);
 
     useEffect(() => {
-        if (!url) return;
+        if (!url) {
+            debugBubble('reply-thumbnail-skip-no-url');
+            return;
+        }
         const absoluteUrl = url.startsWith('/') ? `${API_BASE}${url}` : url;
+        debugBubble('reply-thumbnail-load-start', { url: absoluteUrl });
         fetchAndDecryptMessageMedia({
             source: absoluteUrl,
             isPreview: true,
             fallbackExtension: 'jpg',
         }).then(uri => {
+            debugBubble('reply-thumbnail-load-finish', { url: absoluteUrl, resolved: Boolean(uri) });
             if (uri) setResolvedUri(uri);
+        }).catch((error) => {
+            debugBubble('reply-thumbnail-load-error', { url: absoluteUrl, error });
         });
     }, [url]);
 
@@ -271,6 +306,34 @@ function VoiceMessagePreview({
     const isAudioBusy = isAudioLoading || (status.isBuffering && Boolean(resolvedAudioUri));
     const isControlDisabled = !audioSource || !canLoadAudio || isAudioBusy;
 
+    useEffect(() => {
+        debugBubble('voice-render-state', {
+            messageId,
+            hasAudioSource: Boolean(audioSource),
+            canLoadAudio,
+            resolvedAudioUri: Boolean(resolvedAudioUri),
+            isAudioLoading,
+            isSeeking,
+            duration,
+            currentTime,
+            playing: status.playing,
+            buffering: status.isBuffering,
+            isControlDisabled,
+        });
+    }, [
+        audioSource,
+        canLoadAudio,
+        currentTime,
+        duration,
+        isAudioLoading,
+        isControlDisabled,
+        isSeeking,
+        messageId,
+        resolvedAudioUri,
+        status.isBuffering,
+        status.playing,
+    ]);
+
     const pausePlayerSafely = useCallback(() => {
         try {
             player.pause();
@@ -304,9 +367,11 @@ function VoiceMessagePreview({
     }, [player]);
 
     useEffect(() => {
+        debugBubble('voice-mounted', { messageId });
         isMountedRef.current = true;
 
         return () => {
+            debugBubble('voice-unmounted', { messageId });
             isMountedRef.current = false;
             if (activeVoicePlayback?.messageId === messageId) {
                 activeVoicePlayback = null;
@@ -318,6 +383,11 @@ function VoiceMessagePreview({
     }, [messageId]);
 
     useEffect(() => {
+        debugBubble('voice-source-reset', {
+            messageId,
+            hasAudioSource: Boolean(audioSource),
+            isLocalAudioSource: Boolean(audioSource && isLocalMediaUri(audioSource)),
+        });
         setResolvedAudioUri(null);
         setSeekTime(0);
         setIsSeeking(false);
@@ -348,28 +418,42 @@ function VoiceMessagePreview({
 
     const ensureAudioReady = useCallback(async () => {
         if (!audioSource || !canLoadAudio) {
+            debugBubble('voice-ensure-audio-skip', {
+                messageId,
+                hasAudioSource: Boolean(audioSource),
+                canLoadAudio,
+            });
             return null;
         }
 
         if (resolvedAudioUri) {
+            debugBubble('voice-ensure-audio-use-resolved', { messageId });
             return resolvedAudioUri;
         }
 
         setIsAudioLoading(true);
         try {
+            debugBubble('voice-ensure-audio-fetch-start', { messageId, audioSource });
             const uri = await fetchAndDecryptMessageMedia({
                 source: audioSource,
                 fallbackExtension: "m4a",
             });
 
             if (!uri || !isMountedRef.current) {
+                debugBubble('voice-ensure-audio-fetch-empty-or-unmounted', {
+                    messageId,
+                    resolved: Boolean(uri),
+                    isMounted: isMountedRef.current,
+                });
                 return null;
             }
 
             setResolvedAudioUri(uri);
             replacePlayerSourceSafely(uri);
+            debugBubble('voice-ensure-audio-fetch-success', { messageId, uri });
             return uri;
         } catch (error) {
+            debugBubble('voice-ensure-audio-fetch-error', { messageId, error });
             console.log("Failed to load voice message:", error);
             return null;
         } finally {
@@ -380,6 +464,12 @@ function VoiceMessagePreview({
     }, [audioSource, canLoadAudio, replacePlayerSourceSafely, resolvedAudioUri]);
 
     const handlePlayPause = useCallback(async () => {
+        debugBubble('voice-play-press', {
+            messageId,
+            isControlDisabled,
+            playing: status.playing,
+            hasAudioSource: Boolean(audioSource),
+        });
         if (isControlDisabled) {
             return;
         }
@@ -392,6 +482,7 @@ function VoiceMessagePreview({
             if (latestVoicePlayRequestId === messageId) {
                 latestVoicePlayRequestId = null;
             }
+            debugBubble('voice-paused', { messageId });
             return;
         }
 
@@ -401,6 +492,12 @@ function VoiceMessagePreview({
 
         const uri = await ensureAudioReady();
         if (!uri || latestVoicePlayRequestId !== messageId || !isMountedRef.current) {
+            debugBubble('voice-play-abort-after-ready', {
+                messageId,
+                resolved: Boolean(uri),
+                latestVoicePlayRequestId,
+                isMounted: isMountedRef.current,
+            });
             return;
         }
 
@@ -412,6 +509,7 @@ function VoiceMessagePreview({
             },
         };
         playPlayerSafely();
+        debugBubble('voice-playing', { messageId, uri });
     }, [ensureAudioReady, isControlDisabled, messageId, pausePlayerSafely, playPlayerSafely, seekPlayerSafely, status.playing]);
 
     const handleSlidingStart = useCallback((value: number) => {
@@ -643,6 +741,47 @@ function Bubble({ message, currentUserId, isDark, showTail = true, isSelected, s
                     ? (replySenderGroupMember.name?.trim() || replySenderGroupMember.phone_number) ?? ""
                     : replySenderUserId ?? "";
 
+    debugBubble('render', {
+        message: summarizeBubbleMessage(message),
+        currentUserId,
+        sent,
+        isSelected,
+        selectedCount,
+        isGroupChat,
+        activeChatId: activeChat?.chat_id ?? null,
+        canDownloadMediaFromBubble,
+        shouldShowMediaDownloadOverlay,
+        isMediaDownloading,
+        hasReply: Boolean(reply_message),
+        hasContact: Boolean(contact),
+        hasLocation: Boolean(location),
+        hasOpenGraph: Boolean(open_graph_data),
+    });
+
+    useEffect(() => {
+        debugBubble('state-updated', {
+            message: summarizeBubbleMessage(message),
+            sent,
+            isSelected,
+            selectedCount,
+            isPendingOutgoing,
+            isFailedOutgoing,
+            isReadOutgoing,
+            isMediaDownloading,
+            activeChatId: activeChat?.chat_id ?? null,
+        });
+    }, [
+        activeChat?.chat_id,
+        isFailedOutgoing,
+        isMediaDownloading,
+        isPendingOutgoing,
+        isReadOutgoing,
+        isSelected,
+        message,
+        selectedCount,
+        sent,
+    ]);
+
     const swipeProgress = useAnimatedStyle(() => {
         const progress = interpolate(
             swipeX.value,
@@ -704,6 +843,11 @@ function Bubble({ message, currentUserId, isDark, showTail = true, isSelected, s
                     : MAX_SWIPE_TRANSLATION + (finalTranslation - MAX_SWIPE_TRANSLATION) * SWIPE_RESISTANCE;
 
                 if (finalResistedTranslation >= MAX_SWIPE_TRANSLATION) {
+                    runOnJS(debugBubble)('reply-swipe-complete', {
+                        messageId: message.message_id,
+                        chatId: message.chat_room_id,
+                        senderUserId: message.sender_user_id,
+                    });
                     runOnJS(handleReply)(
                         senderDisplayName,
                         message_text_content,
@@ -745,12 +889,26 @@ function Bubble({ message, currentUserId, isDark, showTail = true, isSelected, s
     );
 
     const handleDownloadMedia = useCallback(async () => {
+        debugBubble('download-media-press', {
+            message: summarizeBubbleMessage(message),
+            currentUserId,
+            isMediaDownloading,
+            canDownloadFullMedia,
+        });
         if (!currentUserId || isMediaDownloading) {
+            debugBubble('download-media-skip', {
+                message: summarizeBubbleMessage(message),
+                currentUserId,
+                isMediaDownloading,
+            });
             return;
         }
 
         setIsMediaDownloading(true);
         try {
+            debugBubble('download-media-start', {
+                message: summarizeBubbleMessage(message),
+            });
             const localMessage = await materializeMessageMedia(message, {
                 downloadFull: true,
             });
@@ -761,17 +919,41 @@ function Bubble({ message, currentUserId, isDark, showTail = true, isSelected, s
                 () => localMessage
             );
             await upsertDbMessages([localMessage], currentUserId);
+            debugBubble('download-media-success', {
+                message: summarizeBubbleMessage(localMessage),
+            });
         } catch (error) {
+            debugBubble('download-media-error', {
+                message: summarizeBubbleMessage(message),
+                error,
+            });
             console.log("Failed to download message media:", error);
         } finally {
             setIsMediaDownloading(false);
+            debugBubble('download-media-finish', {
+                messageId: message.message_id,
+                chatId: message.chat_room_id,
+            });
         }
     }, [currentUserId, isMediaDownloading, message]);
 
     return (
         <TouchableWithoutFeedback
-            onLongPress={() => onLongPress(message_id)}
-            onPress={() => onPress(message_id)}
+            onLongPress={() => {
+                debugBubble('long-press', {
+                    message: summarizeBubbleMessage(message),
+                    sent,
+                });
+                onLongPress(message_id);
+            }}
+            onPress={() => {
+                debugBubble('press', {
+                    message: summarizeBubbleMessage(message),
+                    sent,
+                    isSelected,
+                });
+                onPress(message_id);
+            }}
         >
             <View
                 style={[
@@ -799,7 +981,12 @@ function Bubble({ message, currentUserId, isDark, showTail = true, isSelected, s
                         accessibilityLabel="Retry sending message"
                         hitSlop={8}
                         style={styles.retryButton}
-                        onPress={() => onRetryMessage?.(message)}
+                        onPress={() => {
+                            debugBubble('retry-press', {
+                                message: summarizeBubbleMessage(message),
+                            });
+                            onRetryMessage?.(message);
+                        }}
                     >
                         <Icon
                             source="alert-circle"
@@ -941,7 +1128,7 @@ function Bubble({ message, currentUserId, isDark, showTail = true, isSelected, s
                                     <ThemedView style={[styles.fileCard, { backgroundColor: sent ? theme.cardSent : theme.cardReceived }]}>
                                         {isDark ? <DarkFileIcon /> : <LightFileIcon />}
                                         <ThemedView style={styles.innerFileCardContent}>
-                                            <ThemedText numberOfLines={1} style={styles.fileName}>{fileName}</ThemedText>
+                                            <ThemedText numberOfLines={1} ellipsizeMode="tail" style={styles.fileName}>{fileName}</ThemedText>
                                             {fileDetails.length > 0 && (
                                                 <ThemedText style={[styles.fileDetails, { color: isDark ? '#6C757C' : 'gray' }]}>
                                                     {fileDetails}
@@ -1043,7 +1230,7 @@ function Bubble({ message, currentUserId, isDark, showTail = true, isSelected, s
                                     </ThemedView>
                                 )}
                                 {message_text_content && attached_media !== 'contact' && (
-                                    <Text style={[
+                                    <ThemedText style={[
                                         styles.messageText,
                                         { color: sent ? theme.sentText : theme.receivedText },
                                     ]}>
@@ -1052,15 +1239,15 @@ function Bubble({ message, currentUserId, isDark, showTail = true, isSelected, s
                                             { color: sent ? theme.sentText : theme.receivedText },
                                             '#25D366'
                                         )}
-                                    </Text>
+                                    </ThemedText>
                                 )}
                                 <View style={styles.metaRow}>
-                                    <Text style={[
+                                    <ThemedText style={[
                                         styles.timeText,
                                         { color: sent ? theme.sentTime : theme.receivedTime },
                                     ]}>
                                         {formattedTime}
-                                    </Text>
+                                    </ThemedText>
                                     {sent && !isFailedOutgoing && (
                                         <Icon
                                             source={statusIconSource}
@@ -1129,7 +1316,7 @@ function areBubblePropsEqual(previous: BubbleProps, next: BubbleProps) {
 
 export default memo(Bubble, areBubblePropsEqual);
 
-const BORDER_RADIUS = 8;
+const BORDER_RADIUS = 10;
 
 const styles = StyleSheet.create({
     row: {
@@ -1145,29 +1332,13 @@ const styles = StyleSheet.create({
         flexDirection: 'row',
         alignItems: 'flex-start',
         overflow: 'visible',
-        maxWidth: 280,
+        maxWidth: 300,
     },
     rowSent: {
         justifyContent: 'flex-end',
     },
     rowReceived: {
         justifyContent: 'flex-start',
-    },
-    reactionContainer: {
-        position: 'absolute',
-        top: -60,
-        zIndex: 99,
-        flexDirection: 'row',
-        alignItems: 'center',
-        gap: 6,
-        paddingHorizontal: 16,
-        paddingVertical: 10,
-        borderRadius: 99,
-        elevation: 3
-    },
-    emojis: {
-        fontSize: 28,
-        lineHeight: 32
     },
     swipeReplyButton: {
         position: 'absolute',
@@ -1417,7 +1588,7 @@ const styles = StyleSheet.create({
     },
     voiceCard: {
         minWidth: 260,
-        maxWidth: 280,
+        width: 300,
         paddingHorizontal: 4,
         paddingVertical: 6,
         borderRadius: 8,
@@ -1515,7 +1686,8 @@ const styles = StyleSheet.create({
     fileName: {
         fontSize: 14,
         fontWeight: '500',
-        lineHeight: 15
+        lineHeight: 15,
+        maxWidth: 200
     },
     fileDetails: {
         fontSize: 12,

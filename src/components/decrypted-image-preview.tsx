@@ -237,7 +237,7 @@ export function DecryptedMediaImage({
 const styles = StyleSheet.create({
     mediaPlaceholder: {
         width: '100%',
-        borderRadius: 6,
+        borderRadius: 8,
         marginBottom: 4,
         justifyContent: 'center',
         alignItems: 'center',
@@ -258,7 +258,7 @@ const styles = StyleSheet.create({
     },
     mediaWrapper: {
         width: '100%',
-        borderRadius: 6,
+        borderRadius: 8,
         marginBottom: 4,
         overflow: 'hidden',
         position: 'relative',

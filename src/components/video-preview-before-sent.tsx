@@ -1,4 +1,4 @@
-import { Colors } from '@/constants/theme';
+import { Colors, Fonts } from '@/constants/theme';
 import { useSendChatMessage } from '@/hooks/use-send-chat-message';
 import { createUploadFileFromLocalUri } from '@/lib/local-upload-file';
 import { useVideoPreviewBeforeSentStore } from '@/store/video-preview-before-sent';
@@ -222,6 +222,7 @@ const VideoPreviewBeforeSent = () => {
                     placeholderTextColor={colors.textSecondary}
                     enablesReturnKeyAutomatically={true}
                     selectionColor='#25D366'
+                    multiline={false}
                 />
                 <IconButton
                     icon={isSending ? () => <ActivityIndicator size="small" color={Colors.dark.background} /> : "send"}
@@ -252,8 +253,10 @@ const styles = StyleSheet.create({
         paddingHorizontal: 16,
         paddingVertical: 12,
         flex: 1,
-        marginBottom: 4,
-        borderRadius: 99
+        borderRadius: 99,
+        fontFamily: Fonts.regular,
+        marginBottom: -4,
+        marginTop: -4
     },
     video: {
         width: '100%',

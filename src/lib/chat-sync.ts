@@ -16,6 +16,12 @@ import {
     upsertDbMessages,
 } from "@/lib/upsert-db-messages";
 import { materializeMessageMedia } from "@/lib/message-media";
+import {
+    reportMappedByteProgress,
+    reportSyncProgress,
+    requestJsonWithProgress,
+    type SyncProgressCallback,
+} from "@/lib/http-progress";
 import type { AvatarSource } from "@/lib/avatar-source";
 import type { ChatItemType } from "@/types/chats.type";
 import type { Message } from "@/types/messages";
@@ -43,6 +49,7 @@ type SyncParams = {
     currentUserId: string;
     cookies: string | null;
     onLoadingTitleChange?: (title: string) => void;
+    onProgress?: SyncProgressCallback;
     onChatsLoaded?: (chats: ChatItemType[]) => void;
     onChatMessagesLoaded?: (
         chatId: string,
@@ -148,21 +155,26 @@ async function fetchMobileChats({
     currentUserId,
     cookies,
     cachedChats,
+    onProgress,
 }: {
     currentUserId: string;
     cookies: string | null;
     cachedChats: ChatItemType[];
+    onProgress?: SyncProgressCallback;
 }) {
-    const response = await fetch(`${API_BASE_URL}/api/mobile/chats`, {
+    const payload = await requestJsonWithProgress<{ chats: RemoteChat[] }>(`${API_BASE_URL}/api/mobile/chats`, {
         headers: getAuthHeaders(cookies),
-        credentials: "omit",
+        onDownloadProgress: (progress) =>
+            reportMappedByteProgress({
+                onProgress,
+                title: "Loading your chats",
+                start: 5,
+                end: 25,
+                ...progress,
+            }),
     });
 
-    if (!response.ok) {
-        throw new Error("Failed to fetch chats");
-    }
-
-    const payload = (await response.json()) as { chats: RemoteChat[] };
+    reportSyncProgress(onProgress, "Loading your chats", 25);
 
     return normalizeAndDecryptMobileChats({
         remoteChats: payload.chats,
@@ -174,21 +186,28 @@ async function fetchMobileChats({
 async function fetchMobileMessages({
     currentUserId,
     cookies,
+    onProgress,
 }: {
     currentUserId: string;
     cookies: string | null;
+    onProgress?: SyncProgressCallback;
 }) {
-    const response = await fetch(`${API_BASE_URL}/api/mobile/messages`, {
+    const payload = await requestJsonWithProgress<{ messages: RemoteMessage[] }>(`${API_BASE_URL}/api/mobile/messages`, {
         headers: getAuthHeaders(cookies),
-        credentials: "omit",
+        onDownloadProgress: (progress) =>
+            reportMappedByteProgress({
+                onProgress,
+                title: "Loading your messages",
+                start: 50,
+                end: 70,
+                ...progress,
+            }),
     });
 
-    if (!response.ok) {
-        throw new Error("Failed to fetch messages");
-    }
+    reportSyncProgress(onProgress, "Loading your messages", 70);
 
-    const payload = (await response.json()) as { messages: RemoteMessage[] };
     const normalizedMessages = payload.messages.map(normalizeMessage);
+    reportSyncProgress(onProgress, "Decrypting your messages", 74);
 
     return decryptMessageBatch({
         currentUserId,
@@ -196,10 +215,18 @@ async function fetchMobileMessages({
     });
 }
 
-async function materializeMessageMediaBatch(messages: Message[]) {
+async function materializeMessageMediaBatch(
+    messages: Message[],
+    onProgress?: SyncProgressCallback
+) {
     const materializedMessages: Message[] = [];
 
-    for (const message of messages) {
+    if (messages.length === 0) {
+        reportSyncProgress(onProgress, "Saving media previews", 88);
+        return materializedMessages;
+    }
+
+    for (const [index, message] of messages.entries()) {
         try {
             materializedMessages.push(
                 await materializeMessageMedia(message, { downloadFull: false })
@@ -208,6 +235,12 @@ async function materializeMessageMediaBatch(messages: Message[]) {
             console.log("Failed to save message media locally:", error);
             materializedMessages.push(message);
         }
+
+        reportSyncProgress(
+            onProgress,
+            "Saving media previews",
+            78 + ((index + 1) / messages.length) * 10
+        );
     }
 
     return materializedMessages;
@@ -290,19 +323,26 @@ export async function syncMobileChatsAndMessages({
     currentUserId,
     cookies,
     onLoadingTitleChange,
+    onProgress,
     onChatsLoaded,
     onChatMessagesLoaded,
 }: SyncParams) {
     onLoadingTitleChange?.("Loading your chats");
+    reportSyncProgress(onProgress, "Loading your chats", 0);
 
     const cachedChats = await getDbChats();
+    reportSyncProgress(onProgress, "Loading your chats", 5);
+
     const syncedChats = await fetchMobileChats({
         currentUserId,
         cookies,
         cachedChats,
+        onProgress,
     });
+    reportSyncProgress(onProgress, "Decrypting your chats", 35);
 
     await upsertDbChats(syncedChats);
+    reportSyncProgress(onProgress, "Saving your chats", 45);
 
     const storedChats = await getDbChats();
     const syncedChatsById = new Map(syncedChats.map((chat) => [chat.chat_id, chat]));
@@ -318,21 +358,29 @@ export async function syncMobileChatsAndMessages({
     });
 
     onChatsLoaded?.(hydratedChats);
+    reportSyncProgress(onProgress, "Loading your messages", 50);
 
     onLoadingTitleChange?.("Loading your messages");
-    const mobileMessages = await fetchMobileMessages({ currentUserId, cookies });
+    const mobileMessages = await fetchMobileMessages({ currentUserId, cookies, onProgress });
+    reportSyncProgress(onProgress, "Decrypting your messages", 78);
+
     const chatIds = new Set(storedChats.map((chat) => chat.chat_id));
     const messagesToStore = mobileMessages.filter((message) =>
         chatIds.has(message.chat_room_id)
     );
     onLoadingTitleChange?.("Saving media previews");
     const localMessagesToStore =
-        await materializeMessageMediaBatch(messagesToStore);
+        await materializeMessageMediaBatch(messagesToStore, onProgress);
 
     await upsertDbMessages(localMessagesToStore, currentUserId);
+    reportSyncProgress(onProgress, "Saving your messages", 92);
 
     const messagesByChatId = groupMessagesByChat(localMessagesToStore);
-    for (const chat of hydratedChats) {
+    if (hydratedChats.length === 0) {
+        reportSyncProgress(onProgress, "Loading your messages", 100);
+    }
+
+    for (const [index, chat] of hydratedChats.entries()) {
         const chatMessages = messagesByChatId.get(chat.chat_id) ?? [];
         const recentMessages = chatMessages.slice(-MESSAGE_PAGE_SIZE);
 
@@ -340,6 +388,12 @@ export async function syncMobileChatsAndMessages({
             chat.chat_id,
             recentMessages,
             chatMessages.length > recentMessages.length
+        );
+
+        reportSyncProgress(
+            onProgress,
+            "Loading your messages",
+            92 + ((index + 1) / hydratedChats.length) * 8
         );
     }
 

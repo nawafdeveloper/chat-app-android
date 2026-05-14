@@ -96,7 +96,52 @@ export const useActiveChatStore = create<ActiveChatState>((set) => ({
                     (!chat.group_members || chat.group_members.length === 0) &&
                     existingChat?.group_members?.length
                     ? { ...chat, group_members: existingChat.group_members }
-                    : chat;
+                    : existingChat && chat.chat_type === "single"
+                        ? {
+                            ...chat,
+                            avatar: chat.avatar || existingChat.avatar,
+                            display_name: chat.display_name ?? existingChat.display_name,
+                            recipient_user_id:
+                                chat.recipient_user_id ?? existingChat.recipient_user_id,
+                            recipient_public_key:
+                                chat.recipient_public_key ??
+                                existingChat.recipient_public_key ??
+                                null,
+                            contact_phone: chat.contact_phone ?? existingChat.contact_phone,
+                            recipient_last_seen:
+                                chat.recipient_last_seen ?? existingChat.recipient_last_seen,
+                            recipient_who_can_see_last_seen:
+                                chat.recipient_who_can_see_last_seen ??
+                                existingChat.recipient_who_can_see_last_seen,
+                            recipient_last_seen_visible:
+                                chat.recipient_last_seen_visible ??
+                                existingChat.recipient_last_seen_visible,
+                            recipient_who_can_see_status:
+                                chat.recipient_who_can_see_status ??
+                                existingChat.recipient_who_can_see_status,
+                            recipient_who_can_see_profile_picture:
+                                chat.recipient_who_can_see_profile_picture ??
+                                existingChat.recipient_who_can_see_profile_picture,
+                            recipient_profile_picture_visible:
+                                chat.recipient_profile_picture_visible ??
+                                existingChat.recipient_profile_picture_visible,
+                            recipient_about_ciphertext:
+                                chat.recipient_about_ciphertext ??
+                                existingChat.recipient_about_ciphertext,
+                            recipient_about_encrypted_aes_key:
+                                chat.recipient_about_encrypted_aes_key ??
+                                existingChat.recipient_about_encrypted_aes_key,
+                            recipient_about_iv:
+                                chat.recipient_about_iv ?? existingChat.recipient_about_iv,
+                            recipient_who_can_see_about:
+                                chat.recipient_who_can_see_about ??
+                                existingChat.recipient_who_can_see_about,
+                            recipient_about_visible:
+                                chat.recipient_about_visible ??
+                                existingChat.recipient_about_visible,
+                            stored_contact: chat.stored_contact ?? existingChat.stored_contact,
+                        }
+                        : chat;
 
             return {
                 chats: sortChatsByRecent([...existingWithoutChat, nextChat]),

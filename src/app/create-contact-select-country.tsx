@@ -1,10 +1,11 @@
 import { ThemedView } from '@/components/themed-view'
+import { ThemedText } from '@/components/themed-text'
 import { CountryCodeData, countryCodes } from '@/constants/country-code'
 import { Colors } from '@/constants/theme'
 import { useCreateContactStore } from '@/store/use-create-contact-store'
 import { router } from 'expo-router'
 import React, { useMemo, useState } from 'react'
-import { FlatList, StyleSheet, Text, TouchableOpacity, useColorScheme } from 'react-native'
+import { FlatList, StyleSheet, TouchableOpacity, useColorScheme } from 'react-native'
 import { Appbar, List, Searchbar } from 'react-native-paper'
 
 const CreateContactSelectCountry = () => {
@@ -34,15 +35,15 @@ const CreateContactSelectCountry = () => {
                 setSelectedCountry(item);
             }}
         >
-            <Text style={styles.flagEmoji}>{item.flag}</Text>
+            <ThemedText style={styles.flagEmoji}>{item.flag}</ThemedText>
             <List.Item
                 title={item.label}
                 titleStyle={[styles.countryLabel, { color: colors.text }]}
                 style={styles.listItem}
             />
-            <Text style={[styles.countryCodeRight, { color: colors.text }]}>
+            <ThemedText style={[styles.countryCodeRight, { color: colors.text }]}>
                 {item.code}
-            </Text>
+            </ThemedText>
         </TouchableOpacity>
     )
 
@@ -77,9 +78,9 @@ const CreateContactSelectCountry = () => {
                     windowSize={10}
                     ListEmptyComponent={() => (
                         <ThemedView style={styles.emptyContainer}>
-                            <Text style={[styles.emptyText, { color: colors.text }]}>
+                            <ThemedText style={[styles.emptyText, { color: colors.text }]}>
                                 No countries found
-                            </Text>
+                            </ThemedText>
                         </ThemedView>
                     )}
                 />

@@ -33,7 +33,6 @@ import {
     Keyboard,
     KeyboardAvoidingView,
     StyleSheet,
-    Text,
     TextInput,
     TouchableOpacity,
     useColorScheme,
@@ -43,6 +42,7 @@ import { Appbar, IconButton } from 'react-native-paper';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { G, Path, Svg } from 'react-native-svg';
 import ViewShot from 'react-native-view-shot';
+import { ThemedText } from './themed-text';
 import { ThemedView } from './themed-view';
 
 // ─── types ────────────────────────────────────────────────────────────────────
@@ -649,7 +649,7 @@ const ImagePreviewBeforeSent = () => {
                                         },
                                     ]}
                                 >
-                                    <Text
+                                    <ThemedText
                                         style={[
                                             styles.textAnnotation,
                                             {
@@ -660,7 +660,7 @@ const ImagePreviewBeforeSent = () => {
                                         ]}
                                     >
                                         {ann.text}
-                                    </Text>
+                                    </ThemedText>
                                 </View>
                             ))}
                         </View>
@@ -738,9 +738,9 @@ const ImagePreviewBeforeSent = () => {
                     {/* ── hint ── */}
                     {mode === 'none' && textAnnotations.length > 0 && !showTextInput && (
                         <View style={styles.hintContainer} pointerEvents="none">
-                            <Text style={styles.hintText}>
+                            <ThemedText style={styles.hintText}>
                                 Hold text to drag • Pinch to scale • Twist to rotate • Tap to edit
-                            </Text>
+                            </ThemedText>
                         </View>
                     )}
 

@@ -5,8 +5,15 @@ import {
     encryptTextForRecipients,
     serializeSharedContactMessage,
 } from "@/lib/chat-e2ee";
-import { buildChatFromMessage, normalizeMessage } from "@/lib/chat-utils";
-import { getContactDisplayName } from "@/lib/contact-display";
+import {
+    areDirectChatIdsEquivalent,
+    buildChatFromMessage,
+    normalizeMessage,
+} from "@/lib/chat-utils";
+import {
+    getContactDisplayName,
+    resolveDirectChatContact,
+} from "@/lib/contact-display";
 import {
     MESSAGE_MEDIA_INPUT_MAX_BYTES,
     MESSAGE_MEDIA_TARGET_MAX_BYTES,
@@ -28,6 +35,7 @@ import {
 import { upsertDbChats } from "@/lib/upsert-db-chats";
 import { upsertDbMessages } from "@/lib/upsert-db-messages";
 import { useActiveChatStore } from "@/store/use-active-chat-store";
+import { useContactDirectoryStore } from "@/store/use-contact-directory-store";
 import { useRealtimeStore } from "@/store/use-realtime-store";
 import type { ChatItemType } from "@/types/chats.type";
 import type { Contact as DirectoryContact } from "@/types/contacts.type";
@@ -47,6 +55,47 @@ import {
 const ACK_TIMEOUT_MS = 800;
 const CHAT_PREVIEW_MAX_LENGTH = 240;
 const API_BASE_URL = "https://halabakk-web.nawaf-alhasosah.workers.dev";
+const CHAT_DEBUG = true;
+
+function debugSendMessage(stage: string, payload: Record<string, unknown> = {}) {
+    if (!CHAT_DEBUG) {
+        return;
+    }
+
+    console.log(`[chat-debug][send-message][${stage}]`, {
+        at: new Date().toISOString(),
+        ...payload,
+    });
+}
+
+function summarizeOutgoingMessage(message: Message) {
+    return {
+        id: message.message_id,
+        chatId: message.chat_room_id,
+        sender: message.sender_user_id,
+        media: message.attached_media,
+        hasText: Boolean(message.message_text_content?.trim()),
+        textLength: message.message_text_content?.length ?? 0,
+        hasMediaUrl: Boolean(message.media_url),
+        hasRecipientKeys: Boolean(message.message_recipient_keys?.length),
+        recipientKeyCount: message.message_recipient_keys?.length ?? 0,
+        status: message.client_status,
+        error: message.client_error,
+        createdAt: message.created_at?.toISOString?.() ?? String(message.created_at),
+    };
+}
+
+function summarizeOutgoingChat(chat: ChatItemType) {
+    return {
+        id: chat.chat_id,
+        type: chat.chat_type,
+        recipientUserId: chat.recipient_user_id,
+        recipientPublicKey: Boolean(chat.recipient_public_key),
+        groupMembers: chat.group_members?.length ?? 0,
+        contactPhone: chat.contact_phone,
+        lastMessageId: chat.last_message_id,
+    };
+}
 
 type RecipientKeySource = {
     userId: string;
@@ -230,6 +279,19 @@ function getNotificationPlaintextForMessage(message: Message) {
     return null;
 }
 
+function getMissingRecipientEncryptionIds(
+    recipients: RecipientKeySource[],
+    recipientEncryptionKeys?: RecipientEncryptedAesKeyInput[] | null
+) {
+    const encryptedRecipientIds = new Set(
+        recipientEncryptionKeys?.map((key) => key.recipientUserId).filter(Boolean) ?? []
+    );
+
+    return recipients
+        .map((recipient) => recipient.userId)
+        .filter((userId) => !encryptedRecipientIds.has(userId));
+}
+
 export function useSendChatMessage() {
     const { data: session } = authClient.useSession();
     const chats = useActiveChatStore((state) => state.chats);
@@ -246,27 +308,65 @@ export function useSendChatMessage() {
         chatId,
         currentUserId,
         currentPublicKey,
+        currentPhone,
         requirePeerEncryption = false,
     }: {
         chatId: string;
         currentUserId: string;
         currentPublicKey: string;
+        currentPhone?: string | null;
         requirePeerEncryption?: boolean;
     }): ConversationContext | null => {
-        const selectedChat = chats.find((chat) => chat.chat_id === chatId) ?? null;
+        debugSendMessage("resolve-conversation-start", {
+            chatId,
+            currentUserId,
+            hasCurrentPublicKey: Boolean(currentPublicKey),
+            requirePeerEncryption,
+            hookChatsCount: chats.length,
+            storeChatsCount: useActiveChatStore.getState().chats.length,
+            selectedChatId,
+            recipientPhone,
+        });
+        const latestChats = useActiveChatStore.getState().chats;
+        const selectedChat =
+            latestChats.find((chat) => chat.chat_id === chatId) ??
+            latestChats.find((chat) => areDirectChatIdsEquivalent(chat.chat_id, chatId)) ??
+            chats.find((chat) => chat.chat_id === chatId) ??
+            chats.find((chat) => areDirectChatIdsEquivalent(chat.chat_id, chatId)) ??
+            null;
         if (!selectedChat) {
+            debugSendMessage("resolve-conversation-missing-chat", {
+                chatId,
+                latestChatIds: latestChats.map((chat) => chat.chat_id),
+                hookChatIds: chats.map((chat) => chat.chat_id),
+            });
             return null;
         }
 
         const conversationType: "group" | "direct" =
             selectedChat.chat_type === "group" ? "group" : "direct";
+        debugSendMessage("resolve-conversation-found-chat", {
+            chat: summarizeOutgoingChat(selectedChat),
+            conversationType,
+        });
         const recipientsByUserId = new Map<string, RecipientKeySource>();
         recipientsByUserId.set(currentUserId, {
             userId: currentUserId,
             publicKey: currentPublicKey,
         });
-        const recipientUserId = selectedChat.recipient_user_id ?? undefined;
-        const recipientPublicKey = selectedChat.recipient_public_key ?? undefined;
+        const matchedContact = resolveDirectChatContact(
+            selectedChat,
+            useContactDirectoryStore.getState().contacts,
+            currentPhone
+        );
+        const recipientUserId =
+            selectedChat.recipient_user_id ??
+            matchedContact?.linked_user_id ??
+            undefined;
+        const recipientPublicKey =
+            selectedChat.recipient_public_key ??
+            matchedContact?.linked_user_public_key ??
+            undefined;
 
         if (selectedChat.chat_type === "group") {
             const groupMembers = selectedChat.group_members ?? [];
@@ -282,6 +382,12 @@ export function useSendChatMessage() {
                 missingEncryptionMember ||
                 groupMemberIds.length < 2
             ) {
+                debugSendMessage("resolve-conversation-invalid-group-encryption", {
+                    chatId,
+                    groupMembers: groupMembers.length,
+                    missingEncryptionMember,
+                    groupMemberIds,
+                });
                 return null;
             }
 
@@ -294,12 +400,18 @@ export function useSendChatMessage() {
                 }
             }
 
-            return {
+            const context = {
                 selectedChat,
                 conversationType,
                 participantIds: [...new Set(groupMemberIds)],
                 recipients: [...recipientsByUserId.values()],
             };
+            debugSendMessage("resolve-conversation-group-success", {
+                chatId,
+                recipientIds: context.recipients.map((recipient) => recipient.userId),
+                participantIds: context.participantIds,
+            });
+            return context;
         }
 
         if (recipientUserId && recipientPublicKey) {
@@ -311,18 +423,36 @@ export function useSendChatMessage() {
 
         if (requirePeerEncryption) {
             if (!recipientUserId || !recipientPublicKey) {
+                debugSendMessage("resolve-conversation-missing-peer-encryption", {
+                    chatId,
+                    recipientUserId,
+                    hasRecipientPublicKey: Boolean(recipientPublicKey),
+                });
                 return null;
             }
         }
 
-        return {
+        const context = {
             selectedChat,
             conversationType,
             recipientUserId,
             recipientPhoneForTransport:
-                recipientPhone ?? selectedChat.contact_phone ?? undefined,
+                recipientPhone ??
+                selectedChat.contact_phone ??
+                matchedContact?.contact_number ??
+                undefined,
             recipients: [...recipientsByUserId.values()],
         };
+        debugSendMessage("resolve-conversation-direct-success", {
+            chatId,
+            recipientUserId,
+            recipientPhoneForTransport: context.recipientPhoneForTransport,
+            recipientIds: context.recipients.map((recipient) => recipient.userId),
+            recoveredPublicKeyFromContact:
+                !selectedChat.recipient_public_key &&
+                Boolean(matchedContact?.linked_user_public_key),
+        });
+        return context;
     };
 
     const resolveReplyMessageForSend = ({
@@ -406,6 +536,50 @@ export function useSendChatMessage() {
         const senderAvatarUrl = session?.user.image ?? null;
         const notificationPlaintext =
             getNotificationPlaintextForMessage(optimisticMessage);
+        const requiresEncryptedContent =
+            Boolean(optimisticMessage.message_text_content?.trim()) ||
+            optimisticMessage.attached_media === "contact";
+
+        debugSendMessage("dispatch-start", {
+            chatId,
+            messageId,
+            existingMessageId,
+            clearDraft,
+            conversationType: conversation.conversationType,
+            recipientIds: conversation.recipients.map((recipient) => recipient.userId),
+            optimisticMessage: summarizeOutgoingMessage(optimisticMessage),
+            requiresEncryptedContent,
+            hasEncryptedContent: Boolean(encryptedContent),
+            recipientEncryptionKeysCount: recipientEncryptionKeys?.length ?? 0,
+            hasEncryptedChatPreview: Boolean(encryptedChatPreview),
+            chatPreviewRecipientKeysCount: chatPreviewRecipientKeys?.length ?? 0,
+        });
+
+        if (requiresEncryptedContent && !encryptedContent) {
+            debugSendMessage("dispatch-error-content-not-encrypted", {
+                chatId,
+                messageId,
+            });
+            throw new Error("Message content was not encrypted.");
+        }
+
+        if (requiresEncryptedContent) {
+            const missingRecipientIds = getMissingRecipientEncryptionIds(
+                conversation.recipients,
+                recipientEncryptionKeys
+            );
+
+            if (missingRecipientIds.length > 0) {
+                debugSendMessage("dispatch-error-missing-recipient-keys", {
+                    chatId,
+                    messageId,
+                    missingRecipientIds,
+                    recipientIds: conversation.recipients.map((recipient) => recipient.userId),
+                });
+                throw new Error("Missing recipient encryption key.");
+            }
+        }
+
         const optimisticMessageForStore = applyEncryptedTransportFields({
             message: {
                 ...optimisticMessage,
@@ -417,8 +591,17 @@ export function useSendChatMessage() {
         });
 
         if (!existingMessageId) {
+            debugSendMessage("dispatch-append-optimistic", {
+                chatId,
+                message: summarizeOutgoingMessage(optimisticMessageForStore),
+            });
             appendMessage(chatId, optimisticMessageForStore);
         } else {
+            debugSendMessage("dispatch-update-existing-optimistic", {
+                chatId,
+                existingMessageId,
+                message: summarizeOutgoingMessage(optimisticMessageForStore),
+            });
             updateMessage(chatId, existingMessageId, (message) => ({
                 ...message,
                 ...applyEncryptedTransportFields({
@@ -445,14 +628,26 @@ export function useSendChatMessage() {
             upsertDbMessages([optimisticMessageForStore], currentUserId),
             upsertDbChats([nextChat]),
         ]).catch((error) => {
+            debugSendMessage("dispatch-persist-pending-error", {
+                chatId,
+                messageId,
+                error,
+            });
             console.log("Failed to persist pending outgoing message:", error);
+        });
+        debugSendMessage("dispatch-persist-pending-finish", {
+            chatId,
+            messageId,
+            nextChat: summarizeOutgoingChat(nextChat),
         });
 
         if (clearDraft) {
+            debugSendMessage("dispatch-clear-draft", { chatId, messageId });
             setDraft(chatId, "");
         }
 
         if (!existingMessageId && optimisticMessage.reply_message) {
+            debugSendMessage("dispatch-clear-reply-draft", { chatId, messageId });
             clearReplyDraft(chatId);
         }
 
@@ -533,6 +728,13 @@ export function useSendChatMessage() {
             };
 
             const realtimeSent = sendRealtimeEvent(payload);
+            debugSendMessage("dispatch-transport-result", {
+                chatId,
+                messageId,
+                realtimeSent,
+                socketStatus: useRealtimeStore.getState().status,
+                hasSocket: Boolean(useRealtimeStore.getState().socket),
+            });
             if (optimisticMessage.attached_media) {
                 logMediaDebug("client.message.dispatch.transport", {
                     debugTraceId: debugTraceId ?? null,
@@ -542,6 +744,10 @@ export function useSendChatMessage() {
             }
 
             if (!realtimeSent) {
+                debugSendMessage("dispatch-http-fallback-start", {
+                    chatId,
+                    messageId,
+                });
                 const response = await fetch(`${API_BASE_URL}/api/messages`, {
                     method: "POST",
                     headers: getJsonAuthHeaders(debugTraceId),
@@ -550,6 +756,11 @@ export function useSendChatMessage() {
                 });
 
                 if (!response.ok) {
+                    debugSendMessage("dispatch-http-fallback-error-status", {
+                        chatId,
+                        messageId,
+                        status: response.status,
+                    });
                     if (optimisticMessage.attached_media) {
                         logMediaDebug("client.message.dispatch.http-failed", {
                             debugTraceId: debugTraceId ?? null,
@@ -564,6 +775,11 @@ export function useSendChatMessage() {
                     message: Parameters<typeof normalizeMessage>[0];
                 };
                 const nextMessage = normalizeMessage(result.message);
+                debugSendMessage("dispatch-http-fallback-response", {
+                    chatId,
+                    messageId,
+                    nextMessage: summarizeOutgoingMessage(nextMessage),
+                });
                 const [decryptedNextMessage] = await decryptMessageBatch({
                     currentUserId,
                     messages: [nextMessage],
@@ -575,6 +791,11 @@ export function useSendChatMessage() {
                 );
                 updateMessage(chatId, messageId, () => finalizedMessage);
                 await upsertDbMessages([finalizedMessage], currentUserId);
+                debugSendMessage("dispatch-http-fallback-success", {
+                    chatId,
+                    messageId,
+                    finalizedMessage: summarizeOutgoingMessage(finalizedMessage),
+                });
                 if (optimisticMessage.attached_media) {
                     logMediaDebug("client.message.dispatch.http-success", {
                         debugTraceId: debugTraceId ?? null,
@@ -593,7 +814,16 @@ export function useSendChatMessage() {
                 messageId,
                 updateMessage,
             });
+            debugSendMessage("dispatch-reconcile-started", {
+                chatId,
+                messageId,
+            });
         } catch (error) {
+            debugSendMessage("dispatch-error", {
+                chatId,
+                messageId,
+                error,
+            });
             if (optimisticMessage.attached_media) {
                 logMediaDebug("client.message.dispatch.error", {
                     debugTraceId: debugTraceId ?? null,
@@ -616,6 +846,11 @@ export function useSendChatMessage() {
                 client_error: failedMessage.client_error,
             }));
             await upsertDbMessages([failedMessage], currentUserId).catch((persistError) => {
+                debugSendMessage("dispatch-persist-failed-message-error", {
+                    chatId,
+                    messageId,
+                    persistError,
+                });
                 console.log("Failed to persist failed outgoing message:", persistError);
             });
             throw error;
@@ -644,7 +879,28 @@ export function useSendChatMessage() {
         const currentPublicKey = (session?.user as { yhlaPublicKey?: string | null } | undefined)
             ?.yhlaPublicKey;
 
+        debugSendMessage("send-text-start", {
+            chatId,
+            selectedChatId,
+            existingMessageId,
+            clearDraft,
+            isForwardMessage,
+            rawLength: text.length,
+            trimmedLength: trimmed.length,
+            hasCurrentUserId: Boolean(currentUserId),
+            hasCurrentPhone: Boolean(currentPhone),
+            hasCurrentPublicKey: Boolean(currentPublicKey),
+            hasOpenGraphData: Boolean(openGraphData),
+        });
+
         if (!trimmed || !chatId || !currentUserId || !currentPhone || !currentPublicKey) {
+            debugSendMessage("send-text-abort-missing-context", {
+                chatId,
+                trimmedLength: trimmed.length,
+                hasCurrentUserId: Boolean(currentUserId),
+                hasCurrentPhone: Boolean(currentPhone),
+                hasCurrentPublicKey: Boolean(currentPublicKey),
+            });
             return false;
         }
 
@@ -652,8 +908,11 @@ export function useSendChatMessage() {
             chatId,
             currentUserId,
             currentPublicKey,
+            currentPhone,
+            requirePeerEncryption: true,
         });
         if (!conversation) {
+            debugSendMessage("send-text-abort-no-conversation", { chatId });
             return false;
         }
 
@@ -680,10 +939,21 @@ export function useSendChatMessage() {
         });
 
         try {
+            debugSendMessage("send-text-encrypt-start", {
+                chatId,
+                messageId,
+                recipientIds: conversation.recipients.map((recipient) => recipient.userId),
+                trimmedLength: trimmed.length,
+            });
             const encryptedMessage = await encryptTextForRecipients(
                 trimmed,
                 conversation.recipients
             );
+            debugSendMessage("send-text-encrypt-finish", {
+                chatId,
+                messageId,
+                recipientKeyCount: encryptedMessage.recipientEncryptionKeys.length,
+            });
             const previewText = createChatPreviewText(trimmed);
             const encryptedPreview =
                 previewText === trimmed
@@ -692,6 +962,13 @@ export function useSendChatMessage() {
                           previewText,
                           conversation.recipients
                       );
+            debugSendMessage("send-text-preview-encrypt-finish", {
+                chatId,
+                messageId,
+                previewLength: previewText.length,
+                reusedMessageEncryption: previewText === trimmed,
+                previewRecipientKeyCount: encryptedPreview.recipientEncryptionKeys.length,
+            });
 
             await dispatchPreparedMessage({
                 chatId,
@@ -709,8 +986,10 @@ export function useSendChatMessage() {
                 isForwardMessage,
             });
 
+            debugSendMessage("send-text-success", { chatId, messageId });
             return true;
-        } catch {
+        } catch (error) {
+            debugSendMessage("send-text-failed", { chatId, messageId, error });
             return false;
         }
     };
@@ -741,7 +1020,26 @@ export function useSendChatMessage() {
         const currentPublicKey = (session?.user as { yhlaPublicKey?: string | null } | undefined)
             ?.yhlaPublicKey;
 
+        debugSendMessage("send-attachment-start", {
+            chatId,
+            selectedChatId,
+            attachedMedia,
+            fileName: "name" in file ? file.name : null,
+            fileType: "type" in file ? file.type : null,
+            fileSize: "size" in file ? file.size : null,
+            hasText: Boolean(text?.trim()),
+            hasCurrentUserId: Boolean(currentUserId),
+            hasCurrentPhone: Boolean(currentPhone),
+            hasCurrentPublicKey: Boolean(currentPublicKey),
+        });
+
         if (!chatId || !currentUserId || !currentPhone || !currentPublicKey) {
+            debugSendMessage("send-attachment-abort-missing-context", {
+                chatId,
+                hasCurrentUserId: Boolean(currentUserId),
+                hasCurrentPhone: Boolean(currentPhone),
+                hasCurrentPublicKey: Boolean(currentPublicKey),
+            });
             return false;
         }
 
@@ -749,6 +1047,7 @@ export function useSendChatMessage() {
             chatId,
             currentUserId,
             currentPublicKey,
+            currentPhone,
             requirePeerEncryption: true,
         });
         if (!conversation) {
@@ -781,6 +1080,11 @@ export function useSendChatMessage() {
                 };
             }
         } catch (error) {
+            debugSendMessage("send-attachment-prepare-error", {
+                chatId,
+                attachedMedia,
+                error,
+            });
             logMediaDebug("client.attachment.rejected", {
                 attachedMedia,
                 fileName: file.name,
@@ -868,6 +1172,11 @@ export function useSendChatMessage() {
         let attachmentMessageForRetry = optimisticMessage;
 
         appendMessage(chatId, optimisticMessage);
+        debugSendMessage("send-attachment-append-optimistic", {
+            chatId,
+            debugTraceId,
+            message: summarizeOutgoingMessage(optimisticMessage),
+        });
         const nextChat = buildChatFromMessage({
             conversationId: chatId,
             conversationType: conversation.conversationType,
@@ -888,6 +1197,13 @@ export function useSendChatMessage() {
         }
 
         try {
+            debugSendMessage("send-attachment-upload-start", {
+                chatId,
+                messageId,
+                debugTraceId,
+                attachedMedia,
+                recipientIds: conversation.recipients.map((recipient) => recipient.userId),
+            });
             const upload = await uploadEncryptedMessageMedia(
                 uploadFile,
                 conversation.recipients.map((recipient) => ({
@@ -897,6 +1213,14 @@ export function useSendChatMessage() {
                 localPreviewBlob,
                 debugTraceId
             );
+            debugSendMessage("send-attachment-upload-success", {
+                chatId,
+                messageId,
+                debugTraceId,
+                mediaUrl: upload.mediaUrl,
+                previewUrl: upload.previewUrl,
+                recipientKeyCount: upload.recipientEncryptionKeys.length,
+            });
 
             updateMessage(chatId, messageId, (message) => ({
                 ...message,
@@ -965,7 +1289,18 @@ export function useSendChatMessage() {
                     encryptedPreview?.recipientEncryptionKeys ?? null,
                 isForwardMessage,
             });
+            debugSendMessage("send-attachment-dispatch-success", {
+                chatId,
+                messageId,
+                debugTraceId,
+            });
         } catch (error) {
+            debugSendMessage("send-attachment-failed", {
+                chatId,
+                messageId,
+                debugTraceId,
+                error,
+            });
             logMediaDebug("client.attachment.failed", {
                 debugTraceId,
                 messageId,
@@ -1011,7 +1346,23 @@ export function useSendChatMessage() {
         const currentPublicKey = (session?.user as { yhlaPublicKey?: string | null } | undefined)
             ?.yhlaPublicKey;
 
+        debugSendMessage("send-voice-start", {
+            chatId,
+            selectedChatId,
+            uri,
+            durationMillis: durationMillis ?? null,
+            hasCurrentUserId: Boolean(currentUserId),
+            hasCurrentPhone: Boolean(currentPhone),
+            hasCurrentPublicKey: Boolean(currentPublicKey),
+        });
+
         if (!chatId || !currentUserId || !currentPhone || !currentPublicKey) {
+            debugSendMessage("send-voice-abort-missing-context", {
+                chatId,
+                hasCurrentUserId: Boolean(currentUserId),
+                hasCurrentPhone: Boolean(currentPhone),
+                hasCurrentPublicKey: Boolean(currentPublicKey),
+            });
             return false;
         }
 
@@ -1019,9 +1370,13 @@ export function useSendChatMessage() {
             chatId,
             currentUserId,
             currentPublicKey,
+            currentPhone,
             requirePeerEncryption: true,
         });
         if (!conversation) {
+            debugSendMessage("send-voice-abort-no-conversation", {
+                chatId,
+            });
             return false;
         }
 
@@ -1053,6 +1408,10 @@ export function useSendChatMessage() {
         });
 
         appendMessage(chatId, optimisticMessage);
+        debugSendMessage("send-voice-append-optimistic", {
+            chatId,
+            message: summarizeOutgoingMessage(optimisticMessage),
+        });
         const nextChat = buildChatFromMessage({
             conversationId: chatId,
             conversationType: conversation.conversationType,
@@ -1143,6 +1502,11 @@ export function useSendChatMessage() {
                 recipientEncryptionKeys: upload.recipientEncryptionKeys,
                 isForwardMessage,
             });
+            debugSendMessage("send-voice-dispatch-success", {
+                chatId,
+                messageId,
+                debugTraceId,
+            });
             console.log("[voice-send] dispatch complete", {
                 debugTraceId,
                 messageId,
@@ -1211,6 +1575,7 @@ export function useSendChatMessage() {
             chatId,
             currentUserId,
             currentPublicKey,
+            currentPhone,
             requirePeerEncryption: true,
         });
         if (!conversation) {
@@ -1299,9 +1664,14 @@ export function useSendChatMessage() {
             chatId,
             currentUserId,
             currentPublicKey,
+            currentPhone,
             requirePeerEncryption: message.attached_media !== "location",
         });
         if (!conversation) {
+            debugSendMessage("retry-abort-no-conversation", {
+                chatId,
+                attachedMedia: message.attached_media,
+            });
             return false;
         }
 

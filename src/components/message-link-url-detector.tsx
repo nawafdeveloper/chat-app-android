@@ -1,5 +1,6 @@
 import React from 'react';
-import { Linking, StyleSheet, Text } from 'react-native';
+import { Linking, StyleSheet } from 'react-native';
+import { ThemedText } from './themed-text';
 
 const URL_REGEX = /(https?:\/\/[^\s]+)/g;
 
@@ -15,7 +16,7 @@ export const detectAndRenderLinks = (
     return parts.map((part, index) => {
         if (part.match(URL_REGEX)) {
             return (
-                <Text
+                <ThemedText
                     key={index}
                     style={[
                         textStyle,
@@ -31,13 +32,13 @@ export const detectAndRenderLinks = (
                     }}
                 >
                     {part}
-                </Text>
+                </ThemedText>
             );
         }
         return (
-            <Text key={index} style={textStyle}>
+            <ThemedText key={index} style={textStyle}>
                 {part}
-            </Text>
+            </ThemedText>
         );
     });
 };

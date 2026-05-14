@@ -1,3 +1,4 @@
+import LoadingContent from '@/components/loading-content';
 import { ThemedText } from '@/components/themed-text';
 import { ThemedView } from '@/components/themed-view';
 import { Colors } from '@/constants/theme';
@@ -13,13 +14,10 @@ import {
     Keyboard, KeyboardAvoidingView, TextInput as RNTextInput,
     StyleSheet, useColorScheme, View,
 } from 'react-native';
-import { ActivityIndicator, Button, Icon } from 'react-native-paper';
+import { Button } from 'react-native-paper';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 const PIN_LENGTH = 6;
-
-const STEPS = ['Loading your chats', 'Syncing messages', 'Syncing contacts'] as const;
-type Step = typeof STEPS[number];
 
 const OldUserPage = () => {
     const insets = useSafeAreaInsets();
@@ -31,16 +29,12 @@ const OldUserPage = () => {
 
     const [keyboardOffset, setKeyboardOffset] = useState(0);
     const [isPreloading, setIsPreloading] = useState(false);
-    const [loadingTitle, setLoadingTitle] = useState<Step>('Loading your chats');
-    const [completedSteps, setCompletedSteps] = useState<Set<Step>>(new Set());
+    const [loadingTitle, setLoadingTitle] = useState('Loading your chats');
+    const [loadingPercentage, setLoadingPercentage] = useState(0);
     const [syncError, setSyncError] = useState<string | null>(null);
     const inputRefs = useRef<(RNTextInput | null)[]>([]);
 
     const pinDigits = Array.from({ length: PIN_LENGTH }, (_, index) => pin[index] ?? '');
-
-    const markStepDone = (step: Step) => {
-        setCompletedSteps(prev => new Set(prev).add(step));
-    };
 
     useEffect(() => {
         const timer = setTimeout(() => inputRefs.current[0]?.focus(), 100);
@@ -81,7 +75,7 @@ const OldUserPage = () => {
         if (!canGoNext) return;
         setProcessing(true);
         setSyncError(null);
-        setCompletedSteps(new Set());
+        setLoadingPercentage(0);
 
         try {
             const ok = await unlock(pin);
@@ -101,11 +95,16 @@ const OldUserPage = () => {
             Keyboard.dismiss();
             setIsPreloading(true);
             setLoadingTitle('Loading your chats');
+            setLoadingPercentage(0);
 
             await preloadUserChatsAndMessages({
                 currentUserId,
                 cookies: authClient.getCookie(),
-                onLoadingTitleChange: (title) => setLoadingTitle(title as Step),
+                onLoadingTitleChange: setLoadingTitle,
+                onProgress: ({ title, percentage }) => {
+                    setLoadingTitle(title);
+                    setLoadingPercentage(Math.round(percentage * 0.8));
+                },
                 onChatsLoaded: (chats) => {
                     useActiveChatStore.getState().setChats(chats);
                 },
@@ -114,18 +113,19 @@ const OldUserPage = () => {
                     useActiveChatStore.getState().setHasOlderMessages(chatId, Boolean(hasOlderMessages));
                 },
             });
-            markStepDone('Loading your chats');
+            setLoadingPercentage(80);
 
-            setLoadingTitle('Syncing messages');
-            markStepDone('Syncing messages');
-
-            setLoadingTitle('Syncing contacts');
+            setLoadingTitle('Loading your contacts');
             await syncMobileContacts({
                 currentUserId,
                 cookies: authClient.getCookie(),
-                onLoadingTitleChange: (title) => setLoadingTitle(title as Step),
+                onLoadingTitleChange: setLoadingTitle,
+                onProgress: ({ title, percentage }) => {
+                    setLoadingTitle(title);
+                    setLoadingPercentage(80 + Math.round(percentage * 0.2));
+                },
             });
-            markStepDone('Syncing contacts');
+            setLoadingPercentage(100);
 
             setProcessing(false);
             triggerRefreshKeys();
@@ -133,6 +133,7 @@ const OldUserPage = () => {
             setError(true);
             setProcessing(false);
             setIsPreloading(false);
+            setLoadingPercentage(0);
             setSyncError('Could not load your chats. Please try again.');
             setPin('');
             setTimeout(() => setError(false), 600);
@@ -140,30 +141,7 @@ const OldUserPage = () => {
     };
 
     if (isPreloading) {
-        return (
-            <ThemedView style={styles.loadingMain}>
-                {STEPS.map((step) => {
-                    const isDone = completedSteps.has(step);
-                    return (
-                        <View key={step} style={styles.loadingStepRow}>
-                            {isDone ? (
-                                <Icon source="check-circle" size={20} color="#25D366" />
-                            ) : (
-                                <ActivityIndicator color={colors.text} size={16} />
-                            )}
-                            <ThemedText
-                                style={[
-                                    styles.loadingStepText,
-                                    isDone && styles.loadingStepDone,
-                                ]}
-                            >
-                                {step}
-                            </ThemedText>
-                        </View>
-                    );
-                })}
-            </ThemedView>
-        );
+        return <LoadingContent title={loadingTitle} percentage={loadingPercentage} />;
     }
 
     return (
@@ -225,25 +203,6 @@ const styles = StyleSheet.create({
         flex: 1,
         paddingHorizontal: 16,
         justifyContent: 'space-between',
-    },
-    loadingMain: {
-        flex: 1,
-        padding: 16,
-        justifyContent: 'center',
-        alignItems: 'center',
-    },
-    loadingStepRow: {
-        flexDirection: 'row',
-        alignItems: 'center',
-        gap: 10,
-        marginBottom: 16,
-    },
-    loadingStepText: {
-        fontSize: 18,
-        fontWeight: '500',
-    },
-    loadingStepDone: {
-        color: 'gray',
     },
     topContainer: {
         flex: 1,

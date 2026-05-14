@@ -3,7 +3,7 @@ import { SmallDecryptedMediaImage } from '@/components/small-decrypted-image-pre
 import { SmallVideoMessagePreview } from '@/components/small-decrypted-video-preview'
 import { ThemedText } from '@/components/themed-text'
 import { ThemedView } from '@/components/themed-view'
-import { Colors } from '@/constants/theme'
+import { Colors, Fonts } from '@/constants/theme'
 import { formatPhoneNumber } from '@/helper/phone-formatter'
 import { authClient } from '@/lib/auth-client'
 import { findContactByPhone, findContactByUserId, getContactDisplayName } from '@/lib/contact-display'
@@ -255,7 +255,7 @@ const TargetUserProfile = () => {
                     </ThemedView>
                     <List.Item
                         title="Media Videos, Photos and Docs"
-                        titleStyle={{ color: colors.textSecondary }}
+                        titleStyle={{ color: colors.textSecondary, fontFamily: Fonts.regular }}
                         right={props => (
                             <ThemedView style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
                                 <ThemedText style={{ color: colors.textSecondary }}>{mediaContent.length}</ThemedText>
@@ -278,16 +278,18 @@ const TargetUserProfile = () => {
                     {activeChat?.chat_type === 'group' && (
                         <List.Item
                             title="Invite new user"
+                            titleStyle={{ fontFamily: Fonts.regular }}
                             description="Add contact to this group"
-                            descriptionStyle={{ color: colors.textSecondary }}
+                            descriptionStyle={{ color: colors.textSecondary, fontFamily: Fonts.regular }}
                             left={props => <List.Icon icon={'account-plus'} color={colors.text} />}
                             containerStyle={{ paddingHorizontal: 24 }}
                         />
                     )}
                     <List.Item
                         title="Mute notifications"
+                        titleStyle={{fontFamily: Fonts.regular}}
                         description="Turn off notifications for this conversation"
-                        descriptionStyle={{ color: colors.textSecondary }}
+                        descriptionStyle={{ color: colors.textSecondary, fontFamily: Fonts.regular }}
                         right={props => (
                             <Switch />
                         )}
@@ -297,7 +299,7 @@ const TargetUserProfile = () => {
                         <>
                             <List.Item
                                 title={`Block ${chatTitle}`}
-                                titleStyle={{ color: 'red' }}
+                                titleStyle={{ color: 'red', fontFamily: Fonts.regular }}
                                 left={props => (
                                     <Icon source="block-helper" color="red" size={24} />
                                 )}
@@ -305,7 +307,7 @@ const TargetUserProfile = () => {
                             />
                             <List.Item
                                 title="Delete chat"
-                                titleStyle={{ color: 'red' }}
+                                titleStyle={{ color: 'red', fontFamily: Fonts.regular }}
                                 left={props => (
                                     <Icon source="trash-can-outline" color="red" size={24} />
                                 )}
@@ -316,7 +318,7 @@ const TargetUserProfile = () => {
                     {activeChat?.chat_type === 'group' && (
                         <List.Item
                             title="Exit group"
-                            titleStyle={{ color: 'red' }}
+                            titleStyle={{ color: 'red', fontFamily: Fonts.regular }}
                             left={props => (
                                 <Icon source="logout" color="red" size={24} />
                             )}

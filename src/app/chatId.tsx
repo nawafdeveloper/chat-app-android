@@ -12,6 +12,7 @@ import { Colors } from '@/constants/theme';
 import { useChatMessages } from '@/hooks/use-chat-realtime';
 import { useSendChatMessage } from '@/hooks/use-send-chat-message';
 import { authClient } from '@/lib/auth-client';
+import { areDirectChatIdsEquivalent } from '@/lib/chat-utils';
 import { markDbChatRead } from '@/lib/upsert-db-chats';
 import { useContactPreviewBeforeSentStore } from '@/store/contact-preview-before-sent';
 import { useFilePreviewBeforeSentStore } from '@/store/file-preview-before-sent';
@@ -29,6 +30,58 @@ import { FlatList, Keyboard, KeyboardAvoidingView, Platform, Pressable, StyleShe
 import { ActivityIndicator, Appbar, Icon, TouchableRipple } from 'react-native-paper';
 
 const EMPTY_MESSAGES: Message[] = [];
+const CHAT_DEBUG = true;
+
+function debugChatId(stage: string, payload: Record<string, unknown> = {}) {
+    if (!CHAT_DEBUG) {
+        return;
+    }
+
+    console.log(`[chat-debug][chatId][${stage}]`, {
+        at: new Date().toISOString(),
+        ...payload,
+    });
+}
+
+function summarizeMessageForDebug(message: Message) {
+    return {
+        id: message.message_id,
+        chatId: message.chat_room_id,
+        sender: message.sender_user_id,
+        media: message.attached_media,
+        hasText: Boolean(message.message_text_content?.trim()),
+        textLength: message.message_text_content?.length ?? 0,
+        status: message.client_status,
+        readByRecipient: message.is_read_by_recipient,
+        createdAt: message.created_at?.toISOString?.() ?? String(message.created_at),
+    };
+}
+
+function resolveCanonicalChatId(
+    chatId: string | null | undefined,
+    chats: ReturnType<typeof useActiveChatStore.getState>["chats"]
+) {
+    if (!chatId) {
+        return null;
+    }
+
+    return (
+        chats.find((chat) => chat.chat_id === chatId)?.chat_id ??
+        chats.find((chat) => areDirectChatIdsEquivalent(chat.chat_id, chatId))?.chat_id ??
+        chatId
+    );
+}
+
+function hasRenderableMessage(message: Message) {
+    return Boolean(
+        message.message_text_content?.trim() ||
+        message.attached_media ||
+        message.contact ||
+        message.event ||
+        message.poll ||
+        message.location
+    );
+}
 
 const ChatId = () => {
     const { data: session } = authClient.useSession()
@@ -51,10 +104,14 @@ const ChatId = () => {
     const { isContactVisible } = useContactPreviewBeforeSentStore();
 
     const selectedChatId = useActiveChatStore((state) => state.selectedChatId);
+    const chats = useActiveChatStore((state) => state.chats);
     const setSelectedChatId = useActiveChatStore((state) => state.setSelectedChatId);
     const setReplyDraft = useActiveChatStore((state) => state.setReplyDraft);
     const clearReplyDraft = useActiveChatStore((state) => state.clearReplyDraft);
-    const activeChatId = routeChatId ?? selectedChatId;
+    const activeChatId = useMemo(
+        () => resolveCanonicalChatId(routeChatId ?? selectedChatId, chats),
+        [chats, routeChatId, selectedChatId]
+    );
     const currentUserId = session?.user.id ?? null;
     const { loadOlderMessages } = useChatMessages(activeChatId);
     const { retryMessage } = useSendChatMessage();
@@ -95,6 +152,7 @@ const ChatId = () => {
     const selectedCount = selectedMessageIds.size;
     const selectionModeRef = useRef(selectionMode);
     const hasStartedMessageScrollRef = useRef(false);
+    const lastReadReceiptKeyRef = useRef<string | null>(null);
 
     const reactions = [
         { key: '1', label: '👍' },
@@ -105,72 +163,187 @@ const ChatId = () => {
         { key: '6', label: '🙏' },
     ];
 
+    debugChatId('render', {
+        routeChatId,
+        expoChatId,
+        nativeRouteChatId,
+        selectedChatId,
+        activeChatId,
+        isFocused,
+        realtimeStatus,
+        chatTitle,
+        messagesCount: messages.length,
+        visibleMessagesCount: visibleMessages.length,
+        latestMessage: messages.at(-1) ? summarizeMessageForDebug(messages.at(-1) as Message) : null,
+        selectedCount,
+        selectionMode,
+        previewVisible: { isVisible, isVideoVisible, isFileVisible, isContactVisible },
+    });
+
     useEffect(() => {
+        debugChatId('selection-mode-ref-sync', {
+            activeChatId,
+            selectionMode,
+            selectedMessageIds: Array.from(selectedMessageIds),
+        });
         selectionModeRef.current = selectionMode;
-    }, [selectionMode]);
+    }, [activeChatId, selectedMessageIds, selectionMode]);
+
+    useEffect(() => {
+        debugChatId('active-chat-state', {
+            routeChatId,
+            selectedChatId,
+            activeChatId,
+            activeChatExists: Boolean(activeChat),
+            activeChatLastMessageId: activeChat?.last_message_id,
+            unread: activeChat?.unreaded_messages_length,
+            messagesCount: messages.length,
+            firstMessage: messages[0] ? summarizeMessageForDebug(messages[0]) : null,
+            lastMessage: messages.at(-1) ? summarizeMessageForDebug(messages.at(-1) as Message) : null,
+        });
+    }, [activeChat, activeChatId, messages, routeChatId, selectedChatId]);
+
+    useEffect(() => {
+        debugChatId('visible-messages-updated', {
+            activeChatId,
+            count: visibleMessages.length,
+            topRenderedMessage: visibleMessages[0] ? summarizeMessageForDebug(visibleMessages[0]) : null,
+            bottomRenderedMessage: visibleMessages.at(-1) ? summarizeMessageForDebug(visibleMessages.at(-1) as Message) : null,
+        });
+    }, [activeChatId, visibleMessages]);
 
     useFocusEffect(
         useCallback(() => {
+            debugChatId('focus-effect-enter', {
+                routeChatId,
+                selectedChatId: useActiveChatStore.getState().selectedChatId,
+                chatsCount: useActiveChatStore.getState().chats.length,
+            });
             const focusedChatId =
-                routeChatId ?? useActiveChatStore.getState().selectedChatId;
+                resolveCanonicalChatId(
+                    routeChatId ?? useActiveChatStore.getState().selectedChatId,
+                    useActiveChatStore.getState().chats
+                );
 
             if (!focusedChatId) {
+                debugChatId('focus-effect-no-chat', { routeChatId });
                 return undefined;
             }
 
+            debugChatId('focus-effect-set-selected', { focusedChatId });
             setSelectedChatId(focusedChatId);
 
             return () => {
                 const state = useActiveChatStore.getState();
+                debugChatId('focus-effect-cleanup', {
+                    focusedChatId,
+                    storeSelectedChatId: state.selectedChatId,
+                });
 
                 if (state.selectedChatId === focusedChatId) {
+                    debugChatId('focus-effect-clear-selected', { focusedChatId });
                     state.setSelectedChatId(null);
                 }
             };
-        }, [routeChatId, setSelectedChatId])
+        }, [routeChatId, selectedChatId, setSelectedChatId])
+    );
+
+    const latestReadableIncomingMessage = useMemo(
+        () => [...messages]
+            .reverse()
+            .find(
+                (message) =>
+                    message.sender_user_id !== currentUserId &&
+                    hasRenderableMessage(message)
+            ) ?? null,
+        [currentUserId, messages]
     );
 
     useEffect(() => {
-        if (!activeChatId || !isFocused) {
+        if (!activeChatId || !isFocused || !latestReadableIncomingMessage) {
+            debugChatId('read-receipt-skip', {
+                activeChatId,
+                isFocused,
+                latestReadableIncomingMessage: latestReadableIncomingMessage
+                    ? summarizeMessageForDebug(latestReadableIncomingMessage)
+                    : null,
+            });
             return;
         }
 
-        useActiveChatStore.getState().markChatRead(activeChatId);
-        void markDbChatRead(activeChatId).catch((error) => {
-            console.log('Failed to mark chat read locally:', error);
+        const readReceiptKey = `${activeChatId}:${latestReadableIncomingMessage.message_id}`;
+        if (lastReadReceiptKeyRef.current === readReceiptKey) {
+            debugChatId('read-receipt-dedupe', { readReceiptKey });
+            return;
+        }
+
+        lastReadReceiptKeyRef.current = readReceiptKey;
+        debugChatId('read-receipt-schedule', {
+            readReceiptKey,
+            message: summarizeMessageForDebug(latestReadableIncomingMessage),
         });
-        useRealtimeStore.getState().sendEvent({
-            type: 'MARK_READ',
-            conversationId: activeChatId,
-        });
-    }, [activeChatId, isFocused]);
+        const timer = window.setTimeout(() => {
+            debugChatId('read-receipt-send', {
+                activeChatId,
+                messageId: latestReadableIncomingMessage.message_id,
+            });
+            useActiveChatStore.getState().markChatRead(activeChatId);
+            void markDbChatRead(activeChatId).catch((error) => {
+                debugChatId('read-receipt-db-error', { activeChatId, error });
+                console.log('Failed to mark chat read locally:', error);
+            });
+            useRealtimeStore.getState().sendEvent({
+                type: 'MARK_READ',
+                conversationId: activeChatId,
+                messageId: latestReadableIncomingMessage.message_id,
+            });
+        }, 100);
+
+        return () => {
+            debugChatId('read-receipt-clear-timer', { readReceiptKey });
+            window.clearTimeout(timer);
+        };
+    }, [activeChatId, isFocused, latestReadableIncomingMessage]);
 
     useEffect(() => {
         const keyboardDidShowListener = Keyboard.addListener('keyboardDidShow', () => {
+            debugChatId('keyboard-show', { activeChatId });
             setKeyboardOffset(-30);
         });
         const keyboardDidHideListener = Keyboard.addListener('keyboardDidHide', () => {
+            debugChatId('keyboard-hide', { activeChatId });
             setKeyboardOffset(-100);
         });
 
         return () => {
+            debugChatId('keyboard-listeners-cleanup', { activeChatId });
             keyboardDidShowListener.remove();
             keyboardDidHideListener.remove();
         };
-    }, []);
+    }, [activeChatId]);
 
     const toggleReactionContainer = () => {
+        debugChatId('reaction-toggle', {
+            activeChatId,
+            nextVisible: !isReactionVisible,
+        });
         setIsReactionVisible(prev => !prev);
     };
 
     const handleLongPress = useCallback((messageId: string) => {
+        debugChatId('message-long-press', { activeChatId, messageId });
         void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
         selectionModeRef.current = true;
         setSelectionMode(true);
         setSelectedMessageIds(new Set([messageId]));
-    }, []);
+    }, [activeChatId]);
 
     const handleBubblePress = useCallback((messageId: string) => {
+        debugChatId('message-press', {
+            activeChatId,
+            messageId,
+            selectionMode: selectionModeRef.current,
+        });
         if (!selectionModeRef.current) {
             return;
         }
@@ -188,11 +361,15 @@ const ChatId = () => {
             }
             return newSelected;
         });
-    }, []);
+    }, [activeChatId]);
 
     const handleRetryMessage = useCallback((message: Message) => {
+        debugChatId('retry-message', {
+            activeChatId,
+            message: summarizeMessageForDebug(message),
+        });
         void retryMessage(message);
-    }, [retryMessage]);
+    }, [activeChatId, retryMessage]);
 
     const handleReply = useCallback((
         replyTo: string,
@@ -203,9 +380,19 @@ const ChatId = () => {
         originalSenderUserId: string
     ) => {
         if (!activeChatId) {
+            debugChatId('reply-skip-no-active-chat', { originalMessageId });
             return;
         }
 
+        debugChatId('reply-start', {
+            activeChatId,
+            originalMessageId,
+            originalSenderUserId,
+            replyTo,
+            hasReplyText: Boolean(replyMsg),
+            replyMediaType,
+            hasReplyMedia: Boolean(replayMedia),
+        });
         setReplyToUser('');
         setReplyMessage('');
         setReplyMediaType(null);
@@ -231,6 +418,7 @@ const ChatId = () => {
     }, [activeChatId, setReplyDraft]);
 
     const handleClearReply = useCallback(() => {
+        debugChatId('reply-clear', { activeChatId });
         setIsReply(false);
         setReplyToUser('');
         setReplyMessage('');
@@ -242,12 +430,20 @@ const ChatId = () => {
     }, [activeChatId, clearReplyDraft]);
 
     const handleCancelSelectionMode = useCallback(() => {
+        debugChatId('selection-cancel', {
+            activeChatId,
+            selectedMessageIds: Array.from(selectedMessageIds),
+        });
         selectionModeRef.current = false;
         setSelectionMode(false);
         setSelectedMessageIds(new Set());
-    }, []);
+    }, [activeChatId, selectedMessageIds]);
 
     const handleExitFromChat = () => {
+        debugChatId('exit-chat', {
+            activeChatId,
+            rightNavReady: rightNavRef.isReady(),
+        });
         if (rightNavRef.isReady()) {
             rightNavRef.goBack();
             return
@@ -257,6 +453,12 @@ const ChatId = () => {
     };
 
     const handleLoadOlderMessages = useCallback(() => {
+        debugChatId('load-older-request', {
+            activeChatId,
+            hasStartedMessageScroll: hasStartedMessageScrollRef.current,
+            olderMessagesLoading,
+            hasOlderMessages,
+        });
         if (
             !hasStartedMessageScrollRef.current ||
             !activeChatId ||
@@ -275,22 +477,34 @@ const ChatId = () => {
     ]);
 
     const handleMessageScroll = useCallback(() => {
+        if (!hasStartedMessageScrollRef.current) {
+            debugChatId('message-list-first-scroll', { activeChatId });
+        }
         hasStartedMessageScrollRef.current = true;
-    }, []);
+    }, [activeChatId]);
 
-    const renderMessageItem = useCallback(({ item }: { item: Message }) => (
-        <Bubble
-            message={item}
-            currentUserId={currentUserId}
-            isDark={isDark}
-            isSelected={selectedMessageIds.has(item.message_id)}
-            selectedCount={selectedCount}
-            onLongPress={handleLongPress}
-            onPress={handleBubblePress}
-            onRetryMessage={handleRetryMessage}
-            handleReply={handleReply}
-        />
-    ), [
+    const renderMessageItem = useCallback(({ item }: { item: Message }) => {
+        debugChatId('render-message-item', {
+            activeChatId,
+            message: summarizeMessageForDebug(item),
+            isSelected: selectedMessageIds.has(item.message_id),
+        });
+
+        return (
+            <Bubble
+                message={item}
+                currentUserId={currentUserId}
+                isDark={isDark}
+                isSelected={selectedMessageIds.has(item.message_id)}
+                selectedCount={selectedCount}
+                onLongPress={handleLongPress}
+                onPress={handleBubblePress}
+                onRetryMessage={handleRetryMessage}
+                handleReply={handleReply}
+            />
+        );
+    }, [
+        activeChatId,
         currentUserId,
         handleBubblePress,
         handleLongPress,
@@ -302,22 +516,27 @@ const ChatId = () => {
     ]);
 
     if (isVisible) {
+        debugChatId('render-image-preview-before-send', { activeChatId });
         return <ImagePreviewBeforeSent />
     }
 
     if (isVideoVisible) {
+        debugChatId('render-video-preview-before-send', { activeChatId });
         return <VideoPreviewBeforeSent />
     }
 
     if (isFileVisible) {
+        debugChatId('render-file-preview-before-send', { activeChatId });
         return <FilePreviewBeforeSent />
     }
 
     if (isContactVisible) {
+        debugChatId('render-contact-preview-before-send', { activeChatId });
         return <ContactPreviewBeforeSent />
     }
 
     const handleOpenProfile = () => {
+        debugChatId('open-profile', { activeChatId });
         router.navigate({
             pathname: '/targetUserProfile',
             params: { chatId: activeChatId }
@@ -430,6 +649,7 @@ const ChatId = () => {
                     }
                 />
                 <ChatInputContainer
+                    chatId={activeChatId}
                     isReply={isReply}
                     handleClearReply={handleClearReply}
                     replyMessage={replyMessage}
