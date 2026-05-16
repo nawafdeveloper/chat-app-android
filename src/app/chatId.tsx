@@ -41,6 +41,7 @@ import { ActivityIndicator, Appbar, Icon, IconButton, TouchableRipple } from 're
 import Animated, { ZoomIn, ZoomOut } from 'react-native-reanimated';
 
 const EMPTY_MESSAGES: Message[] = [];
+const EMPTY_USER_IDS: string[] = [];
 const CHAT_DEBUG = true;
 
 type MessageListItem =
@@ -277,6 +278,56 @@ function formatDateSeparator(date: Date) {
     });
 }
 
+function formatLastSeen(date: Date | string | null | undefined) {
+    if (!date) {
+        return null;
+    }
+
+    const lastSeen = date instanceof Date ? date : new Date(date);
+    if (Number.isNaN(lastSeen.getTime())) {
+        return null;
+    }
+
+    const today = new Date();
+    const yesterday = new Date();
+    yesterday.setDate(today.getDate() - 1);
+
+    const time = lastSeen.toLocaleTimeString(undefined, {
+        hour: "numeric",
+        minute: "2-digit",
+    });
+
+    if (getLocalDateKey(lastSeen) === getLocalDateKey(today)) {
+        return `last seen today at ${time}`;
+    }
+
+    if (getLocalDateKey(lastSeen) === getLocalDateKey(yesterday)) {
+        return `last seen yesterday at ${time}`;
+    }
+
+    return `last seen ${lastSeen.toLocaleDateString(undefined, {
+        day: "numeric",
+        month: "short",
+        year: lastSeen.getFullYear() === today.getFullYear() ? undefined : "numeric",
+    })} at ${time}`;
+}
+
+function getGroupMemberDisplayName(
+    member: NonNullable<ChatItemType["group_members"]>[number],
+    contacts: Contact[]
+) {
+    const contact =
+        findContactByUserId(contacts, member.user_id) ??
+        findContactByPhone(contacts, member.phone_number);
+
+    return (
+        (contact ? getContactDisplayName(contact) : "") ||
+        member.name?.trim() ||
+        member.phone_number ||
+        null
+    );
+}
+
 function buildMessageListItems(messages: Message[]): MessageListItem[] {
     const newestFirstMessages = [...messages].reverse();
     const items: MessageListItem[] = [];
@@ -454,6 +505,14 @@ const ChatId = () => {
             ? state.chats.find((chat) => chat.chat_id === activeChatId) ?? null
             : null
     );
+    const activePresence = useActiveChatStore((state) =>
+        activeChatId ? state.presenceByChatId[activeChatId] ?? null : null
+    );
+    const activeTypingUsers = useActiveChatStore((state) =>
+        activeChatId
+            ? state.typingByChatId[activeChatId]?.activeTypingUsers ?? EMPTY_USER_IDS
+            : EMPTY_USER_IDS
+    );
     const messages = useActiveChatStore((state) =>
         activeChatId
             ? state.messagesByChatId[activeChatId] ?? EMPTY_MESSAGES
@@ -481,6 +540,94 @@ const ChatId = () => {
     const chatTitle = activeChat?.display_name ?? activeChat?.contact_phone ?? 'Chat';
     const avatarTint = colors.text;
     const isRealtimeConnecting = realtimeStatus === 'connecting';
+    const groupMemberNames = useMemo(() => {
+        if (activeChat?.chat_type !== "group") {
+            return "";
+        }
+
+        return (
+            activeChat.group_members
+                ?.map((member) => getGroupMemberDisplayName(member, contacts))
+                .filter((name): name is string => Boolean(name?.trim()))
+                .join(", ") ?? ""
+        );
+    }, [activeChat?.chat_type, activeChat?.group_members, contacts]);
+    const chatHeaderSubtitle = useMemo(() => {
+        if (!activeChat) {
+            return null;
+        }
+
+        if (activeChat.chat_type === "group") {
+            const typingNames = activeTypingUsers
+                .map((userId) => {
+                    const member = activeChat.group_members?.find(
+                        (groupMember) => groupMember.user_id === userId
+                    );
+
+                    return member
+                        ? getGroupMemberDisplayName(member, contacts)
+                        : null;
+                })
+                .filter((name): name is string => Boolean(name?.trim()));
+
+            if (typingNames.length > 0) {
+                const label =
+                    typingNames.length === 1
+                        ? typingNames[0]
+                        : typingNames.join(", ");
+
+                return {
+                    text: `${label} typing ...`,
+                    color: "#25D366",
+                };
+            }
+
+            return groupMemberNames
+                ? {
+                    text: groupMemberNames,
+                    color: colors.textSecondary,
+                }
+                : null;
+        }
+
+        if (activeTypingUsers.length > 0) {
+            return {
+                text: "typing ...",
+                color: "#25D366",
+            };
+        }
+
+        const recipientIsOnline = Boolean(
+            activeChat.recipient_user_id &&
+            activePresence?.activeUsers.includes(activeChat.recipient_user_id)
+        );
+
+        if (recipientIsOnline) {
+            return {
+                text: "online",
+                color: "#25D366",
+            };
+        }
+
+        if (activeChat.recipient_last_seen_visible === false) {
+            return null;
+        }
+
+        const lastSeen = formatLastSeen(activeChat.recipient_last_seen);
+        return lastSeen
+            ? {
+                text: lastSeen,
+                color: colors.textSecondary,
+            }
+            : null;
+    }, [
+        activeChat,
+        activePresence?.activeUsers,
+        activeTypingUsers,
+        colors.textSecondary,
+        contacts,
+        groupMemberNames,
+    ]);
 
     const [selectionMode, setSelectionMode] = useState(false);
     const [selectedMessageIds, setSelectedMessageIds] = useState<Set<string>>(new Set());
@@ -1546,9 +1693,11 @@ const ChatId = () => {
                     <>
                         <Appbar.BackAction onPress={handleExitFromChat} />
                         <Appbar.Content
+                            style={styles.appbarContent}
                             title={
                                 <TouchableRipple
                                     key={activeChat?.chat_id}
+                                    style={styles.profilePressable}
                                     rippleColor={colors.textSecondary + '33'}
                                     underlayColor={colors.textSecondary + '22'}
                                     background={{ type: 'ripple', color: colors.textSecondary + '33', foreground: true }}
@@ -1569,7 +1718,27 @@ const ChatId = () => {
                                             textColor={avatarTint}
                                             chatType={activeChat?.chat_type}
                                         />
-                                        <ThemedText numberOfLines={1}>{chatTitle}</ThemedText>
+                                        <ThemedView style={styles.profileTextContainer}>
+                                            <ThemedText
+                                                numberOfLines={1}
+                                                ellipsizeMode="tail"
+                                                style={styles.profileTitle}
+                                            >
+                                                {chatTitle}
+                                            </ThemedText>
+                                            {chatHeaderSubtitle ? (
+                                                <ThemedText
+                                                    numberOfLines={1}
+                                                    ellipsizeMode="tail"
+                                                    style={[
+                                                        styles.profileSubtitle,
+                                                        { color: chatHeaderSubtitle.color },
+                                                    ]}
+                                                >
+                                                    {chatHeaderSubtitle.text}
+                                                </ThemedText>
+                                            ) : null}
+                                        </ThemedView>
                                     </ThemedView>
                                 </TouchableRipple>
                             }
@@ -1825,10 +1994,35 @@ const styles = StyleSheet.create({
         lineHeight: 18,
         textAlign: 'center',
     },
+    appbarContent: {
+        flex: 1,
+        minWidth: 0,
+    },
+    profilePressable: {
+        flex: 1,
+        minWidth: 0,
+    },
     profileContainer: {
+        flex: 1,
+        minWidth: 0,
         flexDirection: 'row',
         alignItems: 'center',
         gap: 10
+    },
+    profileTextContainer: {
+        flex: 1,
+        minWidth: 0,
+        backgroundColor: 'transparent',
+    },
+    profileTitle: {
+        fontSize: 16,
+        lineHeight: 20,
+        fontWeight: '500',
+    },
+    profileSubtitle: {
+        marginTop: 1,
+        fontSize: 12,
+        lineHeight: 16,
     },
     headerConnectionIndicator: {
         width: 40,
@@ -1926,7 +2120,6 @@ const styles = StyleSheet.create({
         borderRadius: 25,
         alignItems: 'center',
         justifyContent: 'center',
-        marginRight: 12,
     },
     goDownButtonContainer: {
         position: 'absolute',
