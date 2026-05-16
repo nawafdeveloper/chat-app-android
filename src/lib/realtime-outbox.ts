@@ -57,6 +57,10 @@ function rowToEvent(row: DbPendingRealtimeEvent): ClientRealtimeEvent | null {
     }
 }
 
+function requiresServerAck(event: ClientRealtimeEvent) {
+    return event.type === "MARK_READ";
+}
+
 async function upsertPendingEvent(values: DbPendingRealtimeEventInsert) {
     await db
         .insert(pendingRealtimeEvents)
@@ -92,6 +96,16 @@ export async function enqueueRealtimeEvent(event: ClientRealtimeEvent) {
 
     await upsertPendingEvent(pendingEvent);
     return pendingEvent.id;
+}
+
+export async function completePendingRealtimeEvent(event: ClientRealtimeEvent) {
+    if (!isDurableRealtimeEvent(event)) {
+        return;
+    }
+
+    await db
+        .delete(pendingRealtimeEvents)
+        .where(eq(pendingRealtimeEvents.dedupe_key, getEventDedupeKey(event)));
 }
 
 export async function flushPendingRealtimeEvents(socket: WebSocket | null) {
@@ -133,9 +147,21 @@ export async function flushPendingRealtimeEvents(socket: WebSocket | null) {
 
                 try {
                     socket.send(JSON.stringify(event));
-                    await db
-                        .delete(pendingRealtimeEvents)
-                        .where(eq(pendingRealtimeEvents.id, row.id));
+
+                    if (requiresServerAck(event)) {
+                        await db
+                            .update(pendingRealtimeEvents)
+                            .set({
+                                attempts: row.attempts + 1,
+                                last_error: null,
+                                updated_at: new Date().toISOString(),
+                            })
+                            .where(eq(pendingRealtimeEvents.id, row.id));
+                    } else {
+                        await db
+                            .delete(pendingRealtimeEvents)
+                            .where(eq(pendingRealtimeEvents.id, row.id));
+                    }
                 } catch (error) {
                     await db
                         .update(pendingRealtimeEvents)

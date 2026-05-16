@@ -20,7 +20,7 @@ import { authClient } from '@/lib/auth-client';
 import { buildDirectChatId, decryptMessageBatch } from '@/lib/chat-e2ee';
 import { areDirectChatIdsEquivalent, normalizeMessage } from '@/lib/chat-utils';
 import { findContactByPhone, findContactByUserId, getContactDisplayName } from '@/lib/contact-display';
-import { markDbChatRead } from '@/lib/upsert-db-chats';
+import { markChatReadOptimistically } from '@/lib/optimistic-read-receipts';
 import { useContactPreviewBeforeSentStore } from '@/store/contact-preview-before-sent';
 import { useFilePreviewBeforeSentStore } from '@/store/file-preview-before-sent';
 import { useImagePreviewBeforeSentStore } from '@/store/image-preview-before-sent';
@@ -764,12 +764,7 @@ const ChatId = () => {
                 activeChatId,
                 messageId: latestReadableIncomingMessage.message_id,
             });
-            useActiveChatStore.getState().markChatRead(activeChatId);
-            void markDbChatRead(activeChatId).catch((error) => {
-                debugChatId('read-receipt-db-error', { activeChatId, error });
-            });
-            useRealtimeStore.getState().sendEvent({
-                type: 'MARK_READ',
+            markChatReadOptimistically({
                 conversationId: activeChatId,
                 messageId: latestReadableIncomingMessage.message_id,
             });

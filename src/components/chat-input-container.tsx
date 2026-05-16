@@ -17,6 +17,7 @@ import { Image } from 'expo-image'
 import React, { useEffect, useMemo, useState } from 'react'
 import { ActivityIndicator, StyleSheet, TextInput, useColorScheme, View } from 'react-native'
 import { IconButton } from 'react-native-paper'
+import Animated, { ZoomIn, ZoomOut } from 'react-native-reanimated'
 import { useSafeAreaInsets } from 'react-native-safe-area-context'
 import AttachmentContainer from './attachment-container'
 import VoiceWaveform from './audio-recorder-visualizer'
@@ -517,48 +518,56 @@ const ChatInputContainer = ({ chatId, isReply, handleClearReply, replyMessage, r
                                 enablesReturnKeyAutomatically={true}
                                 selectionColor='#25D366'
                             />
-                            <IconButton
-                                icon={canSendText ? "plus" : "microphone-outline"}
-                                iconColor={colors.text}
-                                size={28}
-                                style={{ margin: 0, marginBottom: 2 }}
-                                onPress={() => {
-                                    debugChatInput('left-action-press', {
-                                        activeChatId,
-                                        canSendText,
-                                        action: canSendText ? 'attachment' : 'record',
-                                    });
-                                    if (canSendText) {
-                                        handleToggleAttachment();
-                                    } else {
-                                        startRecording();
-                                    }
-                                }}
-                            />
+                            {canSendText ? (
+                                <Animated.View key={'attachment'} entering={ZoomIn.duration(150)} exiting={ZoomOut.duration(150)}>
+                                    <IconButton
+                                        icon={"plus"}
+                                        iconColor={colors.text}
+                                        size={28}
+                                        style={{ margin: 0, marginBottom: 2 }}
+                                        onPress={() => handleToggleAttachment()}
+                                    />
+                                </Animated.View>
+                            ) : (
+                                <Animated.View key={'mic'} entering={ZoomIn.duration(150)} exiting={ZoomOut.duration(150)}>
+                                    <IconButton
+                                        icon={"microphone-outline"}
+                                        iconColor={colors.text}
+                                        size={28}
+                                        style={{ margin: 0, marginBottom: 2 }}
+                                        onPress={() => startRecording()}
+                                    />
+                                </Animated.View>
+                            )}
                         </ThemedView>
                     </ThemedView>
-                    <IconButton
-                        onPress={() => {
-                            debugChatInput('right-action-press', {
-                                activeChatId,
-                                canSendText,
-                                isSendingText,
-                                action: canSendText ? 'send' : 'attachment',
-                            });
-                            if (!canSendText) {
-                                handleToggleAttachment();
-                            } else {
-                                handleSend();
-                            }
-                        }}
-                        icon={canSendText ? "send" : "plus"}
-                        mode='contained'
-                        disabled={isSendingText}
-                        iconColor={colors.background}
-                        containerColor='#25D366'
-                        size={28}
-                        style={{ margin: 0, marginBottom: 2 }}
-                    />
+                    {canSendText ? (
+                        <ThemedView style={{ backgroundColor: '#25D366', padding: 2, borderRadius: 99, justifyContent: 'center', alignItems: 'center' }}>
+                            <Animated.View key={'send'} entering={ZoomIn.duration(150)} exiting={ZoomOut.duration(150)}>
+                                <IconButton
+                                    onPress={() => handleSend()}
+                                    icon={"send"}
+                                    disabled={isSendingText}
+                                    iconColor={colors.background}
+                                    size={27}
+                                    style={{ margin: 0, marginBottom: 2 }}
+                                />
+                            </Animated.View>
+                        </ThemedView>
+                    ) : (
+                        <ThemedView style={{ backgroundColor: '#25D366', padding: 2, borderRadius: 99, justifyContent: 'center', alignItems: 'center' }}>
+                            <Animated.View key={'attachment-green'} entering={ZoomIn.duration(150)} exiting={ZoomOut.duration(150)}>
+                                <IconButton
+                                    onPress={() => handleToggleAttachment()}
+                                    icon={"plus"}
+                                    disabled={isSendingText}
+                                    iconColor={colors.background}
+                                    size={28}
+                                    style={{ margin: 0 }}
+                                />
+                            </Animated.View>
+                        </ThemedView>
+                    )}
                 </ThemedView>
             )}
         </ThemedView>

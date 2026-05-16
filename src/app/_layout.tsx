@@ -8,6 +8,7 @@ import { deleteMobilePushToken, hydrateLocalChatCache, registerMobilePushToken, 
 import { syncMobileContacts } from '@/lib/contact-sync';
 import { retrieveSessionKeys } from '@/lib/crypto-storage';
 import { displayRemoteMessageNotification } from '@/lib/display-notifee-notification';
+import { syncNotificationMessageToLocalDb } from '@/lib/background-notification-sync';
 import { useAuthStore } from '@/store/auth-store';
 import { useNotificationStore } from '@/store/notification-store';
 import { rightNavRef } from '@/store/right-nav-ref';
@@ -407,7 +408,10 @@ const AppLayout = () => {
         const unsubscribeFCM = onMessage(firebaseMessaging, async (remoteMessage) => {
             console.log('[push] foreground FCM message received');
             setNotification(remoteMessage); // keep store updated
-            await displayRemoteMessageNotification(remoteMessage);
+            await Promise.allSettled([
+                syncNotificationMessageToLocalDb(remoteMessage.data ?? {}),
+                displayRemoteMessageNotification(remoteMessage),
+            ]);
             syncFromNotification();
         });
 

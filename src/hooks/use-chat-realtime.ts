@@ -23,8 +23,12 @@ import {
     isMessageMediaSafeForJsDecrypt,
     materializeMessageMedia,
 } from "@/lib/message-media";
-import { flushPendingRealtimeEvents } from "@/lib/realtime-outbox";
-import { markDbChatRead, upsertDbChats } from "@/lib/upsert-db-chats";
+import { markChatReadOptimistically } from "@/lib/optimistic-read-receipts";
+import {
+    completePendingRealtimeEvent,
+    flushPendingRealtimeEvents,
+} from "@/lib/realtime-outbox";
+import { upsertDbChats } from "@/lib/upsert-db-chats";
 import { getDbMessage, upsertDbMessages } from "@/lib/upsert-db-messages";
 import { useAuthStore } from "@/store/auth-store";
 import { useActiveChatStore } from "@/store/use-active-chat-store";
@@ -396,11 +400,10 @@ export function useChatRealtime() {
         appendMessage,
         setPresence,
         setTypingUsers,
-        markChatRead,
         markMessagesReadByUser,
         setRecipientPhone,
     } = useActiveChatStore.getState();
-    const { setSocket, setStatus, sendEvent } = useRealtimeStore.getState();
+    const { setSocket, setStatus } = useRealtimeStore.getState();
 
     const currentUserId = session?.user.id ?? null;
     const currentPhone = (session?.user as { phoneNumber?: string | null } | undefined)
@@ -1203,13 +1206,9 @@ export function useChatRealtime() {
                             conversationId,
                             messageId: event.messageId,
                         });
-                        markChatRead(conversationId);
-                        void markDbChatRead(conversationId).catch((error) => {
-                            debugRealtime("event-reaction-updated-mark-read-db-error", {
-                                conversationId,
-                                error,
-                            });
-                            console.log('Failed to mark chat read locally:', error);
+                        markChatReadOptimistically({
+                            conversationId,
+                            messageId: event.messageId,
                         });
                     }
                     break;
@@ -1263,6 +1262,20 @@ export function useChatRealtime() {
                             readAt
                         );
                     }
+
+                    if (event.userId === currentUserId) {
+                        void completePendingRealtimeEvent({
+                            type: "MARK_READ",
+                            conversationId,
+                            messageId: event.messageId ?? undefined,
+                        }).catch((error) => {
+                            debugRealtime("event-mark-read-complete-pending-error", {
+                                conversationId,
+                                messageId: event.messageId,
+                                error,
+                            });
+                        });
+                    }
                     break;
                 }
 
@@ -1284,7 +1297,6 @@ export function useChatRealtime() {
         [
             appendMessage,
             applyKnownContactOverride,
-            markChatRead,
             markMessagesReadByUser,
             persistAndUpsertChat,
             resolveStoreChatId,
