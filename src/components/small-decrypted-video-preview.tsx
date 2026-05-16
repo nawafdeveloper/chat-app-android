@@ -42,21 +42,33 @@ export function SmallVideoMessagePreview({
     const player = useVideoPlayer(
         localVideoUri ? { uri: localVideoUri } : null
     );
-    const videoDuration = formatAudioTime(player.duration ?? 0)
     const [thumbnail, setThumbnail] = useState<VideoThumbnail | null>(null);
     const hasFullMedia = Boolean(localVideoUri);
+    const thumbnailVideoUri =
+        localVideoUri ??
+        (source?.startsWith("file:") ||
+            source?.startsWith("content:") ||
+            source?.startsWith("asset:")
+            ? source
+            : null);
+    const thumbnailPlayer = useVideoPlayer(
+        thumbnailVideoUri ? { uri: thumbnailVideoUri } : null
+    );
+    const videoDuration = formatAudioTime(
+        (hasFullMedia ? player.duration : thumbnailPlayer.duration) ?? 0
+    )
 
     useEffect(() => {
         let mounted = true;
 
         setThumbnail(null);
-        if (!localVideoUri) {
+        if (!thumbnailVideoUri) {
             return () => {
                 mounted = false;
             };
         }
 
-        player.generateThumbnailsAsync(0, { maxWidth: 1280 })
+        thumbnailPlayer.generateThumbnailsAsync(0, { maxWidth: 1280 })
             .then((thumbnails) => {
                 if (mounted) {
                     setThumbnail(thumbnails[0] ?? null);
@@ -69,7 +81,7 @@ export function SmallVideoMessagePreview({
         return () => {
             mounted = false;
         };
-    }, [localVideoUri, player]);
+    }, [thumbnailPlayer, thumbnailVideoUri]);
 
     const handlePress = () => {
         if (!hasFullMedia) return;
@@ -93,12 +105,18 @@ export function SmallVideoMessagePreview({
                     <Image
                         source={thumbnail}
                         contentFit="cover"
-                        style={styles.mediaPhoto}
+                        blurRadius={hasFullMedia ? 0 : 1}
+                        style={[
+                            styles.mediaPhoto,
+                            !hasFullMedia && styles.mediaPhotoBlurred,
+                        ]}
                     />
                     <View style={styles.playOverlay}>
-                        <View style={styles.videoPlayBadge}>
-                            <Icon source="play" color="#ffffff" size={32} />
-                        </View>
+                        {hasFullMedia ? (
+                            <View style={styles.videoPlayBadge}>
+                                <Icon source="play" color="#ffffff" size={32} />
+                            </View>
+                        ) : null}
                         <ThemedView style={{ flexDirection: 'row', alignItems: 'center', gap: 6, backgroundColor: 'transparent', position: 'absolute', left: 8, bottom: 8, zIndex: 1 }}>
                             <Icon source="video" color="#ffffff" size={20} />
                             <ThemedText style={{ fontSize: 12, fontWeight: '500' }}>{videoDuration}</ThemedText>
@@ -167,6 +185,9 @@ const styles = StyleSheet.create({
     mediaPhoto: {
         width: '100%',
         height: '100%',
+    },
+    mediaPhotoBlurred: {
+        transform: [{ scale: 1.04 }],
     },
     playOverlay: {
         ...StyleSheet.absoluteFillObject,

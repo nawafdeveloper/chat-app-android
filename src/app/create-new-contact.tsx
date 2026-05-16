@@ -80,10 +80,17 @@ const CreateNewContact = () => {
     const resolvedScheme = scheme === 'unspecified' ? 'light' : scheme ?? 'light'
     const colors = Colors[resolvedScheme]
     const { isReady } = useCryptoKeys()
-    const params = useLocalSearchParams<{ phoneNumber?: string | string[] }>()
+    const params = useLocalSearchParams<{
+        phoneNumber?: string | string[]
+        contactName?: string | string[]
+    }>()
     const initialPhoneNumber = Array.isArray(params.phoneNumber)
         ? params.phoneNumber[0]
         : params.phoneNumber
+    const initialContactName = Array.isArray(params.contactName)
+        ? params.contactName[0]
+        : params.contactName
+    const didApplyNamePrefillRef = React.useRef(false)
     const {
         selectedCountry,
         setSelectedCountry,
@@ -118,6 +125,23 @@ const CreateNewContact = () => {
         setSelectedCountry(prefill.country)
         setPhoneNumber(prefill.localDigits)
     }, [fullPhoneNumber, initialPhoneNumber, setPhoneNumber, setSelectedCountry])
+
+    useEffect(() => {
+        const contactName = initialContactName?.trim()
+        if (
+            didApplyNamePrefillRef.current ||
+            !contactName ||
+            firstName.trim() ||
+            lastName.trim()
+        ) {
+            return
+        }
+
+        didApplyNamePrefillRef.current = true
+        const [nextFirstName, ...remainingNames] = contactName.split(/\s+/)
+        setFirstName(nextFirstName ?? '')
+        setLastName(remainingNames.join(' '))
+    }, [firstName, initialContactName, lastName, setFirstName, setLastName])
 
     useEffect(() => {
         if (!fullPhoneNumber || phoneNumber.length < 5) {

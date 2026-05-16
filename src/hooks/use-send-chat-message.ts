@@ -511,6 +511,8 @@ export function useSendChatMessage() {
         encryptedChatPreview = null,
         chatPreviewRecipientKeys = null,
         isForwardMessage = false,
+        transportMediaPreviewUrl,
+        transportVideoThumbnail,
     }: {
         chatId: string;
         currentUserId: string;
@@ -526,11 +528,21 @@ export function useSendChatMessage() {
         encryptedChatPreview?: EncryptedContentEnvelope | null;
         chatPreviewRecipientKeys?: RecipientEncryptedAesKeyInput[] | null;
         isForwardMessage?: boolean;
+        transportMediaPreviewUrl?: string | null;
+        transportVideoThumbnail?: string | null;
     }) => {
         const senderNickname = session?.user.name ?? currentPhone;
         const senderAvatarUrl = session?.user.image ?? null;
         const notificationPlaintext =
             getNotificationPlaintextForMessage(optimisticMessage);
+        const mediaPreviewUrlForTransport =
+            transportMediaPreviewUrl !== undefined
+                ? transportMediaPreviewUrl
+                : optimisticMessage.media_preview_url ?? null;
+        const videoThumbnailForTransport =
+            transportVideoThumbnail !== undefined
+                ? transportVideoThumbnail
+                : optimisticMessage.video_thumbnail;
         const requiresEncryptedContent =
             Boolean(optimisticMessage.message_text_content?.trim()) ||
             optimisticMessage.attached_media === "contact";
@@ -654,7 +666,7 @@ export function useSendChatMessage() {
                     chatId,
                     attachedMedia: optimisticMessage.attached_media,
                     mediaUrl: optimisticMessage.media_url,
-                    previewUrl: optimisticMessage.media_preview_url ?? null,
+                    previewUrl: mediaPreviewUrlForTransport,
                     mediaSizeBytes: optimisticMessage.media_size_bytes ?? null,
                     mediaWidth: optimisticMessage.media_width ?? null,
                     mediaHeight: optimisticMessage.media_height ?? null,
@@ -680,12 +692,12 @@ export function useSendChatMessage() {
                     notificationPlaintext,
                     attachedMedia: optimisticMessage.attached_media,
                     mediaUrl: optimisticMessage.media_url,
-                    mediaPreviewUrl: optimisticMessage.media_preview_url ?? null,
+                    mediaPreviewUrl: mediaPreviewUrlForTransport,
                     mediaSizeBytes: optimisticMessage.media_size_bytes ?? null,
                     mediaWidth: optimisticMessage.media_width ?? null,
                     mediaHeight: optimisticMessage.media_height ?? null,
                     mediaFileName: optimisticMessage.media_file_name ?? null,
-                    videoThumbnail: optimisticMessage.video_thumbnail,
+                    videoThumbnail: videoThumbnailForTransport,
                     isForwardMessage,
                     encryptedContent,
                     recipientEncryptionKeys,
@@ -707,12 +719,12 @@ export function useSendChatMessage() {
                 notificationPlaintext,
                 attachedMedia: optimisticMessage.attached_media,
                 mediaUrl: optimisticMessage.media_url,
-                mediaPreviewUrl: optimisticMessage.media_preview_url ?? null,
+                mediaPreviewUrl: mediaPreviewUrlForTransport,
                 mediaSizeBytes: optimisticMessage.media_size_bytes ?? null,
                 mediaWidth: optimisticMessage.media_width ?? null,
                 mediaHeight: optimisticMessage.media_height ?? null,
                 mediaFileName: optimisticMessage.media_file_name ?? null,
-                videoThumbnail: optimisticMessage.video_thumbnail,
+                videoThumbnail: videoThumbnailForTransport,
                 isForwardMessage,
                 encryptedContent,
                 recipientEncryptionKeys,
@@ -1216,26 +1228,34 @@ export function useSendChatMessage() {
                 previewUrl: upload.previewUrl,
                 recipientKeyCount: upload.recipientEncryptionKeys.length,
             });
+            const localFallbackPreviewUrl =
+                upload.previewUrl ?? (attachedMedia === "video" ? null : localPreviewUrl);
+            const localFallbackVideoThumbnail =
+                attachedMedia === "video"
+                    ? upload.previewUrl ?? localPreviewUrl
+                    : optimisticMessage.video_thumbnail;
 
             updateMessage(chatId, messageId, (message) => ({
                 ...message,
                 media_url: upload.mediaUrl,
-                media_preview_url: upload.previewUrl,
+                media_preview_url: localFallbackPreviewUrl,
                 media_size_bytes: upload.sizeBytes,
                 media_width: mediaDimensions?.width ?? null,
                 media_height: mediaDimensions?.height ?? null,
                 media_file_name: uploadFile.name,
+                video_thumbnail: localFallbackVideoThumbnail,
                 client_status: "sending",
                 client_error: null,
             }));
             attachmentMessageForRetry = {
                 ...optimisticMessage,
                 media_url: upload.mediaUrl,
-                media_preview_url: upload.previewUrl,
+                media_preview_url: localFallbackPreviewUrl,
                 media_size_bytes: upload.sizeBytes,
                 media_width: mediaDimensions?.width ?? null,
                 media_height: mediaDimensions?.height ?? null,
                 media_file_name: uploadFile.name,
+                video_thumbnail: localFallbackVideoThumbnail,
                 message_recipient_keys: upload.recipientEncryptionKeys.map((key) => ({
                     recipient_user_id: key.recipientUserId,
                     encrypted_aes_key: key.encryptedAesKey,
@@ -1266,11 +1286,12 @@ export function useSendChatMessage() {
                 optimisticMessage: {
                     ...optimisticMessage,
                     media_url: upload.mediaUrl,
-                    media_preview_url: upload.previewUrl,
+                    media_preview_url: localFallbackPreviewUrl,
                     media_size_bytes: upload.sizeBytes,
                     media_width: mediaDimensions?.width ?? null,
                     media_height: mediaDimensions?.height ?? null,
                     media_file_name: uploadFile.name,
+                    video_thumbnail: localFallbackVideoThumbnail,
                 },
                 conversation,
                 existingMessageId: messageId,
@@ -1283,6 +1304,8 @@ export function useSendChatMessage() {
                 chatPreviewRecipientKeys:
                     encryptedPreview?.recipientEncryptionKeys ?? null,
                 isForwardMessage,
+                transportMediaPreviewUrl: upload.previewUrl,
+                transportVideoThumbnail: attachedMedia === "video" ? upload.previewUrl : optimisticMessage.video_thumbnail,
             });
             debugSendMessage("send-attachment-dispatch-success", {
                 chatId,

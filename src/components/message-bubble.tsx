@@ -15,11 +15,14 @@ import { useContactDirectoryStore } from "@/store/use-contact-directory-store";
 import { Message } from "@/types/messages";
 import Slider from "@react-native-community/slider";
 import { useAudioPlayer, useAudioPlayerStatus } from "expo-audio";
+import * as FileSystem from "expo-file-system/legacy";
 import * as Haptics from 'expo-haptics';
 import { Image } from "expo-image";
+import * as IntentLauncher from "expo-intent-launcher";
 import { router } from "expo-router";
+import * as Sharing from "expo-sharing";
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { ActivityIndicator, Linking, Pressable, StyleSheet, TouchableWithoutFeedback, View } from "react-native";
+import { ActivityIndicator, Alert, Linking, Platform, Pressable, StyleSheet, TouchableWithoutFeedback, View } from "react-native";
 import { Gesture, GestureDetector } from "react-native-gesture-handler";
 import { Icon, IconButton, TouchableRipple } from "react-native-paper";
 import Animated, { Extrapolation, interpolate, useAnimatedStyle, useSharedValue, withSpring } from "react-native-reanimated";
@@ -36,6 +39,7 @@ import { DarkFileIcon, LightFileIcon } from "./ui/file-icons";
 type BubbleProps = {
     message: Message;
     currentUserId: string | null;
+    currentPhone?: string | null;
     isDark: boolean;
     showTail?: boolean;
     isGroupedWithPrevious?: boolean;
@@ -53,6 +57,7 @@ type BubbleProps = {
         originalMessageId: string,
         originalSenderUserId: string
     ) => void;
+    onReplyPress?: (messageId: string) => void;
     isStarredByCurrentUser: boolean
 };
 
@@ -620,7 +625,7 @@ const Tail = memo(function Tail({ color, sent }: { color: string; sent: boolean 
     );
 });
 
-function Bubble({ message, currentUserId, isDark, showTail = true, isGroupedWithPrevious = false, isGroupedWithNext = false, isSelected, selectedCount, onLongPress, onPress, onRetryMessage, handleReply, isStarredByCurrentUser }: BubbleProps) {
+function Bubble({ message, currentUserId, currentPhone, isDark, showTail = true, isGroupedWithPrevious = false, isGroupedWithNext = false, isSelected, selectedCount, onLongPress, onPress, onRetryMessage, handleReply, onReplyPress, isStarredByCurrentUser }: BubbleProps) {
     const {
         message_id,
         sender_user_id,
@@ -635,6 +640,7 @@ function Bubble({ message, currentUserId, isDark, showTail = true, isGroupedWith
         encrypted_media,
         media_size_bytes,
         media_file_name,
+        media_mime_type,
         client_local_media_name,
         client_local_media_size,
         client_local_media_mime_type,
@@ -689,7 +695,12 @@ function Bubble({ message, currentUserId, isDark, showTail = true, isGroupedWith
         contact?.contact_name ??
         message_text_content ??
         "Shared contact";
-    const sharedContactPhone = contact?.contact_phone ?? null;
+    const sharedContactPayloadPhone = contact?.contact_phone ?? null;
+    const sharedContactMatch =
+        findContactByUserId(contacts, contact?.linked_user_id) ??
+        findContactByPhone(contacts, sharedContactPayloadPhone);
+    const sharedContactPhone =
+        sharedContactPayloadPhone ?? sharedContactMatch?.contact_number ?? null;
     const photoSource = media_url ?? null;
     const previewObjectKey =
         media_preview_object_key ?? encrypted_media?.preview_object_key ?? null;
@@ -707,6 +718,11 @@ function Bubble({ message, currentUserId, isDark, showTail = true, isGroupedWith
         !hasLocalFullMedia;
     const canDownloadFullMedia = isMessageMediaSafeForJsDecrypt(message);
     const canDownloadMediaFromBubble = canDownloadFullMedia;
+    const fileMimeType =
+        media_mime_type ??
+        client_local_media_mime_type ??
+        encrypted_media?.mime_type ??
+        undefined;
     const replySenderUserId =
         message.reply_message?.original_sender_user_id ?? null;
     const senderGroupMember =
@@ -982,7 +998,142 @@ function Bubble({ message, currentUserId, isDark, showTail = true, isGroupedWith
                 chatId: message.chat_room_id,
             });
         }
-    }, [currentUserId, isMediaDownloading, message]);
+    }, [canDownloadFullMedia, currentUserId, isMediaDownloading, message]);
+
+    const openLocalFile = useCallback(async (fileUri: string) => {
+        if (Platform.OS === "android") {
+            const contentUri = fileUri.startsWith("content:")
+                ? fileUri
+                : await FileSystem.getContentUriAsync(fileUri);
+
+            await IntentLauncher.startActivityAsync("android.intent.action.VIEW", {
+                data: contentUri,
+                type: fileMimeType || "*/*",
+                flags: 1,
+            });
+            return;
+        }
+
+        if (await Sharing.isAvailableAsync()) {
+            await Sharing.shareAsync(fileUri, {
+                mimeType: fileMimeType,
+                dialogTitle: fileName,
+            });
+            return;
+        }
+
+        await Linking.openURL(fileUri);
+    }, [fileMimeType, fileName]);
+
+    const handleOpenFile = useCallback(async () => {
+        if (isMediaDownloading) {
+            return;
+        }
+
+        setIsMediaDownloading(true);
+        try {
+            let localMessage = message;
+
+            if (!isLocalMediaUri(message.media_url)) {
+                localMessage = await materializeMessageMedia(message, {
+                    downloadFull: true,
+                    ignoreSizeLimit: true,
+                });
+            }
+
+            if (
+                currentUserId &&
+                localMessage.media_url !== message.media_url &&
+                isLocalMediaUri(localMessage.media_url)
+            ) {
+                useActiveChatStore.getState().updateMessage(
+                    localMessage.chat_room_id,
+                    localMessage.message_id,
+                    () => localMessage
+                );
+                await upsertDbMessages([localMessage], currentUserId);
+            }
+
+            if (localMessage.media_url && isLocalMediaUri(localMessage.media_url)) {
+                await openLocalFile(localMessage.media_url);
+                return;
+            }
+
+            if (
+                localMessage.media_url?.startsWith("http://") ||
+                localMessage.media_url?.startsWith("https://")
+            ) {
+                await Linking.openURL(localMessage.media_url);
+                return;
+            }
+
+            Alert.alert("File unavailable", "This file could not be opened on this device.");
+        } catch (error) {
+            console.log("Failed to open message file:", error);
+            Alert.alert("Could not open file", "Download the file again or try another file viewer.");
+        } finally {
+            setIsMediaDownloading(false);
+        }
+    }, [currentUserId, isMediaDownloading, message, openLocalFile]);
+
+    const handleAddSharedContact = useCallback(() => {
+        if (!sharedContactPhone) {
+            return;
+        }
+
+        router.push({
+            pathname: "/create-new-contact",
+            params: {
+                phoneNumber: sharedContactPhone,
+                contactName: sharedContactName,
+            },
+        });
+    }, [sharedContactName, sharedContactPhone]);
+
+    const handleMessageSharedContact = useCallback(() => {
+        if (!sharedContactPhone || !currentPhone || !currentUserId) {
+            return;
+        }
+
+        if (phoneValuesMatch(sharedContactPhone, currentPhone)) {
+            return;
+        }
+
+        const contactForChat = sharedContactMatch ?? {
+            contact_id: contact?.contact_id ?? sharedContactPhone,
+            linked_user_id: contact?.linked_user_id ?? undefined,
+            contact_first_name: sharedContactName,
+            contact_number: sharedContactPhone,
+            contact_avatar: contact?.contact_image || undefined,
+            contact_letter_group: sharedContactName.charAt(0).toUpperCase() || "#",
+        };
+
+        const nextChatId = useActiveChatStore.getState().openDirectContactChat({
+            contact: contactForChat,
+            currentPhone,
+            currentUserId,
+        });
+
+        if (isTablet && rightNavRef.isReady()) {
+            rightNavRef.navigate("chatId", { chatId: nextChatId });
+            return;
+        }
+
+        router.navigate({
+            pathname: "/chatId",
+            params: { chatId: nextChatId },
+        });
+    }, [
+        contact?.contact_id,
+        contact?.contact_image,
+        contact?.linked_user_id,
+        currentPhone,
+        currentUserId,
+        isTablet,
+        sharedContactMatch,
+        sharedContactName,
+        sharedContactPhone,
+    ]);
 
     return (
         <TouchableWithoutFeedback
@@ -1131,7 +1282,7 @@ function Bubble({ message, currentUserId, isDark, showTail = true, isGroupedWith
                                         underlayColor={colors.textSecondary + '22'}
                                         background={{ type: 'ripple', color: colors.textSecondary + '33', foreground: true }}
                                         style={{ flexDirection: 'row', flex: 1, minWidth: 120, alignItems: 'center', justifyContent: 'space-between', marginHorizontal: attached_media ? 0 : -4, marginBottom: 4, backgroundColor: sent ? theme.cardSent : theme.cardReceived, borderRadius: 7, overflow: 'hidden' }}
-                                        onPress={() => console.log('reply message pressed')}
+                                        onPress={() => onReplyPress?.(reply_message.original_message_id)}
                                     >
                                         <>
                                             <ThemedView style={[styles.replyContainer, { borderLeftColor: '#25D366', backgroundColor: 'transparent' }]}>
@@ -1200,17 +1351,29 @@ function Bubble({ message, currentUserId, isDark, showTail = true, isGroupedWith
                                     </ThemedView>
                                 )}
                                 {attached_media === 'file' && (
-                                    <ThemedView style={[styles.fileCard, { backgroundColor: sent ? theme.cardSent : theme.cardReceived }]}>
-                                        {isDark ? <DarkFileIcon /> : <LightFileIcon />}
-                                        <ThemedView style={styles.innerFileCardContent}>
-                                            <ThemedText numberOfLines={1} ellipsizeMode="tail" style={styles.fileName}>{fileName}</ThemedText>
-                                            {fileDetails.length > 0 && (
-                                                <ThemedText style={[styles.fileDetails, { color: isDark ? '#6C757C' : 'gray' }]}>
-                                                    {fileDetails}
-                                                </ThemedText>
-                                            )}
+                                    <TouchableRipple
+                                        rippleColor={colors.textSecondary + '33'}
+                                        underlayColor={colors.textSecondary + '22'}
+                                        background={{ type: 'ripple', color: colors.textSecondary + '33', foreground: true }}
+                                        borderless={false}
+                                        style={styles.fileRipple}
+                                        onPress={handleOpenFile}
+                                        disabled={isMediaDownloading}
+                                    >
+                                        <ThemedView style={[styles.fileCard, { backgroundColor: sent ? theme.cardSent : theme.cardReceived }]}>
+                                            {isMediaDownloading ? (
+                                                <ActivityIndicator size="small" color="#25D366" />
+                                            ) : isDark ? <DarkFileIcon /> : <LightFileIcon />}
+                                            <ThemedView style={styles.innerFileCardContent}>
+                                                <ThemedText numberOfLines={1} ellipsizeMode="tail" style={styles.fileName}>{fileName}</ThemedText>
+                                                {fileDetails.length > 0 && (
+                                                    <ThemedText style={[styles.fileDetails, { color: isDark ? '#6C757C' : 'gray' }]}>
+                                                        {fileDetails}
+                                                    </ThemedText>
+                                                )}
+                                            </ThemedView>
                                         </ThemedView>
-                                    </ThemedView>
+                                    </TouchableRipple>
                                 )}
                                 {attached_media === 'photo' && (
                                     <DecryptedMediaImage
@@ -1340,10 +1503,22 @@ function Bubble({ message, currentUserId, isDark, showTail = true, isGroupedWith
                                 </View>
                                 {attached_media === 'contact' && (
                                     <ThemedView style={[styles.contactActionContainer, { borderTopColor: sent ? theme.borderSent : theme.borderReceive }]}>
-                                        <TouchableRipple style={[styles.contactActionButton, { borderRightColor: sent ? theme.borderSent : theme.borderReceive, borderRightWidth: 1 }]}>
+                                        <TouchableRipple
+                                            rippleColor={colors.textSecondary + '33'}
+                                            underlayColor={colors.textSecondary + '22'}
+                                            style={[styles.contactActionButton, { borderRightColor: sent ? theme.borderSent : theme.borderReceive, borderRightWidth: 1 }]}
+                                            onPress={handleAddSharedContact}
+                                            disabled={!sharedContactPhone}
+                                        >
                                             <ThemedText style={{ color: isDark ? '#4ade80' : '#15803d' }}>Add contact</ThemedText>
                                         </TouchableRipple>
-                                        <TouchableRipple style={styles.contactActionButton}>
+                                        <TouchableRipple
+                                            rippleColor={colors.textSecondary + '33'}
+                                            underlayColor={colors.textSecondary + '22'}
+                                            style={styles.contactActionButton}
+                                            onPress={handleMessageSharedContact}
+                                            disabled={!sharedContactPhone || !currentPhone || !currentUserId}
+                                        >
                                             <ThemedText style={{ color: isDark ? '#4ade80' : '#15803d' }}>Message</ThemedText>
                                         </TouchableRipple>
                                     </ThemedView>
@@ -1375,6 +1550,7 @@ function areBubblePropsEqual(previous: BubbleProps, next: BubbleProps) {
     if (
         previous.message !== next.message ||
         previous.currentUserId !== next.currentUserId ||
+        previous.currentPhone !== next.currentPhone ||
         previous.isDark !== next.isDark ||
         previous.showTail !== next.showTail ||
         previous.isGroupedWithPrevious !== next.isGroupedWithPrevious ||
@@ -1384,6 +1560,7 @@ function areBubblePropsEqual(previous: BubbleProps, next: BubbleProps) {
         previous.onPress !== next.onPress ||
         previous.onRetryMessage !== next.onRetryMessage ||
         previous.handleReply !== next.handleReply ||
+        previous.onReplyPress !== next.onReplyPress ||
         previous.isStarredByCurrentUser !== next.isStarredByCurrentUser
     ) {
         return false;
@@ -1645,7 +1822,6 @@ const styles = StyleSheet.create({
         flexDirection: 'row',
         alignItems: 'center',
         gap: 10,
-        marginBottom: 8,
         minWidth: '100%'
     },
     contactContentContainer: {
@@ -1751,6 +1927,12 @@ const styles = StyleSheet.create({
         gap: 10,
         marginBottom: 8,
         minWidth: '100%'
+    },
+    fileRipple: {
+        borderRadius: 8,
+        marginBottom: 8,
+        overflow: 'hidden',
+        minWidth: '100%',
     },
     locationCard: {
         paddingHorizontal: 12,

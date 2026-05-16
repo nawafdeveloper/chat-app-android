@@ -117,9 +117,10 @@ export function SmallDecryptedMediaImage({
     }, [previewSource, source, sourceIsPreview]);
 
     const displayUri = resolvedUri ?? resolvedPreviewUri;
-    const shouldBlurPreview = Boolean(!resolvedUri && resolvedPreviewUri);
+    const resolvedUriIsPreview = Boolean(sourceIsPreview && resolvedUri);
+    const shouldBlurPreview = Boolean(resolvedUriIsPreview || (!resolvedUri && resolvedPreviewUri));
     const transitionTag = sharedTransitionTag ?? getMediaSharedTransitionTag("image", message_id);
-    const hasFullMedia = Boolean(resolvedUri);
+    const hasFullMedia = Boolean(resolvedUri && !sourceIsPreview);
 
     const handlePreviewPress = onPreviewPress === undefined ? (() => {
         // Only allow navigation if we have full media
@@ -180,7 +181,7 @@ export function SmallDecryptedMediaImage({
                 <Animated.Image
                     source={{ uri: displayUri }}
                     resizeMode="cover"
-                    blurRadius={!resolvedUri && resolvedPreviewUri ? 1 : 0}
+                    blurRadius={shouldBlurPreview ? 1 : 0}
                     style={[
                         stylesSmall.mediaPhoto,
                         shouldBlurPreview && stylesSmall.mediaPhotoBlurred,

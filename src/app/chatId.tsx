@@ -61,6 +61,11 @@ type MessageGroupMeta = {
     isGroupedWithNext: boolean;
 };
 
+type MessageScrollRequest = {
+    messageId: string;
+    source: "pinned" | "reply";
+};
+
 type RawMessage = Omit<Message, "created_at" | "updated_at"> & {
     created_at: string | Date;
     updated_at: string | Date;
@@ -420,8 +425,8 @@ const ChatId = () => {
     const routeChatId = expoChatId ?? nativeRouteChatId;
     const isFocused = useIsFocused();
     const realtimeStatus = useRealtimeStore((state) => state.status);
-    const { isVisible } = useImagePreviewBeforeSentStore();
-    const { isVideoVisible } = useVideoPreviewBeforeSentStore();
+    const { isVisible, hide: hideImagePreview } = useImagePreviewBeforeSentStore();
+    const { isVideoVisible, hide: hideVideoPreview } = useVideoPreviewBeforeSentStore();
     const { isFileVisible } = useFilePreviewBeforeSentStore();
     const { isContactVisible } = useContactPreviewBeforeSentStore();
     const { starMessage, pinMessage, reactToMessage } = useMessageActions();
@@ -500,7 +505,7 @@ const ChatId = () => {
     const lastReadReceiptKeyRef = useRef<string | null>(null);
     const pinnedMessagesRef = useRef<Message[]>([]);
     const activePinnedMessageIdRef = useRef<string | null>(null);
-    const pendingPinnedScrollMessageIdRef = useRef<string | null>(null);
+    const pendingMessageScrollRequestRef = useRef<MessageScrollRequest | null>(null);
     const isLoadingPinnedScrollTargetRef = useRef(false);
     const pinnedViewabilityConfigRef = useRef({
         itemVisiblePercentThreshold: 55,
@@ -973,7 +978,7 @@ const ChatId = () => {
         }
     }, [activeChatId, messageListItems]);
 
-    const loadOlderMessagesForPinnedScroll = useCallback(() => {
+    const loadOlderMessagesForMessageScroll = useCallback(() => {
         if (
             !activeChatId ||
             !hasOlderMessages ||
@@ -989,45 +994,58 @@ const ChatId = () => {
         });
     }, [activeChatId, hasOlderMessages, loadOlderMessages, olderMessagesLoading]);
 
-    const requestPinnedMessageScroll = useCallback((messageId: string) => {
-        pendingPinnedScrollMessageIdRef.current = messageId;
-        debugChatId('pinned-scroll-request', { activeChatId, messageId });
+    const completeMessageScrollRequest = useCallback((request: MessageScrollRequest) => {
+        if (request.source === "pinned") {
+            window.setTimeout(() => setNextPinnedMessageAfter(request.messageId), 350);
+        }
+    }, [setNextPinnedMessageAfter]);
+
+    const requestMessageScroll = useCallback((messageId: string, source: MessageScrollRequest["source"]) => {
+        const request = { messageId, source };
+        pendingMessageScrollRequestRef.current = request;
+        debugChatId('message-scroll-request', { activeChatId, messageId, source });
 
         if (tryScrollToMessageId(messageId)) {
-            pendingPinnedScrollMessageIdRef.current = null;
-            window.setTimeout(() => setNextPinnedMessageAfter(messageId), 350);
+            pendingMessageScrollRequestRef.current = null;
+            completeMessageScrollRequest(request);
             return;
         }
 
-        loadOlderMessagesForPinnedScroll();
+        loadOlderMessagesForMessageScroll();
     }, [
         activeChatId,
-        loadOlderMessagesForPinnedScroll,
-        setNextPinnedMessageAfter,
+        completeMessageScrollRequest,
+        loadOlderMessagesForMessageScroll,
         tryScrollToMessageId,
     ]);
 
     useEffect(() => {
-        const pendingMessageId = pendingPinnedScrollMessageIdRef.current;
-        if (!pendingMessageId) {
+        const pendingRequest = pendingMessageScrollRequestRef.current;
+        if (!pendingRequest) {
             return;
         }
 
-        if (tryScrollToMessageId(pendingMessageId)) {
-            pendingPinnedScrollMessageIdRef.current = null;
-            window.setTimeout(
-                () => setNextPinnedMessageAfter(pendingMessageId),
-                350
-            );
+        if (tryScrollToMessageId(pendingRequest.messageId)) {
+            pendingMessageScrollRequestRef.current = null;
+            completeMessageScrollRequest(pendingRequest);
             return;
         }
 
-        loadOlderMessagesForPinnedScroll();
+        loadOlderMessagesForMessageScroll();
     }, [
-        loadOlderMessagesForPinnedScroll,
-        setNextPinnedMessageAfter,
+        completeMessageScrollRequest,
+        loadOlderMessagesForMessageScroll,
         tryScrollToMessageId,
     ]);
+
+    const requestPinnedMessageScroll = useCallback((messageId: string) => {
+        requestMessageScroll(messageId, "pinned");
+    }, [requestMessageScroll]);
+
+    const handleReplyPreviewPress = useCallback((messageId: string) => {
+        void Haptics.selectionAsync();
+        requestMessageScroll(messageId, "reply");
+    }, [requestMessageScroll]);
 
     const handlePinnedPress = useCallback(() => {
         if (!activePinnedMessage) {
@@ -1042,20 +1060,24 @@ const ChatId = () => {
         NonNullable<FlatListProps<MessageListItem>["onScrollToIndexFailed"]>
     >((info) => {
         const failedItem = messageListItems[info.index];
-        const pendingMessageId =
-            pendingPinnedScrollMessageIdRef.current ??
-            (failedItem?.type === "message" ? failedItem.message.message_id : null) ??
-            null;
+        const pendingRequest =
+            pendingMessageScrollRequestRef.current ??
+            (failedItem?.type === "message"
+                ? { messageId: failedItem.message.message_id, source: "pinned" as const }
+                : null);
 
-        if (!pendingMessageId) {
+        if (!pendingRequest) {
             return;
         }
 
-        pendingPinnedScrollMessageIdRef.current = pendingMessageId;
+        pendingMessageScrollRequestRef.current = pendingRequest;
         window.setTimeout(() => {
-            tryScrollToMessageId(pendingMessageId);
+            if (tryScrollToMessageId(pendingRequest.messageId)) {
+                pendingMessageScrollRequestRef.current = null;
+                completeMessageScrollRequest(pendingRequest);
+            }
         }, 250);
-    }, [messageListItems, tryScrollToMessageId]);
+    }, [completeMessageScrollRequest, messageListItems, tryScrollToMessageId]);
 
     const handlePinnedViewableItemsChanged = useRef<
         NonNullable<FlatListProps<MessageListItem>["onViewableItemsChanged"]>
@@ -1185,6 +1207,7 @@ const ChatId = () => {
             <Bubble
                 message={rowMessage}
                 currentUserId={currentUserId}
+                currentPhone={currentPhone}
                 isDark={isDark}
                 showTail={groupMeta.showTail}
                 isGroupedWithPrevious={groupMeta.isGroupedWithPrevious}
@@ -1195,6 +1218,7 @@ const ChatId = () => {
                 onPress={handleBubblePress}
                 onRetryMessage={handleRetryMessage}
                 handleReply={handleReply}
+                onReplyPress={handleReplyPreviewPress}
                 isStarredByCurrentUser={isMessageFlaggedByUser(
                     rowMessage,
                     currentUserId,
@@ -1205,26 +1229,18 @@ const ChatId = () => {
     }, [
         activeChatId,
         currentUserId,
+        currentPhone,
         handleBubblePress,
         handleLongPress,
         handleRetryMessage,
         handleReply,
+        handleReplyPreviewPress,
         isDark,
         messageGroupMetaById,
         renderCenterBadge,
         selectedCount,
         selectedMessageIds,
     ]);
-
-    if (isVisible) {
-        debugChatId('render-image-preview-before-send', { activeChatId });
-        return <ImagePreviewBeforeSent />
-    }
-
-    if (isVideoVisible) {
-        debugChatId('render-video-preview-before-send', { activeChatId });
-        return <VideoPreviewBeforeSent />
-    }
 
     if (isFileVisible) {
         debugChatId('render-file-preview-before-send', { activeChatId });
@@ -1493,10 +1509,11 @@ const ChatId = () => {
     };
 
     return (
-        <KeyboardAvoidingView
-            behavior={'height'}
-            keyboardVerticalOffset={keyboardOffset}
-            style={{ flex: 1 }}>
+        <>
+            <KeyboardAvoidingView
+                behavior={'height'}
+                keyboardVerticalOffset={keyboardOffset}
+                style={{ flex: 1 }}>
             <Appbar.Header
                 style={{
                     backgroundColor: colors.background,
@@ -1752,7 +1769,28 @@ const ChatId = () => {
                     </ThemedView>
                 )}
             </TiledBackground>
-        </KeyboardAvoidingView>
+            </KeyboardAvoidingView>
+            <Modal
+                visible={isVisible}
+                animationType="none"
+                presentationStyle="fullScreen"
+                hardwareAccelerated
+                onRequestClose={hideImagePreview}
+                onDismiss={hideImagePreview}
+            >
+                {isVisible ? <ImagePreviewBeforeSent /> : null}
+            </Modal>
+            <Modal
+                visible={isVideoVisible}
+                animationType="none"
+                presentationStyle="fullScreen"
+                hardwareAccelerated
+                onRequestClose={hideVideoPreview}
+                onDismiss={hideVideoPreview}
+            >
+                {isVideoVisible ? <VideoPreviewBeforeSent /> : null}
+            </Modal>
+        </>
     );
 };
 

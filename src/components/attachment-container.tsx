@@ -11,7 +11,6 @@ import { Icon } from 'react-native-paper';
 import { IconSource } from 'react-native-paper/lib/typescript/components/Icon';
 import Animated, {
     Easing,
-    interpolate,
     useAnimatedStyle,
     useSharedValue,
     withDelay,
@@ -21,6 +20,7 @@ import { ThemedText } from './themed-text';
 
 type Props = {
     visible: boolean;
+    onRequestClose?: () => void;
 }
 
 type ItemButton = {
@@ -61,19 +61,17 @@ const AttachmentButton = ({
     );
 };
 
-const AttachmentContainer = ({ visible }: Props) => {
+const AttachmentContainer = ({ visible, onRequestClose }: Props) => {
     const scheme = useColorScheme();
     const colors = Colors[scheme === 'unspecified' ? 'light' : scheme ?? 'light']
     const isDark = scheme === 'dark';
-    const { setIsVisible, setImageUri } = useImagePreviewBeforeSentStore();
-    const { setIsVideoVisible, setVideoUrl } = useVideoPreviewBeforeSentStore();
+    const showImagePreview = useImagePreviewBeforeSentStore((state) => state.show);
+    const showVideoPreview = useVideoPreviewBeforeSentStore((state) => state.show);
     const showFilePreview = useFilePreviewBeforeSentStore((state) => state.show);
     const showContactPreview = useContactPreviewBeforeSentStore((state) => state.show);
 
     const maskScale = useSharedValue(0);
     const contentOpacity = useSharedValue(0);
-    const pointerEventsValue = useSharedValue<'none' | 'auto'>('none');
-    const elevationValue = useSharedValue(0);
     const borderRadiusValue = useSharedValue(500);
 
     const buttonScale0 = useSharedValue(0);
@@ -119,13 +117,12 @@ const AttachmentContainer = ({ visible }: Props) => {
 
         const localUri = picked.assets[0].uri;
         const mediaType = picked.assets[0].type;
+        onRequestClose?.();
 
         if (mediaType === 'image') {
-            setImageUri(localUri);
-            setIsVisible(true);
+            showImagePreview(localUri);
         } else if (mediaType === 'video' || mediaType === 'pairedVideo') {
-            setVideoUrl(localUri);
-            setIsVideoVisible(true);
+            showVideoPreview(localUri);
         }
     };
 
@@ -138,6 +135,7 @@ const AttachmentContainer = ({ visible }: Props) => {
         if (picked.canceled || !picked.assets[0]) return;
 
         const file = picked.assets[0];
+        onRequestClose?.();
         showFilePreview({
             uri: file.uri,
             name: file.name,
@@ -161,7 +159,10 @@ const AttachmentContainer = ({ visible }: Props) => {
             icon: 'account-circle',
             iconColor: '#8B5CF6',
             backgroundColor: isDark ? '#3B0764' : '#F5F3FF',
-            onPress: showContactPreview
+            onPress: () => {
+                onRequestClose?.();
+                showContactPreview();
+            }
         },
         {
             key: 'document',
@@ -175,7 +176,6 @@ const AttachmentContainer = ({ visible }: Props) => {
 
     useEffect(() => {
         if (visible) {
-            pointerEventsValue.value = 'auto';
             borderRadiusValue.value = withTiming(100, {
                 duration: 500,
                 easing: Easing.bezier(0.25, 0.1, 0.25, 1),
@@ -199,9 +199,6 @@ const AttachmentContainer = ({ visible }: Props) => {
                 );
             });
         } else {
-            pointerEventsValue.value = 'none';
-            elevationValue.value = withTiming(0, { duration: 400 });
-
             borderRadiusValue.value = withTiming(500, {
                 duration: 400,
                 easing: Easing.bezier(0.4, 0, 0.2, 1),
@@ -224,9 +221,7 @@ const AttachmentContainer = ({ visible }: Props) => {
         borderRadiusValue,
         buttonScales,
         contentOpacity,
-        elevationValue,
         maskScale,
-        pointerEventsValue,
         visible,
     ]);
 
@@ -244,17 +239,15 @@ const AttachmentContainer = ({ visible }: Props) => {
         opacity: contentOpacity.value,
     }));
 
-    const containerStyle = useAnimatedStyle(() => ({
-        pointerEvents: pointerEventsValue.value,
-        zIndex: interpolate(elevationValue.value, [0, 10], [0, 999]),
-    }));
-
     return (
         <Animated.View
+            pointerEvents={visible ? 'auto' : 'none'}
             style={[
                 styles.attachmentContainer,
-                containerStyle,
-                { backgroundColor: 'transparent' }
+                {
+                    backgroundColor: 'transparent',
+                    opacity: visible ? 1 : 0,
+                }
             ]}
         >
             <Animated.View

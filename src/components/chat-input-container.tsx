@@ -393,6 +393,7 @@ const ChatInputContainer = ({ chatId, isReply, handleClearReply, replyMessage, r
             return;
         }
 
+        setAttachmentVisible(false);
         setIsSendingText(true);
         try {
             const openGraphData = await resolveOpenGraphPreviewForSend();
@@ -430,7 +431,10 @@ const ChatInputContainer = ({ chatId, isReply, handleClearReply, replyMessage, r
 
     return (
         <ThemedView style={styles.container}>
-            <AttachmentContainer visible={attachmentVisible} />
+            <AttachmentContainer
+                visible={attachmentVisible}
+                onRequestClose={() => setAttachmentVisible(false)}
+            />
             {isRecording ? (
                 <ThemedView style={[styles.recordingContainer, { paddingBottom: insets.bottom, borderTopColor: colors.indicator + '33' }]}>
                     <VoiceWaveform metering={recorderState.metering} />
@@ -517,6 +521,7 @@ const ChatInputContainer = ({ chatId, isReply, handleClearReply, replyMessage, r
                                 placeholderTextColor={colors.textSecondary}
                                 enablesReturnKeyAutomatically={true}
                                 selectionColor='#25D366'
+                                onFocus={() => setAttachmentVisible(false)}
                             />
                             {canSendText ? (
                                 <Animated.View key={'attachment'} entering={ZoomIn.duration(150)} exiting={ZoomOut.duration(150)}>

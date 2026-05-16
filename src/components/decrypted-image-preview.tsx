@@ -123,7 +123,8 @@ export function DecryptedMediaImage({
     }, [previewSource, source, sourceIsPreview]);
 
     const displayUri = resolvedUri ?? resolvedPreviewUri;
-    const shouldBlurPreview = Boolean(!resolvedUri && resolvedPreviewUri);
+    const resolvedUriIsPreview = Boolean(sourceIsPreview && resolvedUri);
+    const shouldBlurPreview = Boolean(resolvedUriIsPreview || (!resolvedUri && resolvedPreviewUri));
     const transitionTag = sharedTransitionTag ?? getMediaSharedTransitionTag("image", message_id);
     const handlePreviewPress = onPreviewPress === undefined ? (() => {
         router.push({
@@ -186,7 +187,7 @@ export function DecryptedMediaImage({
                 <Animated.Image
                     source={{ uri: displayUri }}
                     resizeMode="cover"
-                    blurRadius={!resolvedUri && resolvedPreviewUri ? 1 : 0}
+                    blurRadius={shouldBlurPreview ? 1 : 0}
                     style={[
                         styles.mediaPhoto,
                         shouldBlurPreview && styles.mediaPhotoBlurred,
@@ -210,22 +211,24 @@ export function DecryptedMediaImage({
                         style={styles.playOverlay}
                         onPress={isDownloading ? undefined : onDownload}
                     >
-                        <View style={styles.mediaDownloadButton}>
+                        <View style={isLarge ? styles.mediaDownloadButton : styles.mediaDownloadButtonCompact}>
                             {isDownloading ? (
                                 <ActivityIndicator size="small" color="#ffffff" />
                             ) : (
-                                <Icon source="download" color="#ffffff" size={32} />
+                                <Icon source="download" color="#ffffff" size={isLarge ? 32 : 24} />
                             )}
-                            <ThemedView style={styles.mediaDownloadTextContainer}>
-                                <ThemedText style={styles.mediaDownloadTitle}>
-                                    {isDownloading ? "Downloading" : "Download"}
-                                </ThemedText>
-                                {downloadDetails ? (
-                                    <ThemedText style={styles.mediaDownloadDetails}>
-                                        {downloadDetails}
+                            {isLarge ? (
+                                <ThemedView style={styles.mediaDownloadTextContainer}>
+                                    <ThemedText style={styles.mediaDownloadTitle}>
+                                        {isDownloading ? "Downloading" : "Download"}
                                     </ThemedText>
-                                ) : null}
-                            </ThemedView>
+                                    {downloadDetails ? (
+                                        <ThemedText style={styles.mediaDownloadDetails}>
+                                            {downloadDetails}
+                                        </ThemedText>
+                                    ) : null}
+                                </ThemedView>
+                            ) : null}
                         </View>
                     </Pressable>
                 )}
@@ -290,6 +293,14 @@ const styles = StyleSheet.create({
         flexDirection: 'row',
         alignItems: 'center',
         gap: 10,
+    },
+    mediaDownloadButtonCompact: {
+        width: 48,
+        height: 48,
+        borderRadius: 24,
+        backgroundColor: 'rgba(0,0,0,0.62)',
+        justifyContent: 'center',
+        alignItems: 'center',
     },
     mediaDownloadTextContainer: {
         flexDirection: 'column',

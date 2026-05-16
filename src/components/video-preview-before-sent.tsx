@@ -18,12 +18,29 @@ const formatTime = (seconds: number) => {
 }
 
 const VideoPreviewBeforeSent = () => {
+    const videoUrl = useVideoPreviewBeforeSentStore((state) => state.videoUrl);
+    const hide = useVideoPreviewBeforeSentStore((state) => state.hide);
+
+    useEffect(() => {
+        if (!videoUrl) {
+            hide();
+        }
+    }, [hide, videoUrl]);
+
+    if (!videoUrl) {
+        return null;
+    }
+
+    return <VideoPreviewContent videoUrl={videoUrl} />;
+};
+
+const VideoPreviewContent = ({ videoUrl }: { videoUrl: string }) => {
     const scheme = useColorScheme();
     const insets = useSafeAreaInsets();
     const resolvedScheme = scheme === 'unspecified' ? 'light' : scheme ?? 'light';
     const colors = Colors[resolvedScheme];
     const { sendAttachment } = useSendChatMessage();
-    const { videoMessageContext, setVideoMessageContext, videoUrl, setVideoUrl, setIsVideoVisible } = useVideoPreviewBeforeSentStore();
+    const { videoMessageContext, setVideoMessageContext, hide } = useVideoPreviewBeforeSentStore();
 
     const player = useVideoPlayer(videoUrl, (p) => {
         p.loop = false
@@ -117,16 +134,16 @@ const VideoPreviewBeforeSent = () => {
         [player]
     )
 
-    const handleDiscartVideo = () => {
-        setVideoMessageContext('');
-        setVideoUrl('');
-        setIsVideoVisible(false);
-    };
+    const handleDiscardVideo = useCallback(() => {
+        player.pause();
+        hide();
+    }, [hide, player]);
 
     const handleSendVideo = async () => {
         if (!videoUrl || isSending) return;
 
         setIsSending(true);
+        let shouldHidePreview = false;
         try {
             const uploadFile = await createUploadFileFromLocalUri({
                 uri: videoUrl,
@@ -140,10 +157,13 @@ const VideoPreviewBeforeSent = () => {
             });
 
             if (sent) {
-                handleDiscartVideo();
+                shouldHidePreview = true;
             }
         } finally {
             setIsSending(false);
+            if (shouldHidePreview) {
+                handleDiscardVideo();
+            }
         }
     };
 
@@ -156,12 +176,13 @@ const VideoPreviewBeforeSent = () => {
             behavior={'height'}
         >
             <Appbar.Header style={{ backgroundColor: colors.background }}>
-                <Appbar.BackAction iconColor={colors.text} mode='contained' containerColor={colors.indicator} onPress={handleDiscartVideo} />
+                <Appbar.BackAction iconColor={colors.text} mode='contained' containerColor={colors.indicator} onPress={handleDiscardVideo} />
                 <Appbar.Content title="" />
             </Appbar.Header>
             <VideoView
                 style={styles.video}
                 player={player}
+                surfaceType="textureView"
                 fullscreenOptions={{ enable: false }}
                 allowsPictureInPicture
                 buttonOptions={{
@@ -176,7 +197,10 @@ const VideoPreviewBeforeSent = () => {
                 }}
                 nativeControls={false}
             />
-            <View style={{ ...StyleSheet.absoluteFill, backgroundColor: 'transparent', justifyContent: 'center', alignItems: 'center' }}>
+            <View
+                pointerEvents="box-none"
+                style={styles.playOverlay}
+            >
                 <Pressable style={styles.playBadgeContainer} onPress={togglePlayPause}>
                     <ThemedView style={styles.videoPlayBadge}>
                         <Icon
@@ -241,6 +265,8 @@ export default VideoPreviewBeforeSent
 
 const styles = StyleSheet.create({
     bottomInputContainer: {
+        zIndex: 120,
+        elevation: 12,
         flexDirection: 'row',
         alignItems: 'center',
         paddingHorizontal: 16,
@@ -262,6 +288,12 @@ const styles = StyleSheet.create({
         width: '100%',
         flex: 1,
         backgroundColor: 'black'
+    },
+    playOverlay: {
+        ...StyleSheet.absoluteFillObject,
+        backgroundColor: 'transparent',
+        justifyContent: 'center',
+        alignItems: 'center',
     },
     playBadgeContainer: {
         position: 'absolute',

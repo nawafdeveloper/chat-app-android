@@ -90,7 +90,7 @@ const ImagePreviewBeforeSent = () => {
     const resolvedScheme = scheme === 'unspecified' ? 'light' : scheme ?? 'light';
     const colors = Colors[resolvedScheme];
     const { sendAttachment } = useSendChatMessage();
-    const { messageContext, imageUri, setIsVisible, setMessageContext, setImageUri } =
+    const { messageContext, imageUri, hide } =
         useImagePreviewBeforeSentStore();
 
     // ── dialog ──────────────────────────────────────────────────────────────
@@ -150,12 +150,16 @@ const ImagePreviewBeforeSent = () => {
         };
     }, []);
 
+    useEffect(() => {
+        if (!imageUri) {
+            hide();
+        }
+    }, [hide, imageUri]);
+
     // ── actions ───────────────────────────────────────────────────────────────
 
     const handleDiscardChanges = () => {
-        setImageUri('');
-        setMessageContext('');
-        setIsVisible(false);
+        hide();
     };
 
     const handleUndo = () => {
@@ -186,6 +190,7 @@ const ImagePreviewBeforeSent = () => {
         if (!imageUri || isSending) return;
 
         setIsSending(true);
+        let shouldHidePreview = false;
         try {
             const sourceUri = hasAnnotations
                 ? await viewShotRef.current?.capture?.()
@@ -204,12 +209,13 @@ const ImagePreviewBeforeSent = () => {
             });
 
             if (sent) {
-                setMessageContext('');
-                setImageUri('');
-                setIsVisible(false);
+                shouldHidePreview = true;
             }
         } finally {
             setIsSending(false);
+            if (shouldHidePreview) {
+                hide();
+            }
         }
     };
 
@@ -478,6 +484,10 @@ const ImagePreviewBeforeSent = () => {
 
     const hasAnnotations = paths.length > 0 || textAnnotations.length > 0;
     const showBottomInput = mode === 'none' && !showTextInput;
+
+    if (!imageUri) {
+        return null;
+    }
 
     return (
         <>
@@ -897,6 +907,8 @@ const styles = StyleSheet.create({
         bottom: 0,
         left: 0,
         right: 0,
+        zIndex: 120,
+        elevation: 12,
         flexDirection: 'row',
         alignItems: 'flex-end',
         paddingHorizontal: 10,
