@@ -23,6 +23,7 @@ import {
     isMessageMediaSafeForJsDecrypt,
     materializeMessageMedia,
 } from "@/lib/message-media";
+import { clearChatNotificationFromSystem } from "@/lib/display-notifee-notification";
 import { markChatReadOptimistically } from "@/lib/optimistic-read-receipts";
 import {
     completePendingRealtimeEvent,
@@ -42,7 +43,7 @@ import { useCallback, useEffect, useRef } from "react";
 import { AppState } from "react-native";
 
 const REALTIME_URL =
-    "wss://halabakk-web.nawaf-alhasosah.workers.dev/api/realtime?platform=mobile";
+    "wss://web.yahla.org/api/realtime?platform=mobile";
 const INITIAL_RECONNECT_DELAY_MS = 500;
 const MAX_RECONNECT_DELAY_MS = 5000;
 const CHAT_DEBUG = true;
@@ -1264,6 +1265,9 @@ export function useChatRealtime() {
                     }
 
                     if (event.userId === currentUserId) {
+                        useActiveChatStore.getState().markChatRead(conversationId);
+                        void clearChatNotificationFromSystem(conversationId);
+
                         void completePendingRealtimeEvent({
                             type: "MARK_READ",
                             conversationId,

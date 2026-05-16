@@ -16,7 +16,7 @@ import {
     writeAsStringAsync,
 } from "expo-file-system/legacy";
 
-const API_BASE = "https://halabakk-web.nawaf-alhasosah.workers.dev";
+const API_BASE = "https://web.yahla.org";
 
 const MEDIA_API_PATHS = [
     "/api/media",

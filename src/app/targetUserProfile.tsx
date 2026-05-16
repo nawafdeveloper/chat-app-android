@@ -76,7 +76,7 @@ const formatAudioTime = (seconds?: number | null) => {
 
 const EMPTY_MESSAGES: Message[] = [];
 const EMPTY_GROUP_MEMBERS: ChatGroupMember[] = [];
-const API_BASE_URL = "https://halabakk-web.nawaf-alhasosah.workers.dev";
+const API_BASE_URL = "https://web.yahla.org";
 
 type RawChatItem = Omit<ChatItemType, "avatar" | "created_at" | "updated_at" | "group_members"> & {
     avatar?: AvatarSource;
@@ -802,7 +802,7 @@ const TargetUserProfile = () => {
         });
 
         try {
-            const response = await fetch("https://halabakk-web.nawaf-alhasosah.workers.dev/api/chats", {
+            const response = await fetch("https://web.yahla.org/api/chats", {
                 method: "PATCH",
                 headers: {
                     Cookie: authClient.getCookie() ?? "",
@@ -860,7 +860,7 @@ const TargetUserProfile = () => {
         setPendingAction("exit");
 
         try {
-            const response = await fetch(`https://halabakk-web.nawaf-alhasosah.workers.dev/api/chats/${encodeURIComponent(activeChat.chat_id)}`, {
+            const response = await fetch(`https://web.yahla.org/api/chats/${encodeURIComponent(activeChat.chat_id)}`, {
                 method: "DELETE",
                 headers: {
                     Cookie: authClient.getCookie() ?? "",
@@ -898,7 +898,7 @@ const TargetUserProfile = () => {
         removeChat(chatId);
 
         try {
-            const response = await fetch("https://halabakk-web.nawaf-alhasosah.workers.dev/api/chats", {
+            const response = await fetch("https://web.yahla.org/api/chats", {
                 method: "PATCH",
                 headers: {
                     Cookie: authClient.getCookie() ?? "",

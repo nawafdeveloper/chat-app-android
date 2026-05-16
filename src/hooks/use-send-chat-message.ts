@@ -54,7 +54,7 @@ import {
 
 const ACK_TIMEOUT_MS = 800;
 const CHAT_PREVIEW_MAX_LENGTH = 240;
-const API_BASE_URL = "https://halabakk-web.nawaf-alhasosah.workers.dev";
+const API_BASE_URL = "https://web.yahla.org";
 const CHAT_DEBUG = true;
 
 function debugSendMessage(stage: string, payload: Record<string, unknown> = {}) {

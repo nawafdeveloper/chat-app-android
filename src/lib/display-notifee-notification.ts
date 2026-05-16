@@ -1,4 +1,7 @@
-import { displayAndroidConversationNotification } from "@/lib/conversation-shortcut";
+import {
+    cancelAndroidConversationNotification,
+    displayAndroidConversationNotification,
+} from "@/lib/conversation-shortcut";
 import {
     fetchAndDecryptProfileImage,
     parseManagedProfileImageUrl,
@@ -36,6 +39,20 @@ function optionalBoolean(value: unknown) {
 function buildShortcutId(conversationId?: string) {
     if (!conversationId) return undefined;
     return `conversation_${conversationId}`;
+}
+
+function getNotificationConversationId(data: Record<string, unknown>) {
+    return (
+        optionalString(data.conversationId) ??
+        optionalString(data.chatId) ??
+        optionalString(data.chat_room_id) ??
+        optionalString(data.chatRoomId) ??
+        optionalString(data.roomId)
+    );
+}
+
+function getNotificationMessageId(data: Record<string, unknown>) {
+    return optionalString(data.messageId) ?? optionalString(data.message_id);
 }
 
 async function decryptProfileImageIfNeeded(imageUrl?: string) {
@@ -115,9 +132,9 @@ export async function displayNotifeeNotification(data: Record<string, unknown>) 
         optionalString(data.senderId) ??
         optionalString(data.senderUserId) ??
         senderDisplayName;
-    const conversationId = optionalString(data.conversationId);
+    const conversationId = getNotificationConversationId(data);
     const conversationTitle = optionalString(data.conversationTitle);
-    const messageId = optionalString(data.messageId);
+    const messageId = getNotificationMessageId(data);
     const isGroupConversation =
         optionalBoolean(data.isGroupConversation) ??
         optionalString(data.chatType) === "group";
@@ -157,7 +174,8 @@ export async function displayNotifeeNotification(data: Record<string, unknown>) 
     const androidConfig = {
         channelId: MESSAGES_CHANNEL_ID,
         category: AndroidCategory.MESSAGE,
-        color: "#25D366",
+        color: "#ffffff",
+        smallIcon: "notification-icon",
         pressAction: { id: "default" },
         timestamp,
         showTimestamp: true,
@@ -192,4 +210,32 @@ export async function displayRemoteMessageNotification(
     }
 
     await displayNotifeeNotification(remoteMessage.data ?? {});
+}
+
+export async function clearChatNotificationFromSystem(conversationId: string) {
+    const shortcutId = buildShortcutId(conversationId);
+
+    await Promise.allSettled([
+        cancelAndroidConversationNotification(conversationId),
+        ...(shortcutId ? [notifee.cancelNotification(shortcutId)] : []),
+    ]);
+
+    try {
+        const displayedNotifications = await notifee.getDisplayedNotifications();
+        const matchingNotificationIds = displayedNotifications
+            .filter(({ notification }) => {
+                const data = notification.data ?? {};
+                return getNotificationConversationId(data) === conversationId;
+            })
+            .map(({ notification }) => notification.id)
+            .filter((id): id is string => typeof id === "string" && id.length > 0);
+
+        await Promise.allSettled(
+            matchingNotificationIds.map((notificationId) =>
+                notifee.cancelNotification(notificationId)
+            )
+        );
+    } catch (error) {
+        console.warn("[notification] Failed to clear displayed chat notifications:", error);
+    }
 }

@@ -2,7 +2,11 @@ import { ChatAvatar } from '@/components/decrypted-chat-avatar';
 import { ThemedText } from '@/components/themed-text';
 import { ThemedView } from '@/components/themed-view';
 import { Colors } from '@/constants/theme';
+import { useIsTablet } from '@/context/screen-checking-context';
+import { authClient } from '@/lib/auth-client';
 import { useContactDirectoryStore } from '@/store/use-contact-directory-store';
+import { rightNavRef } from '@/store/right-nav-ref';
+import { useActiveChatStore } from '@/store/use-active-chat-store';
 import { useNewGroupStore } from '@/store/use-new-group-store';
 import { Contact } from '@/types/contacts.type';
 import { router } from 'expo-router';
@@ -10,8 +14,8 @@ import React, { memo, useCallback, useState } from 'react';
 import { FlatList, Pressable, StyleSheet, useColorScheme } from 'react-native';
 import { Appbar, Icon, Searchbar } from 'react-native-paper';
 
-const ContactItem = memo(({ c, bgColor }: { c: Contact; bgColor: string }) => (
-    <Pressable style={[styles.listItem, { paddingHorizontal: 24 }]}>
+const ContactItem = memo(({ c, onPress }: { c: Contact; onPress: () => void }) => (
+    <Pressable onPress={onPress} style={[styles.listItem, { paddingHorizontal: 24 }]}>
         <ChatAvatar
             userId={c.contact_id}
             imageUrl={c.contact_avatar}
@@ -27,18 +31,47 @@ const ContactItem = memo(({ c, bgColor }: { c: Contact; bgColor: string }) => (
 ContactItem.displayName = 'ContactItem';
 
 const CreateChat = () => {
+    const { data: session } = authClient.useSession()
     const scheme = useColorScheme()
     const resolvedScheme = scheme === 'unspecified' ? 'light' : scheme ?? 'light'
     const colors = Colors[resolvedScheme]
+    const isTablet = useIsTablet()
     const contacts = useContactDirectoryStore((state) => state.contacts);
+    const openDirectContactChat = useActiveChatStore((state) => state.openDirectContactChat);
     const resetGroupStore = useNewGroupStore((state) => state.resetStore);
 
     const [isSearchFocus, setIsSearchFocus] = useState(false);
     const [searchQuery, setSearchQuery] = useState('');
 
+    const currentUserId = session?.user.id ?? null
+    const currentPhone = (session?.user as { phoneNumber?: string | null } | undefined)
+        ?.phoneNumber ?? null
+
+    const handleContactPress = useCallback((contact: Contact) => {
+        if (!currentPhone || !currentUserId) {
+            return
+        }
+
+        const chatId = openDirectContactChat({
+            contact,
+            currentPhone,
+            currentUserId,
+        })
+
+        if (isTablet && rightNavRef.isReady()) {
+            rightNavRef.navigate('chatId', { chatId })
+            return
+        }
+
+        router.navigate({
+            pathname: '/chatId',
+            params: { chatId },
+        })
+    }, [currentPhone, currentUserId, isTablet, openDirectContactChat])
+
     const renderContact = useCallback(({ item }: { item: Contact }) => (
-        <ContactItem c={item} bgColor={colors.background} />
-    ), [colors.background]);
+        <ContactItem c={item} onPress={() => handleContactPress(item)} />
+    ), [handleContactPress]);
 
     const renderHeader = useCallback(() => (
         <ThemedView>

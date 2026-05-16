@@ -11,7 +11,7 @@ import { useContactDirectoryStore } from "@/store/use-contact-directory-store";
 import type { Contact, StoredContactRecord } from "@/types/contacts.type";
 import type * as ExpoContacts from "expo-contacts";
 
-const API_BASE_URL = "https://halabakk-web.nawaf-alhasosah.workers.dev";
+const API_BASE_URL = "https://web.yahla.org";
 
 type MobileContactsResponse = {
     contacts: StoredContactRecord[];

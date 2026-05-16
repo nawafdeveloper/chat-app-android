@@ -1,19 +1,27 @@
 import { ThemedText } from '@/components/themed-text';
 import { ThemedView } from '@/components/themed-view';
-import { Colors } from '@/constants/theme';
+import { Colors, Fonts } from '@/constants/theme';
+import { db } from '@/db/client';
+import { currentUser } from '@/db/schema';
 import { authClient } from '@/lib/auth-client';
+import { uploadEncryptedProfileImage } from '@/lib/profile-image';
+import { eq } from 'drizzle-orm';
+import { Image } from 'expo-image';
+import * as ImagePicker from 'expo-image-picker';
 import React, { useEffect, useState } from 'react';
-import { Keyboard, KeyboardAvoidingView, Pressable, StyleSheet, useColorScheme } from 'react-native';
-import { Button, Icon, TextInput } from 'react-native-paper';
+import { Alert, Keyboard, KeyboardAvoidingView, Pressable, StyleSheet, useColorScheme, View } from 'react-native';
+import { ActivityIndicator, Button, Icon, TextInput } from 'react-native-paper';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 const CompleteProfilePage = () => {
+    const { data: session } = authClient.useSession();
     const insets = useSafeAreaInsets();
     const scheme = useColorScheme();
     const colors = Colors[scheme === 'unspecified' ? 'light' : scheme ?? 'light'];
 
     const [firstName, setFirstName] = useState('');
     const [lastName, setLastName] = useState('');
+    const [profileImage, setProfileImage] = useState<string | null>(null);
     const [isLoading, setIsLoading] = useState(false);
     const [keyboardOffset, setKeyboardOffset] = useState(0);
 
@@ -31,6 +39,25 @@ const CompleteProfilePage = () => {
         };
     }, []);
 
+    const pickImage = async () => {
+        const { status } = await ImagePicker.requestMediaLibraryPermissionsAsync()
+        if (status !== 'granted') {
+            Alert.alert('Permission required', 'Please allow access to your photo library.')
+            return
+        }
+
+        const picked = await ImagePicker.launchImageLibraryAsync({
+            mediaTypes: ImagePicker.MediaTypeOptions.Images,
+            allowsEditing: true,
+            aspect: [1, 1],
+            quality: 0.8,
+        })
+
+        if (picked.canceled) return
+
+        setProfileImage(picked.assets[0].uri)
+    }
+
     const handleNext = async () => {
         if (!firstName.trim() || isLoading) return
 
@@ -39,8 +66,24 @@ const CompleteProfilePage = () => {
 
         try {
             const fullName = [firstName.trim(), lastName.trim()].filter(Boolean).join(' ')
+            const payload: { name: string; image?: string } = { name: fullName }
 
-            await authClient.updateUser({ name: fullName })
+            if (profileImage) {
+                const { imageUrl } = await uploadEncryptedProfileImage(profileImage)
+                payload.image = imageUrl
+            }
+
+            const { error } = await authClient.updateUser(payload)
+            if (error) throw new Error(error.message || 'Failed to update profile')
+
+            if (session?.user.id) {
+                await db.update(currentUser)
+                    .set({
+                        name: fullName,
+                        ...(payload.image && { image: payload.image }),
+                    })
+                    .where(eq(currentUser.id, session.user.id))
+            }
 
             // Force session to re-fetch so AppLayout sees the new name
             await authClient.getSession()
@@ -48,6 +91,10 @@ const CompleteProfilePage = () => {
             // No router.push needed — AppStack re-evaluates hasName=true automatically
         } catch (err) {
             console.log('Failed to update profile:', err)
+            Alert.alert(
+                'Save failed',
+                err instanceof Error ? err.message : 'Something went wrong. Please try again.'
+            )
             setIsLoading(false)
         }
     }
@@ -68,12 +115,29 @@ const CompleteProfilePage = () => {
                         </ThemedText>
                     </ThemedView>
                     <ThemedView style={styles.profileImageContainer}>
-                        <Pressable style={[styles.avatarButton, { backgroundColor: colors.avatarBg }]}>
-                            <Icon
-                                source="account-outline"
-                                color={colors.avatarIcon}
-                                size={52}
-                            />
+                        <Pressable
+                            style={[styles.avatarButton, { backgroundColor: colors.avatarBg }]}
+                            onPress={pickImage}
+                            disabled={isLoading}
+                        >
+                            {profileImage ? (
+                                <Image
+                                    source={{ uri: profileImage }}
+                                    contentFit='cover'
+                                    style={styles.avatar}
+                                />
+                            ) : (
+                                <Icon
+                                    source="account-outline"
+                                    color={colors.avatarIcon}
+                                    size={52}
+                                />
+                            )}
+                            {isLoading && profileImage && (
+                                <View style={styles.avatarOverlay}>
+                                    <ActivityIndicator color="#fff" size="small" />
+                                </View>
+                            )}
                             <ThemedView style={[styles.cameraIcon, { backgroundColor: Colors.dark.card }]}>
                                 <Icon
                                     source="camera-plus-outline"
@@ -90,7 +154,7 @@ const CompleteProfilePage = () => {
                         cursorColor='#25D366'
                         underlineColor={colors.indicator}
                         activeUnderlineColor='#25D366'
-                        style={{ backgroundColor: colors.card }}
+                        style={{ backgroundColor: colors.card, fontFamily: Fonts.regular }}
                     />
                     <TextInput
                         label="Last name (optional)"
@@ -99,7 +163,7 @@ const CompleteProfilePage = () => {
                         cursorColor='#25D366'
                         underlineColor={colors.indicator}
                         activeUnderlineColor='#25D366'
-                        style={{ backgroundColor: colors.card }}
+                        style={{ backgroundColor: colors.card, fontFamily: Fonts.regular }}
                     />
                 </ThemedView>
                 <ThemedView style={styles.bottomContainer}>
@@ -162,7 +226,20 @@ const styles = StyleSheet.create({
         height: 90,
         borderRadius: 99,
         justifyContent: 'center',
-        alignItems: 'center'
+        alignItems: 'center',
+        overflow: 'visible',
+    },
+    avatar: {
+        width: 90,
+        height: 90,
+        borderRadius: 99,
+    },
+    avatarOverlay: {
+        ...StyleSheet.absoluteFillObject,
+        backgroundColor: 'rgba(0,0,0,0.45)',
+        borderRadius: 99,
+        justifyContent: 'center',
+        alignItems: 'center',
     },
     cameraIcon: {
         padding: 6,

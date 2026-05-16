@@ -37,7 +37,7 @@ type Props = {
 }
 
 const POLL_INTERVAL_MS = 80;
-const API_BASE = "https://halabakk-web.nawaf-alhasosah.workers.dev";
+const API_BASE = "https://web.yahla.org";
 const CHAT_DEBUG = true;
 
 function debugChatInput(stage: string, payload: Record<string, unknown> = {}) {

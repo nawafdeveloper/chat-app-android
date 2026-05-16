@@ -178,7 +178,7 @@ export async function uploadEncryptedMessageMedia(
     let response: Response;
     try {
         const cookies = authClient.getCookie();
-        response = await fetch("https://halabakk-web.nawaf-alhasosah.workers.dev/api/message-media", {
+        response = await fetch("https://web.yahla.org/api/message-media", {
             method: "POST",
             headers: {
                 ...(buildMediaDebugHeaders(debugTraceId) ?? {}),

@@ -6,6 +6,7 @@ module.exports = {
     orientation: "portrait",
     icon: "./assets/images/icon.png",
     scheme: "chatappandroid",
+    "owner": "yahla",
     userInterfaceStyle: "automatic",
     ios: {
       icon: "./assets/expo.icon",
@@ -47,7 +48,7 @@ module.exports = {
       [
         "expo-splash-screen",
         {
-          backgroundColor: "#208AEF",
+          backgroundColor: "#0C1013",
           android: {
             image: "./assets/images/splash-icon.png",
             imageWidth: 76,
@@ -89,7 +90,7 @@ module.exports = {
         {
           icon: "./assets/expo.icon/Assets/notification-icon.png",
           color: "#ffffff",
-          defaultChannel: "messages", // 👈 changed from "default" to "messages"
+          defaultChannel: "messages",
           enableBackgroundRemoteNotifications: true,
         },
       ],
@@ -167,9 +168,9 @@ module.exports = {
     },
     extra: {
       router: {},
-      eas: {
-        projectId: "74a7bc49-4d27-40eb-9093-b8be9f222c65",
-      },
+      "eas": {
+        "projectId": "a878e887-4d12-40ed-b86f-93de72637cdf"
+      }
     },
   },
 };

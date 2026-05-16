@@ -16,7 +16,7 @@ type MessageFlagResponse = {
     updatedAt: string;
 };
 
-const API_BASE_URL = "https://halabakk-web.nawaf-alhasosah.workers.dev";
+const API_BASE_URL = "https://web.yahla.org";
 
 function withUserFlag(
     userIds: string[] | null | undefined,

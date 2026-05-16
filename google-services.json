@@ -1,13 +1,13 @@
 {
   "project_info": {
-    "project_number": "739612310342",
-    "project_id": "yahla-android",
-    "storage_bucket": "yahla-android.firebasestorage.app"
+    "project_number": "105938473731",
+    "project_id": "yahla-production",
+    "storage_bucket": "yahla-production.firebasestorage.app"
   },
   "client": [
     {
       "client_info": {
-        "mobilesdk_app_id": "1:739612310342:android:26e7370b496e14ce584347",
+        "mobilesdk_app_id": "1:105938473731:android:d5712bcc6af6c373d88f36",
         "android_client_info": {
           "package_name": "com.nawafhq.chatappandroid"
         }
@@ -15,7 +15,7 @@
       "oauth_client": [],
       "api_key": [
         {
-          "current_key": "AIzaSyC5mzZ2F0-WBU3v2oXof5yJiEGjsiW-p0o"
+          "current_key": "AIzaSyCvUK_imY99XgevgjMiFJi4wbfqpcx64WM"
         }
       ],
       "services": {

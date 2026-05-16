@@ -158,6 +158,19 @@ class ConversationShortcutModule(reactContext: ReactApplicationContext) :
     }.start()
   }
 
+  @ReactMethod
+  fun cancelConversationNotification(conversationId: String, promise: Promise) {
+    try {
+      val shortcutId = "conversation_$conversationId"
+      NotificationManagerCompat
+        .from(reactApplicationContext)
+        .cancel(notificationIdFor(shortcutId))
+      promise.resolve(null)
+    } catch (e: Exception) {
+      promise.reject("CANCEL_CONVERSATION_NOTIFICATION_ERROR", e.message, e)
+    }
+  }
+
   private fun publishConversationShortcut(
     context: Context,
     shortcutId: String,

@@ -34,28 +34,20 @@ const SelectableContactItem = memo(({
             ]}
             onPress={onPress}
         >
-            <View>
-                <ChatAvatar
-                    userId={contact.contact_id}
-                    imageUrl={contact.contact_avatar}
-                    displayName={displayName}
-                    style={styles.avatar}
-                    chatType={undefined}
+            <View style={styles.checkbox}>
+                <Icon
+                    source={isSelected ? 'checkbox-marked' : 'checkbox-blank-outline'}
+                    color={isSelected ? '#25D366' : colors.textSecondary}
+                    size={26}
                 />
-                <View
-                    style={[
-                        styles.selectionBadge,
-                        {
-                            backgroundColor: isSelected ? '#25D366' : colors.background,
-                            borderColor: isSelected ? '#25D366' : colors.indicator,
-                        },
-                    ]}
-                >
-                    {isSelected ? (
-                        <Icon source='check' color='#1C1E21' size={15} />
-                    ) : null}
-                </View>
             </View>
+            <ChatAvatar
+                userId={contact.contact_id}
+                imageUrl={contact.contact_avatar}
+                displayName={displayName}
+                style={styles.avatar}
+                chatType={undefined}
+            />
             <View style={styles.contactText}>
                 <ThemedText numberOfLines={1} style={styles.contactName}>
                     {displayName}
@@ -186,14 +178,9 @@ const styles = StyleSheet.create({
         borderRadius: 25,
         marginRight: 12,
     },
-    selectionBadge: {
-        position: 'absolute',
-        right: 8,
-        bottom: 0,
-        width: 22,
-        height: 22,
-        borderRadius: 11,
-        borderWidth: 2,
+    checkbox: {
+        width: 32,
+        marginRight: 10,
         alignItems: 'center',
         justifyContent: 'center',
     },

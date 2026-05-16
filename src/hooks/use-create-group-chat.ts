@@ -12,7 +12,7 @@ import { useNewGroupStore } from "@/store/use-new-group-store";
 import type { ChatItemType } from "@/types/chats.type";
 import { useCallback, useState } from "react";
 
-const API_BASE_URL = "https://halabakk-web.nawaf-alhasosah.workers.dev";
+const API_BASE_URL = "https://web.yahla.org";
 const GROUP_CREATED_PREVIEW = "Group created";
 
 type RawChatItem = Omit<ChatItemType, "created_at" | "updated_at"> & {

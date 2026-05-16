@@ -4,7 +4,7 @@ import { createAuthClient } from "better-auth/react";
 import * as SecureStore from "expo-secure-store";
 
 export const authClient = createAuthClient({
-    baseURL: "https://halabakk-web.nawaf-alhasosah.workers.dev",
+    baseURL: "https://web.yahla.org/",
     plugins: [
         expoClient({
             scheme: "chatappandroid",

@@ -52,7 +52,7 @@ function forwardMediaDebugToServer(
             href,
         });
 
-        void fetch("https://halabakk-web.nawaf-alhasosah.workers.dev/api/media-debug", {
+        void fetch("https://web.yahla.org/api/media-debug", {
             method: "POST",
             headers: {
                 "Content-Type": "application/json",

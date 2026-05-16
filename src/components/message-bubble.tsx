@@ -223,7 +223,7 @@ const getAspectRatio = (message: Message) => {
     return 3 / 4;
 };
 
-const API_BASE = "https://halabakk-web.nawaf-alhasosah.workers.dev";
+const API_BASE = "https://web.yahla.org";
 
 function ReplyPhotoThumbnail({ url, isDark }: { url?: string | null; isDark: boolean }) {
     const [resolvedUri, setResolvedUri] = useState<string | null>(null);

@@ -22,7 +22,7 @@ import { useFonts } from 'expo-font';
 import { router, Stack } from 'expo-router';
 import * as SplashScreen from 'expo-splash-screen';
 import React, { useCallback, useEffect, useRef, useState } from 'react';
-import { Linking, StatusBar, useColorScheme, View } from 'react-native';
+import { InteractionManager, Linking, StatusBar, useColorScheme, View } from 'react-native';
 import { GestureHandlerRootView } from 'react-native-gesture-handler';
 import { PaperProvider } from 'react-native-paper';
 import { install } from 'react-native-quick-crypto';
@@ -32,6 +32,7 @@ import { db } from '../db/client';
 
 install();
 const firebaseMessaging = getMessaging();
+const MAIN_CHATS_TAB_ROUTE = '/(tabs)/chats';
 
 SplashScreen.preventAutoHideAsync();
 
@@ -243,15 +244,20 @@ const AppLayout = () => {
 
     const openChatFromNotification = useCallback((conversationId: string) => {
         useActiveChatStore.getState().setSelectedChatId(conversationId);
+        router.replace(MAIN_CHATS_TAB_ROUTE);
 
-        if (rightNavRef.isReady()) {
-            rightNavRef.navigate('chatId', { chatId: conversationId });
-            return;
-        }
+        InteractionManager.runAfterInteractions(() => {
+            requestAnimationFrame(() => {
+                if (rightNavRef.isReady()) {
+                    rightNavRef.navigate('chatId', { chatId: conversationId });
+                    return;
+                }
 
-        router.navigate({
-            pathname: '/chatId',
-            params: { chatId: conversationId },
+                router.push({
+                    pathname: '/chatId',
+                    params: { chatId: conversationId },
+                });
+            });
         });
     }, []);
 

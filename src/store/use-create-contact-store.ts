@@ -10,7 +10,7 @@ import type {
 } from "@/types/contacts.type";
 import { create } from "zustand";
 
-const API_BASE_URL = "https://halabakk-web.nawaf-alhasosah.workers.dev";
+const API_BASE_URL = "https://web.yahla.org";
 const DEFAULT_MAX_LENGTH = 10;
 const DEFAULT_COUNTRY: CountryCode =
     countryCodes.find((c) => c.key === "sa") ?? countryCodes[0];

@@ -58,3 +58,14 @@ export async function displayAndroidConversationNotification(
         return false;
     }
 }
+
+export async function cancelAndroidConversationNotification(conversationId: string) {
+    if (Platform.OS !== "android") return;
+    if (!ConversationShortcut?.cancelConversationNotification) return;
+
+    try {
+        await ConversationShortcut.cancelConversationNotification(conversationId);
+    } catch (e) {
+        console.warn("[notification] Failed to cancel native conversation notification:", e);
+    }
+}

@@ -1,3 +1,4 @@
+import type { AvatarSource } from "@/lib/avatar-source";
 import {
     decryptChatPreviewBatch,
     decryptMessageBatch,
@@ -9,27 +10,26 @@ import {
     sortMessagesChronologically,
 } from "@/lib/chat-utils";
 import { decryptStoredContact } from "@/lib/contact-crypto";
-import { getDbChats, upsertDbChats } from "@/lib/upsert-db-chats";
-import {
-    getAllDbMessages,
-    getDbMessages,
-    upsertDbMessages,
-} from "@/lib/upsert-db-messages";
-import { materializeMessageMedia } from "@/lib/message-media";
 import {
     reportMappedByteProgress,
     reportSyncProgress,
     requestJsonWithProgress,
     type SyncProgressCallback,
 } from "@/lib/http-progress";
-import type { AvatarSource } from "@/lib/avatar-source";
+import { materializeMessageMedia } from "@/lib/message-media";
+import { getDbChats, upsertDbChats } from "@/lib/upsert-db-chats";
+import {
+    getAllDbMessages,
+    getDbMessages,
+    upsertDbMessages,
+} from "@/lib/upsert-db-messages";
 import type { ChatItemType } from "@/types/chats.type";
 import type { Message } from "@/types/messages";
 import { authClient } from "./auth-client";
 
 export const MESSAGE_PAGE_SIZE = 20;
 
-const API_BASE_URL = "https://halabakk-web.nawaf-alhasosah.workers.dev";
+const API_BASE_URL = "https://web.yahla.org";
 
 type RemoteChat = Omit<ChatItemType, "avatar" | "created_at" | "updated_at" | "group_members"> & {
     avatar?: AvatarSource;

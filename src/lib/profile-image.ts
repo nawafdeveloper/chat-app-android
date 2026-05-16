@@ -11,7 +11,7 @@ import { retrieveSessionKeys } from './crypto-storage'
 import { decryptFileWithAes } from './decrypt-file'
 import { encryptFileWithAes } from './encrypt-file'
 
-const API_BASE = 'https://halabakk-web.nawaf-alhasosah.workers.dev'
+const API_BASE = 'https://web.yahla.org'
 
 // ─── Encrypt AES key with RSA public key ────────────────────────────────────
 
@@ -201,7 +201,7 @@ export function parseManagedProfileImageUrl(imageUrl?: string | null): {
     }
 
     try {
-        const parsed = new URL(imageUrl, "https://halabakk-web.nawaf-alhasosah.workers.dev/");
+        const parsed = new URL(imageUrl, "https://web.yahla.org/");
 
         if (!parsed.pathname.startsWith(PROFILE_IMAGE_API_PATH)) {
             return null;

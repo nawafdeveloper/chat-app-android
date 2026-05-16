@@ -37,7 +37,7 @@ import { ActivityIndicator, Appbar, FAB, Icon, Menu, Searchbar } from 'react-nat
 const SCROLL_THRESHOLD = 10
 const APP_GREEN = '#25D366'
 const CHAT_DEBUG = true
-const API_BASE_URL = 'https://halabakk-web.nawaf-alhasosah.workers.dev'
+const API_BASE_URL = 'https://web.yahla.org'
 
 type ChatPreferenceKey =
     | 'is_archived_chat'

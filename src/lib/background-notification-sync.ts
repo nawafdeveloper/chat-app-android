@@ -10,8 +10,8 @@ import type { Message } from "@/types/messages";
 import type { ClientRealtimeEvent, ServerRealtimeEvent } from "@/types/realtime-events";
 
 const REALTIME_URL =
-    "wss://halabakk-web.nawaf-alhasosah.workers.dev/api/realtime?platform=mobile";
-const API_BASE_URL = "https://halabakk-web.nawaf-alhasosah.workers.dev";
+    "wss://web.yahla.org/api/realtime?platform=mobile";
+const API_BASE_URL = "https://web.yahla.org";
 const SOCKET_SYNC_TIMEOUT_MS = 12_000;
 const HTTP_FALLBACK_TIMEOUT_MS = 8_000;
 
