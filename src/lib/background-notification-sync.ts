@@ -4,6 +4,7 @@ import { authClient } from "@/lib/auth-client";
 import { decryptMessageBatch } from "@/lib/chat-e2ee";
 import { buildChatFromMessage, normalizeMessage } from "@/lib/chat-utils";
 import { materializeMessageMedia } from "@/lib/message-media";
+import { getPendingMarkReadEvents } from "@/lib/realtime-outbox";
 import { getDbChat, upsertDbChats } from "@/lib/upsert-db-chats";
 import { getDbMessage, upsertDbMessages } from "@/lib/upsert-db-messages";
 import type { Message } from "@/types/messages";
@@ -123,6 +124,27 @@ function toConversationType(
     return existingChatType === "group" ? "group" : "direct";
 }
 
+async function shouldKeepNotificationChatRead(
+    conversationId: string,
+    messageId: string | null,
+    updatedAt: Date
+) {
+    const pendingReads = await getPendingMarkReadEvents();
+    const pendingRead = pendingReads.find(
+        (event) => event.conversationId === conversationId
+    );
+
+    if (!pendingRead) {
+        return false;
+    }
+
+    if (pendingRead.messageId && pendingRead.messageId === messageId) {
+        return true;
+    }
+
+    return updatedAt.getTime() <= pendingRead.updatedAt.getTime();
+}
+
 async function persistRealtimeMessage({
     conversationId,
     conversationType,
@@ -173,8 +195,19 @@ async function persistRealtimeMessage({
         unreadCount: nextUnreadCount,
         fallbackExistingChat: existingChat,
     });
+    const finalChat = await shouldKeepNotificationChatRead(
+        conversationId,
+        incomingMessage.message_id,
+        incomingMessage.updated_at
+    )
+        ? {
+            ...nextChat,
+            is_unreaded_chat: false,
+            unreaded_messages_length: 0,
+        }
+        : nextChat;
 
-    await upsertDbChats([nextChat]);
+    await upsertDbChats([finalChat]);
     await upsertDbMessages([incomingMessage], currentUserId);
 
     if (incomingMessage.attached_media) {

@@ -15,6 +15,113 @@ type TypingState = {
     activeTypingUsers: string[];
 };
 
+type LocalReadState = {
+    messageId: string | null;
+    readAt: number;
+};
+
+function hasRenderableMessageContent(message: Message) {
+    return Boolean(
+        message.message_text_content?.trim() ||
+        message.attached_media ||
+        message.contact ||
+        message.event ||
+        message.poll ||
+        message.location
+    );
+}
+
+function isTransientMessage(message: Message) {
+    return (
+        message.client_status === "pending" ||
+        message.client_status === "sending" ||
+        message.client_status === "failed" ||
+        message.client_received_via_realtime === true
+    );
+}
+
+function mergeMessageForStableUi(
+    existingMessage: Message | undefined,
+    incomingMessage: Message
+): Message {
+    if (!existingMessage) {
+        return incomingMessage;
+    }
+
+    const incomingHasRenderableContent = hasRenderableMessageContent(incomingMessage);
+
+    return {
+        ...existingMessage,
+        ...incomingMessage,
+        message_text_content:
+            incomingMessage.message_text_content?.trim()
+                ? incomingMessage.message_text_content
+                : existingMessage.message_text_content,
+        contact: incomingMessage.contact ?? existingMessage.contact,
+        reply_message:
+            incomingMessage.reply_message ?? existingMessage.reply_message,
+        open_graph_data:
+            incomingMessage.open_graph_data ?? existingMessage.open_graph_data,
+        media_url: incomingMessage.media_url ?? existingMessage.media_url,
+        media_preview_url:
+            incomingMessage.media_preview_url ?? existingMessage.media_preview_url,
+        media_preview_object_key:
+            incomingMessage.media_preview_object_key ??
+            existingMessage.media_preview_object_key,
+        encrypted_media:
+            incomingMessage.encrypted_media ?? existingMessage.encrypted_media,
+        video_thumbnail:
+            incomingMessage.video_thumbnail ?? existingMessage.video_thumbnail,
+        client_local_media_name:
+            incomingMessage.client_local_media_name ??
+            existingMessage.client_local_media_name,
+        client_local_media_size:
+            incomingMessage.client_local_media_size ??
+            existingMessage.client_local_media_size,
+        client_local_media_mime_type:
+            incomingMessage.client_local_media_mime_type ??
+            existingMessage.client_local_media_mime_type,
+        client_status:
+            incomingMessage.client_status ??
+            (incomingHasRenderableContent ? existingMessage.client_status : "pending"),
+        client_error: incomingMessage.client_error ?? existingMessage.client_error,
+    };
+}
+
+function shouldKeepChatLocallyRead(
+    chat: ChatItemType,
+    localRead: LocalReadState | undefined
+) {
+    if (!localRead) {
+        return false;
+    }
+
+    if (localRead.messageId && chat.last_message_id === localRead.messageId) {
+        return true;
+    }
+
+    return chat.updated_at.getTime() <= localRead.readAt;
+}
+
+function applyLocalReadStateToChat(
+    chat: ChatItemType,
+    localRead: LocalReadState | undefined
+) {
+    if (!shouldKeepChatLocallyRead(chat, localRead)) {
+        return chat;
+    }
+
+    if (!chat.is_unreaded_chat && chat.unreaded_messages_length === 0) {
+        return chat;
+    }
+
+    return {
+        ...chat,
+        is_unreaded_chat: false,
+        unreaded_messages_length: 0,
+    };
+}
+
 interface ActiveChatState {
     chats: ChatItemType[];
     chatsLoading: boolean;
@@ -29,6 +136,7 @@ interface ActiveChatState {
     hasOlderMessagesByChatId: Record<string, boolean>;
     presenceByChatId: Record<string, PresenceState>;
     typingByChatId: Record<string, TypingState>;
+    localReadByChatId: Record<string, LocalReadState>;
     lastPinUpdate: { chatId: string; messageId: string } | null;
     notifyPinUpdate: (chatId: string, messageId: string) => void;
     setChats: (chats: ChatItemType[]) => void;
@@ -54,7 +162,7 @@ interface ActiveChatState {
     setHasOlderMessages: (chatId: string, hasOlder: boolean) => void;
     setPresence: (chatId: string, presence: PresenceState) => void;
     setTypingUsers: (chatId: string, activeTypingUsers: string[]) => void;
-    markChatRead: (chatId: string) => void;
+    markChatRead: (chatId: string, messageId?: string | null) => void;
     markMessagesReadByUser: (
         chatId: string,
         userId: string,
@@ -82,6 +190,7 @@ export const useActiveChatStore = create<ActiveChatState>((set) => ({
     hasOlderMessagesByChatId: {},
     presenceByChatId: {},
     typingByChatId: {},
+    localReadByChatId: {},
     lastPinUpdate: null as { chatId: string; messageId: string } | null,
     notifyPinUpdate: (chatId: string, messageId: string) =>
         set({ lastPinUpdate: { chatId, messageId } }),
@@ -90,23 +199,36 @@ export const useActiveChatStore = create<ActiveChatState>((set) => ({
             const existingChatsById = new Map(
                 state.chats.map((chat) => [chat.chat_id, chat])
             );
+            const nextLocalReadByChatId = { ...state.localReadByChatId };
             const nextChats = chats.map((chat) => {
+                const localRead = state.localReadByChatId[chat.chat_id];
                 if (
                     chat.chat_type !== "group" ||
                     (chat.group_members && chat.group_members.length > 0)
                 ) {
-                    return chat;
+                    if (localRead && !shouldKeepChatLocallyRead(chat, localRead)) {
+                        delete nextLocalReadByChatId[chat.chat_id];
+                    }
+
+                    return applyLocalReadStateToChat(chat, localRead);
                 }
 
                 const existingChat = existingChatsById.get(chat.chat_id);
 
-                return existingChat?.group_members?.length
+                const nextChat = existingChat?.group_members?.length
                     ? { ...chat, group_members: existingChat.group_members }
                     : chat;
+
+                if (localRead && !shouldKeepChatLocallyRead(nextChat, localRead)) {
+                    delete nextLocalReadByChatId[chat.chat_id];
+                }
+
+                return applyLocalReadStateToChat(nextChat, localRead);
             });
 
             return {
                 chats: sortChatsByRecent(nextChats),
+                localReadByChatId: nextLocalReadByChatId,
             };
         }),
     upsertChat: (chat) =>
@@ -117,60 +239,71 @@ export const useActiveChatStore = create<ActiveChatState>((set) => ({
             const existingWithoutChat = state.chats.filter(
                 (item) => item.chat_id !== chat.chat_id
             );
-            const nextChat =
+            const mergedChat =
                 chat.chat_type === "group" &&
-                    (!chat.group_members || chat.group_members.length === 0) &&
-                    existingChat?.group_members?.length
+                (!chat.group_members || chat.group_members.length === 0) &&
+                existingChat?.group_members?.length
                     ? { ...chat, group_members: existingChat.group_members }
                     : existingChat && chat.chat_type === "single"
-                        ? {
-                            ...chat,
-                            avatar: chat.avatar || existingChat.avatar,
-                            display_name: chat.display_name ?? existingChat.display_name,
-                            recipient_user_id:
-                                chat.recipient_user_id ?? existingChat.recipient_user_id,
-                            recipient_public_key:
-                                chat.recipient_public_key ??
-                                existingChat.recipient_public_key ??
-                                null,
-                            contact_phone: chat.contact_phone ?? existingChat.contact_phone,
-                            recipient_last_seen:
-                                chat.recipient_last_seen ?? existingChat.recipient_last_seen,
-                            recipient_who_can_see_last_seen:
-                                chat.recipient_who_can_see_last_seen ??
-                                existingChat.recipient_who_can_see_last_seen,
-                            recipient_last_seen_visible:
-                                chat.recipient_last_seen_visible ??
-                                existingChat.recipient_last_seen_visible,
-                            recipient_who_can_see_status:
-                                chat.recipient_who_can_see_status ??
-                                existingChat.recipient_who_can_see_status,
-                            recipient_who_can_see_profile_picture:
-                                chat.recipient_who_can_see_profile_picture ??
-                                existingChat.recipient_who_can_see_profile_picture,
-                            recipient_profile_picture_visible:
-                                chat.recipient_profile_picture_visible ??
-                                existingChat.recipient_profile_picture_visible,
-                            recipient_about_ciphertext:
-                                chat.recipient_about_ciphertext ??
-                                existingChat.recipient_about_ciphertext,
-                            recipient_about_encrypted_aes_key:
-                                chat.recipient_about_encrypted_aes_key ??
-                                existingChat.recipient_about_encrypted_aes_key,
-                            recipient_about_iv:
-                                chat.recipient_about_iv ?? existingChat.recipient_about_iv,
-                            recipient_who_can_see_about:
-                                chat.recipient_who_can_see_about ??
-                                existingChat.recipient_who_can_see_about,
-                            recipient_about_visible:
-                                chat.recipient_about_visible ??
-                                existingChat.recipient_about_visible,
-                            stored_contact: chat.stored_contact ?? existingChat.stored_contact,
-                        }
-                        : chat;
+                      ? {
+                          ...chat,
+                          avatar: chat.avatar || existingChat.avatar,
+                          display_name: chat.display_name ?? existingChat.display_name,
+                          recipient_user_id:
+                              chat.recipient_user_id ?? existingChat.recipient_user_id,
+                          recipient_public_key:
+                              chat.recipient_public_key ??
+                              existingChat.recipient_public_key ??
+                              null,
+                          contact_phone: chat.contact_phone ?? existingChat.contact_phone,
+                          recipient_last_seen:
+                              chat.recipient_last_seen ?? existingChat.recipient_last_seen,
+                          recipient_who_can_see_last_seen:
+                              chat.recipient_who_can_see_last_seen ??
+                              existingChat.recipient_who_can_see_last_seen,
+                          recipient_last_seen_visible:
+                              chat.recipient_last_seen_visible ??
+                              existingChat.recipient_last_seen_visible,
+                          recipient_who_can_see_status:
+                              chat.recipient_who_can_see_status ??
+                              existingChat.recipient_who_can_see_status,
+                          recipient_who_can_see_profile_picture:
+                              chat.recipient_who_can_see_profile_picture ??
+                              existingChat.recipient_who_can_see_profile_picture,
+                          recipient_profile_picture_visible:
+                              chat.recipient_profile_picture_visible ??
+                              existingChat.recipient_profile_picture_visible,
+                          recipient_about_ciphertext:
+                              chat.recipient_about_ciphertext ??
+                              existingChat.recipient_about_ciphertext,
+                          recipient_about_encrypted_aes_key:
+                              chat.recipient_about_encrypted_aes_key ??
+                              existingChat.recipient_about_encrypted_aes_key,
+                          recipient_about_iv:
+                              chat.recipient_about_iv ?? existingChat.recipient_about_iv,
+                          recipient_who_can_see_about:
+                              chat.recipient_who_can_see_about ??
+                              existingChat.recipient_who_can_see_about,
+                          recipient_about_visible:
+                              chat.recipient_about_visible ??
+                              existingChat.recipient_about_visible,
+                          stored_contact: chat.stored_contact ?? existingChat.stored_contact,
+                      }
+                      : chat;
+            const localRead = state.localReadByChatId[chat.chat_id];
+            const nextChat = applyLocalReadStateToChat(mergedChat, localRead);
+            const nextLocalReadByChatId =
+                localRead && !shouldKeepChatLocallyRead(mergedChat, localRead)
+                    ? Object.fromEntries(
+                          Object.entries(state.localReadByChatId).filter(
+                              ([chatId]) => chatId !== chat.chat_id
+                          )
+                      )
+                    : state.localReadByChatId;
 
             return {
                 chats: sortChatsByRecent([...existingWithoutChat, nextChat]),
+                localReadByChatId: nextLocalReadByChatId,
             };
         }),
     removeChat: (chatId) =>
@@ -191,6 +324,11 @@ export const useActiveChatStore = create<ActiveChatState>((set) => ({
                 messagesByChatId,
                 draftsByChatId,
                 replyDraftByChatId,
+                localReadByChatId: Object.fromEntries(
+                    Object.entries(state.localReadByChatId).filter(
+                        ([localReadChatId]) => localReadChatId !== chatId
+                    )
+                ),
             };
         }),
     setChatsLoading: (loading) => set({ chatsLoading: loading }),
@@ -248,8 +386,7 @@ export const useActiveChatStore = create<ActiveChatState>((set) => ({
                     incomingMessage.message_id,
                     existingMessage
                         ? {
-                            ...existingMessage,
-                            ...fetchedMessage,
+                            ...mergeMessageForStableUi(existingMessage, fetchedMessage),
                             client_status: "sent",
                             client_error: null,
                         }
@@ -265,12 +402,47 @@ export const useActiveChatStore = create<ActiveChatState>((set) => ({
             };
         }),
     replaceMessages: (chatId, messages) =>
-        set((state) => ({
-            messagesByChatId: {
-                ...state.messagesByChatId,
-                [chatId]: sortMessagesChronologically(messages),
-            },
-        })),
+        set((state) => {
+            const existingMessages = state.messagesByChatId[chatId] ?? [];
+            const mergedById = new Map<string, Message>();
+            const incomingMessageIds = new Set(messages.map((message) => message.message_id));
+            const newestIncomingTime = messages.reduce(
+                (newestTime, message) =>
+                    Math.max(newestTime, message.created_at.getTime()),
+                0
+            );
+
+            for (const incomingMessage of messages) {
+                const existingMessage = existingMessages.find(
+                    (message) => message.message_id === incomingMessage.message_id
+                );
+                mergedById.set(
+                    incomingMessage.message_id,
+                    mergeMessageForStableUi(existingMessage, incomingMessage)
+                );
+            }
+
+            for (const existingMessage of existingMessages) {
+                if (incomingMessageIds.has(existingMessage.message_id)) {
+                    continue;
+                }
+
+                if (
+                    messages.length === 0 ||
+                    isTransientMessage(existingMessage) ||
+                    existingMessage.created_at.getTime() > newestIncomingTime
+                ) {
+                    mergedById.set(existingMessage.message_id, existingMessage);
+                }
+            }
+
+            return {
+                messagesByChatId: {
+                    ...state.messagesByChatId,
+                    [chatId]: sortMessagesChronologically([...mergedById.values()]),
+                },
+            };
+        }),
     appendMessage: (chatId, message) =>
         set((state) => {
             const existingMessages = state.messagesByChatId[chatId] ?? [];
@@ -278,7 +450,9 @@ export const useActiveChatStore = create<ActiveChatState>((set) => ({
                 (item) => item.message_id === message.message_id
             )
                 ? existingMessages.map((item) =>
-                    item.message_id === message.message_id ? message : item
+                    item.message_id === message.message_id
+                        ? mergeMessageForStableUi(item, message)
+                        : item
                 )
                 : [...existingMessages, message];
 
@@ -335,9 +509,11 @@ export const useActiveChatStore = create<ActiveChatState>((set) => ({
                 },
             },
         })),
-    markChatRead: (chatId) =>
+    markChatRead: (chatId, messageId) =>
         set((state) => {
             let didChange = false;
+            const existingChat = state.chats.find((chat) => chat.chat_id === chatId);
+            const readMessageId = messageId ?? existingChat?.last_message_id ?? null;
 
             const chats = state.chats.map((chat) => {
                 if (chat.chat_id !== chatId) {
@@ -357,7 +533,16 @@ export const useActiveChatStore = create<ActiveChatState>((set) => ({
                 };
             });
 
-            return didChange ? { chats } : state;
+            return {
+                ...(didChange ? { chats } : {}),
+                localReadByChatId: {
+                    ...state.localReadByChatId,
+                    [chatId]: {
+                        messageId: readMessageId,
+                        readAt: Date.now(),
+                    },
+                },
+            };
         }),
     markMessagesReadByUser: (chatId, userId, readAt) =>
         set((state) => {
@@ -537,5 +722,6 @@ export const useActiveChatStore = create<ActiveChatState>((set) => ({
             hasOlderMessagesByChatId: {},
             presenceByChatId: {},
             typingByChatId: {},
+            localReadByChatId: {},
         }),
 }));

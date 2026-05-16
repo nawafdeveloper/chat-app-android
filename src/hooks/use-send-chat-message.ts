@@ -513,6 +513,7 @@ export function useSendChatMessage() {
         isForwardMessage = false,
         transportMediaPreviewUrl,
         transportVideoThumbnail,
+        messageAlreadyInStore = false,
     }: {
         chatId: string;
         currentUserId: string;
@@ -530,6 +531,7 @@ export function useSendChatMessage() {
         isForwardMessage?: boolean;
         transportMediaPreviewUrl?: string | null;
         transportVideoThumbnail?: string | null;
+        messageAlreadyInStore?: boolean;
     }) => {
         const senderNickname = session?.user.name ?? currentPhone;
         const senderAvatarUrl = session?.user.image ?? null;
@@ -597,7 +599,7 @@ export function useSendChatMessage() {
             recipientEncryptionKeys,
         });
 
-        if (!existingMessageId) {
+        if (!existingMessageId && !messageAlreadyInStore) {
             debugSendMessage("dispatch-append-optimistic", {
                 chatId,
                 message: summarizeOutgoingMessage(optimisticMessageForStore),
@@ -606,10 +608,10 @@ export function useSendChatMessage() {
         } else {
             debugSendMessage("dispatch-update-existing-optimistic", {
                 chatId,
-                existingMessageId,
+                existingMessageId: existingMessageId ?? messageId,
                 message: summarizeOutgoingMessage(optimisticMessageForStore),
             });
-            updateMessage(chatId, existingMessageId, (message) => ({
+            updateMessage(chatId, existingMessageId ?? messageId, (message) => ({
                 ...message,
                 ...applyEncryptedTransportFields({
                     message: optimisticMessageForStore,
@@ -945,6 +947,35 @@ export function useSendChatMessage() {
             isForwarded: isForwardMessage,
         });
 
+        if (!existingMessageId) {
+            appendMessage(chatId, optimisticMessage);
+
+            const nextChat = buildChatFromMessage({
+                conversationId: chatId,
+                conversationType: conversation.conversationType,
+                message: optimisticMessage,
+                currentUserId,
+                unreadCount: 0,
+                fallbackExistingChat: conversation.selectedChat,
+            });
+            upsertChat(nextChat);
+
+            if (clearDraft) {
+                setDraft(chatId, "");
+            }
+
+            if (replyMessage) {
+                clearReplyDraft(chatId);
+            }
+
+            void Promise.all([
+                upsertDbMessages([optimisticMessage], currentUserId),
+                upsertDbChats([nextChat]),
+            ]).catch((error) => {
+                console.log("Failed to persist pending outgoing text message:", error);
+            });
+        }
+
         try {
             debugSendMessage("send-text-encrypt-start", {
                 chatId,
@@ -991,12 +1022,35 @@ export function useSendChatMessage() {
                 encryptedChatPreview: encryptedPreview.encryptedContent,
                 chatPreviewRecipientKeys: encryptedPreview.recipientEncryptionKeys,
                 isForwardMessage,
+                messageAlreadyInStore: !existingMessageId,
             });
 
             debugSendMessage("send-text-success", { chatId, messageId });
             return true;
         } catch (error) {
             debugSendMessage("send-text-failed", { chatId, messageId, error });
+            if (!existingMessageId) {
+                const failedMessage: Message = {
+                    ...optimisticMessage,
+                    client_status: "failed",
+                    client_error:
+                        error instanceof Error ? error.message : "Failed to send message",
+                };
+
+                updateMessage(chatId, messageId, (message) => ({
+                    ...message,
+                    client_status: failedMessage.client_status,
+                    client_error: failedMessage.client_error,
+                }));
+                void upsertDbMessages([failedMessage], currentUserId).catch(
+                    (persistError) => {
+                        console.log(
+                            "Failed to persist failed outgoing text message:",
+                            persistError
+                        );
+                    }
+                );
+            }
             return false;
         }
     };

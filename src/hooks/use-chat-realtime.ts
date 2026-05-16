@@ -902,8 +902,6 @@ export function useChatRealtime() {
                         })
                     );
 
-                    await persistAndUpsertChat(nextChat);
-
                     const existingMessageId = existingMessage?.message_id;
 
                     if (existingMessageId) {
@@ -924,6 +922,7 @@ export function useChatRealtime() {
                         });
                         appendMessage(conversationId, confirmedMessage);
                     }
+                    void persistAndUpsertChat(nextChat);
                     void upsertDbMessages([confirmedMessage], currentUserId).catch((error) => {
                         debugRealtime("event-message-sent-db-error", {
                             message: summarizeRealtimeMessage(confirmedMessage),
@@ -1016,12 +1015,12 @@ export function useChatRealtime() {
                             fallbackExistingChat: existingChat,
                         })
                     );
-                    await persistAndUpsertChat(nextChat);
                     debugRealtime("event-new-message-append", {
                         conversationId,
                         incomingMessage: summarizeRealtimeMessage(incomingMessage),
                     });
                     appendMessage(conversationId, incomingMessage);
+                    void persistAndUpsertChat(nextChat);
                     void upsertDbMessages([incomingMessage], currentUserId).catch((error) => {
                         debugRealtime("event-new-message-db-error", {
                             message: summarizeRealtimeMessage(incomingMessage),
@@ -1109,7 +1108,6 @@ export function useChatRealtime() {
                             fallbackExistingChat: existingChat,
                         })
                     );
-                    await persistAndUpsertChat(nextChat);
                     if (isSelected) {
                         debugRealtime("event-conversation-updated-append-selected", {
                             conversationId,
@@ -1117,6 +1115,7 @@ export function useChatRealtime() {
                         });
                         appendMessage(conversationId, conversationMessage);
                     }
+                    void persistAndUpsertChat(nextChat);
                     void upsertDbMessages([conversationMessage], currentUserId).catch((error) => {
                         debugRealtime("event-conversation-updated-db-error", {
                             message: summarizeRealtimeMessage(conversationMessage),
@@ -1265,7 +1264,9 @@ export function useChatRealtime() {
                     }
 
                     if (event.userId === currentUserId) {
-                        useActiveChatStore.getState().markChatRead(conversationId);
+                        useActiveChatStore
+                            .getState()
+                            .markChatRead(conversationId, event.messageId);
                         void clearChatNotificationFromSystem(conversationId);
 
                         void completePendingRealtimeEvent({

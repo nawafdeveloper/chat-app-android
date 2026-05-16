@@ -10,7 +10,7 @@ export function markChatReadOptimistically({
     conversationId: string;
     messageId?: string | null;
 }) {
-    useActiveChatStore.getState().markChatRead(conversationId);
+    useActiveChatStore.getState().markChatRead(conversationId, messageId);
 
     void clearChatNotificationFromSystem(conversationId);
 

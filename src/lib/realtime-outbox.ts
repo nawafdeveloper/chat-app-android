@@ -108,6 +108,36 @@ export async function completePendingRealtimeEvent(event: ClientRealtimeEvent) {
         .where(eq(pendingRealtimeEvents.dedupe_key, getEventDedupeKey(event)));
 }
 
+export async function getPendingMarkReadEvents() {
+    const rows = await db
+        .select()
+        .from(pendingRealtimeEvents)
+        .where(eq(pendingRealtimeEvents.event_type, "MARK_READ"));
+
+    return rows
+        .map((row) => {
+            const event = rowToEvent(row);
+            if (event?.type !== "MARK_READ") {
+                return null;
+            }
+
+            return {
+                conversationId: event.conversationId,
+                messageId: event.messageId ?? null,
+                updatedAt: new Date(row.updated_at),
+            };
+        })
+        .filter(
+            (
+                event
+            ): event is {
+                conversationId: string;
+                messageId: string | null;
+                updatedAt: Date;
+            } => Boolean(event)
+        );
+}
+
 export async function flushPendingRealtimeEvents(socket: WebSocket | null) {
     if (
         !socket ||

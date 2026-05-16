@@ -23,6 +23,7 @@ import {
     getDbMessages,
     upsertDbMessages,
 } from "@/lib/upsert-db-messages";
+import { getPendingMarkReadEvents } from "@/lib/realtime-outbox";
 import type { ChatItemType } from "@/types/chats.type";
 import type { Message } from "@/types/messages";
 import { authClient } from "./auth-client";
@@ -63,6 +64,10 @@ type PushTokenParams = {
     cookies: string | null;
 };
 
+type PendingMarkReadEvent = Awaited<
+    ReturnType<typeof getPendingMarkReadEvents>
+>[number];
+
 function getAuthHeaders(cookies: string | null) {
     return {
         Cookie: cookies || "",
@@ -84,6 +89,40 @@ function groupMessagesByChat(messages: Message[]) {
     }
 
     return grouped;
+}
+
+function shouldApplyPendingRead(chat: ChatItemType, event: PendingMarkReadEvent) {
+    if (event.messageId && chat.last_message_id === event.messageId) {
+        return true;
+    }
+
+    return chat.updated_at.getTime() <= event.updatedAt.getTime();
+}
+
+function applyPendingMarkReadEvents(
+    chats: ChatItemType[],
+    pendingReadEvents: PendingMarkReadEvent[]
+) {
+    if (pendingReadEvents.length === 0) {
+        return chats;
+    }
+
+    const pendingReadByChatId = new Map(
+        pendingReadEvents.map((event) => [event.conversationId, event])
+    );
+
+    return chats.map((chat) => {
+        const pendingRead = pendingReadByChatId.get(chat.chat_id);
+        if (!pendingRead || !shouldApplyPendingRead(chat, pendingRead)) {
+            return chat;
+        }
+
+        return {
+            ...chat,
+            is_unreaded_chat: false,
+            unreaded_messages_length: 0,
+        };
+    });
 }
 
 export async function hydrateStoredContactOverrides(chats: ChatItemType[]) {
@@ -339,13 +378,20 @@ export async function syncMobileChatsAndMessages({
         cachedChats,
         onProgress,
     });
+    const pendingMarkReadEvents = await getPendingMarkReadEvents();
+    const syncedChatsWithPendingReads = applyPendingMarkReadEvents(
+        syncedChats,
+        pendingMarkReadEvents
+    );
     reportSyncProgress(onProgress, "Decrypting your chats", 35);
 
-    await upsertDbChats(syncedChats);
+    await upsertDbChats(syncedChatsWithPendingReads);
     reportSyncProgress(onProgress, "Saving your chats", 45);
 
     const storedChats = await getDbChats();
-    const syncedChatsById = new Map(syncedChats.map((chat) => [chat.chat_id, chat]));
+    const syncedChatsById = new Map(
+        syncedChatsWithPendingReads.map((chat) => [chat.chat_id, chat])
+    );
     const hydratedChats = storedChats.map((chat) => {
         const syncedChat = syncedChatsById.get(chat.chat_id);
 
