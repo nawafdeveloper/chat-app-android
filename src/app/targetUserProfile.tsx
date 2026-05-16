@@ -4,20 +4,38 @@ import { SmallVideoMessagePreview } from '@/components/small-decrypted-video-pre
 import { ThemedText } from '@/components/themed-text'
 import { ThemedView } from '@/components/themed-view'
 import { Colors, Fonts } from '@/constants/theme'
+import { useCryptoKeys } from '@/context/crypto'
+import { useIsTablet } from '@/context/screen-checking-context'
 import { formatPhoneNumber } from '@/helper/phone-formatter'
+import { useToggleChatNotifications } from '@/hooks/toggle-chat-notification'
 import { authClient } from '@/lib/auth-client'
+import type { AvatarSource } from '@/lib/avatar-source'
+import { applyContactToSingleChat, normalizeChatItem } from '@/lib/chat-utils'
+import { encryptContactPayload } from '@/lib/contact-crypto'
 import { findContactByPhone, findContactByUserId, getContactDisplayName } from '@/lib/contact-display'
+import { hydrateLocalContacts } from '@/lib/contact-sync'
+import { phoneValuesMatch } from '@/lib/contact-utils'
+import { createUploadFileFromLocalUri } from '@/lib/local-upload-file'
 import { isLocalMediaUri, isMessageMediaSafeForJsDecrypt, materializeMessageMedia } from '@/lib/message-media'
+import { uploadEncryptedMessageMedia } from '@/lib/message-media-upload'
+import { deleteDbChat, upsertDbChats } from '@/lib/upsert-db-chats'
+import { upsertDbContacts } from '@/lib/upsert-db-contacts'
 import { upsertDbMessages } from '@/lib/upsert-db-messages'
+import { rightNavRef } from '@/store/right-nav-ref'
 import { useActiveChatStore } from '@/store/use-active-chat-store'
 import { useContactDirectoryStore } from '@/store/use-contact-directory-store'
+import type { ChatGroupMember, ChatItemType } from '@/types/chats.type'
+import type { Contact, StoredContactRecord } from '@/types/contacts.type'
 import { Message } from '@/types/messages'
-import { useRoute } from '@react-navigation/native'
+import { BasicAlertDialog, Column, Button as ComposeButton, Text as ComposeText, Host, Row, Spacer, Surface, TextButton } from '@expo/ui/jetpack-compose'
+import { clip, fillMaxWidth, height, padding, Shapes, width, wrapContentHeight, wrapContentWidth } from '@expo/ui/jetpack-compose/modifiers'
+import { StackActions, useRoute } from '@react-navigation/native'
+import * as ImagePicker from 'expo-image-picker'
 import { router, useLocalSearchParams } from 'expo-router'
-import React, { useCallback, useMemo, useState } from 'react'
-import { FlatList, StyleSheet, useColorScheme } from 'react-native'
+import React, { useCallback, useEffect, useMemo, useState } from 'react'
+import { Alert, FlatList, Pressable, StyleSheet, useColorScheme, View } from 'react-native'
 import { ScrollView } from 'react-native-gesture-handler'
-import { Appbar, Icon, List, Switch } from 'react-native-paper'
+import { ActivityIndicator, Appbar, HelperText, Icon, IconButton, List, Switch, TextInput, TouchableRipple } from 'react-native-paper'
 
 function isVisualMediaMessage(message: Message) {
     return (
@@ -57,22 +75,241 @@ const formatAudioTime = (seconds?: number | null) => {
 };
 
 const EMPTY_MESSAGES: Message[] = [];
+const EMPTY_GROUP_MEMBERS: ChatGroupMember[] = [];
+const API_BASE_URL = "https://halabakk-web.nawaf-alhasosah.workers.dev";
+
+type RawChatItem = Omit<ChatItemType, "avatar" | "created_at" | "updated_at" | "group_members"> & {
+    avatar?: AvatarSource;
+    group_members?: (Omit<ChatGroupMember, "avatar"> & {
+        avatar?: AvatarSource;
+    })[] | null;
+    created_at: string | Date;
+    updated_at: string | Date;
+};
+
+type ChatPatchResponse = {
+    chat?: RawChatItem;
+    error?: string;
+};
+
+type ContactPatchResponse = {
+    contact?: StoredContactRecord;
+    contacts?: StoredContactRecord[];
+    error?: string;
+};
+
+function splitFullName(value: string) {
+    const parts = value.trim().replace(/\s+/g, " ").split(" ").filter(Boolean);
+    const firstName = parts.shift() ?? "";
+
+    return {
+        firstName,
+        lastName: parts.join(" "),
+    };
+}
+
+type MediaItemProps = {
+    message: Message;
+    isDark: boolean;
+    activeChatGroupMembers?: ChatGroupMember[] | null;
+    contacts: Contact[];
+    currentUserId: string | null;
+    formatBytes: (bytes?: number | null) => string | null;
+    isGroupChat: boolean;
+};
+
+function MediaItem({
+    message,
+    isDark,
+    activeChatGroupMembers,
+    contacts,
+    currentUserId,
+    formatBytes,
+    isGroupChat,
+}: MediaItemProps) {
+    const hasLocalFullMedia = isLocalMediaUri(message.media_url);
+    const photoSource = message.media_url ?? null;
+    const previewObjectKey =
+        message.media_preview_object_key ?? message.encrypted_media?.preview_object_key ?? null;
+    const photoPreviewSource = message.media_preview_url ?? previewObjectKey;
+    const shouldShowMediaDownloadOverlay =
+        (message.attached_media === "photo" || message.attached_media === "video") &&
+        Boolean(message.media_url) &&
+        !hasLocalFullMedia;
+    const canDownloadFullMedia = isMessageMediaSafeForJsDecrypt(message);
+    const fileSize = message.media_size_bytes ?? message.client_local_media_size ?? null;
+    const fileName =
+        message.media_file_name ??
+        message.client_local_media_name ??
+        message.media_url?.split("?")[0].split("/").filter(Boolean).pop() ??
+        "File";
+    const fileExtension = getFileExtension(fileName, message.client_local_media_mime_type);
+    const fileDetails = [formatBytes(fileSize), fileExtension]
+        .filter(Boolean)
+        .join(" - ");
+    const senderGroupMember =
+        isGroupChat
+            ? activeChatGroupMembers?.find(
+                (member) => member.user_id === message.sender_user_id
+            ) ?? null
+            : null;
+    const senderContact =
+        findContactByUserId(contacts, message.sender_user_id) ??
+        findContactByPhone(contacts, senderGroupMember?.phone_number);
+    const senderDisplayName = senderContact
+        ? getContactDisplayName(senderContact)
+        : senderGroupMember?.name?.trim() || senderGroupMember?.phone_number || "You";
+
+    const formattedTime = useMemo(
+        () => message.created_at.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+        [message.created_at]
+    );
+    const videoThumbnailSource =
+        message.video_thumbnail ?? message.media_preview_url ?? previewObjectKey;
+    const videoPreviewSource =
+        message.media_preview_url && message.media_preview_url !== videoThumbnailSource
+            ? message.media_preview_url
+            : null;
+    const canDownloadMediaFromBubble = canDownloadFullMedia;
+
+    const [isDownloading, setIsDownloading] = useState(false);
+
+    const handleDownloadMedia = useCallback(async () => {
+        if (!currentUserId || isDownloading) {
+            return;
+        }
+
+        setIsDownloading(true);
+        try {
+            const localMessage = await materializeMessageMedia(message, {
+                downloadFull: true,
+            });
+
+            useActiveChatStore.getState().updateMessage(
+                localMessage.chat_room_id,
+                localMessage.message_id,
+                () => localMessage
+            );
+            await upsertDbMessages([localMessage], currentUserId);
+        } catch (error) {
+            console.log("Failed to download message media:", error);
+        } finally {
+            setIsDownloading(false);
+        }
+    }, [currentUserId, isDownloading, message]);
+
+    if (message.attached_media === 'video') {
+        return (
+            <SmallVideoMessagePreview
+                localVideoUri={hasLocalFullMedia ? message.media_url : null}
+                source={videoThumbnailSource}
+                previewSource={videoPreviewSource}
+                isDark={isDark}
+                showDownloadOverlay={shouldShowMediaDownloadOverlay}
+                isDownloading={isDownloading}
+                downloadDetails={
+                    canDownloadMediaFromBubble
+                        ? fileDetails || formatBytes(message.media_size_bytes)
+                        : "Too large"
+                }
+                onDownload={canDownloadMediaFromBubble ? handleDownloadMedia : undefined}
+                message_id={message.message_id}
+                senderName={senderDisplayName}
+                timeStamp={formattedTime}
+                formatAudioTime={formatAudioTime}
+            />
+        )
+    }
+
+    return (
+        <SmallDecryptedMediaImage
+            source={hasLocalFullMedia ? photoSource : null}
+            previewSource={photoPreviewSource}
+            isDark={isDark}
+            showDownloadOverlay={shouldShowMediaDownloadOverlay}
+            isDownloading={isDownloading}
+            downloadDetails={
+                canDownloadFullMedia
+                    ? fileDetails || formatBytes(message.media_size_bytes)
+                    : "Too large"
+            }
+            onDownload={canDownloadFullMedia ? handleDownloadMedia : undefined}
+            message_id={message.message_id}
+            senderName={senderDisplayName}
+            timeStamp={formattedTime}
+        />
+    );
+}
 
 const TargetUserProfile = () => {
     const { data: session } = authClient.useSession()
     const scheme = useColorScheme()
-    const colors = Colors[scheme === 'unspecified' ? 'light' : scheme ?? 'light']
+    const resolvedScheme = scheme === 'unspecified' ? 'light' : scheme ?? 'light'
+    const colors = Colors[resolvedScheme]
+    const isTablet = useIsTablet()
     const currentUserId = session?.user.id ?? null;
+    const currentPhone = (session?.user as { phoneNumber?: string | null } | undefined)?.phoneNumber ?? null;
+    const currentPublicKey = (session?.user as { yhlaPublicKey?: string | null } | undefined)?.yhlaPublicKey ?? null;
+    const { isReady: areCryptoKeysReady } = useCryptoKeys();
+    const { isToggling, setChatNotificationsMuted } = useToggleChatNotifications();
 
-    const params = useLocalSearchParams<{ chatId?: string | string[] }>();
+    const params = useLocalSearchParams<{
+        chatId?: string | string[];
+        targetUserId?: string | string[];
+        contactNumber?: string | string[];
+        displayName?: string | string[];
+        avatar?: string | string[];
+        publicKey?: string | string[];
+    }>();
     const navigationRoute = useRoute();
-    const nativeChatId = (navigationRoute.params as { chatId?: string | string[] } | undefined)?.chatId;
+    const nativeParams = navigationRoute.params as {
+        chatId?: string | string[];
+        targetUserId?: string | string[];
+        contactNumber?: string | string[];
+        displayName?: string | string[];
+        avatar?: string | string[];
+        publicKey?: string | string[];
+    } | undefined;
+    const nativeChatId = nativeParams?.chatId;
     const expoChatId = Array.isArray(params.chatId) ? params.chatId[0] : params.chatId;
     const nativeRouteChatId = Array.isArray(nativeChatId) ? nativeChatId[0] : nativeChatId;
     const routeChatId = expoChatId ?? nativeRouteChatId;
+    const getRouteParam = (
+        expoValue?: string | string[],
+        nativeValue?: string | string[]
+    ) => {
+        const resolvedExpoValue = Array.isArray(expoValue) ? expoValue[0] : expoValue;
+        const resolvedNativeValue = Array.isArray(nativeValue) ? nativeValue[0] : nativeValue;
+
+        return resolvedExpoValue ?? resolvedNativeValue ?? null;
+    };
+    const routeTargetUserId = getRouteParam(params.targetUserId, nativeParams?.targetUserId);
+    const routeContactNumber = getRouteParam(params.contactNumber, nativeParams?.contactNumber);
+    const routeDisplayName = getRouteParam(params.displayName, nativeParams?.displayName);
+    const routeAvatar = getRouteParam(params.avatar, nativeParams?.avatar);
+    const routePublicKey = getRouteParam(params.publicKey, nativeParams?.publicKey);
+    const hasRouteProfileTarget = Boolean(routeTargetUserId || routeContactNumber);
     const selectedChatId = useActiveChatStore((state) => state.selectedChatId);
     const contacts = useContactDirectoryStore((state) => state.contacts);
-    const activeChatId = routeChatId ?? selectedChatId;
+    const setContacts = useContactDirectoryStore((state) => state.setContacts);
+    const chats = useActiveChatStore((state) => state.chats);
+    const setSelectedChatId = useActiveChatStore((state) => state.setSelectedChatId);
+    const setRecipientPhone = useActiveChatStore((state) => state.setRecipientPhone);
+    const openDirectContactChat = useActiveChatStore((state) => state.openDirectContactChat);
+    const routeDirectChat = useMemo(
+        () =>
+            hasRouteProfileTarget
+                ? chats.find((chat) =>
+                    chat.chat_type === "single" &&
+                    (
+                        (!!routeTargetUserId && chat.recipient_user_id === routeTargetUserId) ||
+                        (!!routeContactNumber && phoneValuesMatch(chat.contact_phone, routeContactNumber))
+                    )
+                ) ?? null
+                : null,
+        [chats, hasRouteProfileTarget, routeContactNumber, routeTargetUserId]
+    );
+    const activeChatId = routeChatId ?? (!hasRouteProfileTarget ? selectedChatId : routeDirectChat?.chat_id ?? null);
     const activeChat = useActiveChatStore((state) =>
         activeChatId
             ? state.chats.find((chat) => chat.chat_id === activeChatId) ?? null
@@ -81,11 +318,617 @@ const TargetUserProfile = () => {
     const messagesByChatId = useActiveChatStore(
         (state) => state.messagesByChatId
     );
+    const removeChat = useActiveChatStore((state) => state.removeChat);
+    const upsertChat = useActiveChatStore((state) => state.upsertChat);
     const messages = activeChatId ? messagesByChatId[activeChatId] : EMPTY_MESSAGES;
     const mediaContent = messages.filter(isVisualMediaMessage).sort((left, right) => right.created_at.getTime() - left.created_at.getTime());
-    const chatTitle = activeChat?.display_name ?? activeChat?.contact_phone ?? 'Chat';
+    const profileContact = useMemo(
+        () =>
+            hasRouteProfileTarget
+                ? findContactByUserId(contacts, routeTargetUserId) ??
+                findContactByPhone(contacts, routeContactNumber)
+                : null,
+        [contacts, hasRouteProfileTarget, routeContactNumber, routeTargetUserId]
+    );
+    const profileChatType = activeChat?.chat_type ?? (hasRouteProfileTarget ? "single" : undefined);
+    const profilePhone = activeChat?.contact_phone ?? profileContact?.contact_number ?? routeContactNumber ?? null;
+    const profileUserId = activeChat?.recipient_user_id ?? profileContact?.linked_user_id ?? routeTargetUserId ?? null;
+    const profilePublicKey = activeChat?.recipient_public_key ?? profileContact?.linked_user_public_key ?? routePublicKey ?? null;
+    const profileAvatar = activeChat?.avatar || profileContact?.contact_avatar || routeAvatar || "";
+    const chatTitle =
+        activeChat?.display_name ??
+        (profileContact ? getContactDisplayName(profileContact) : null) ??
+        routeDisplayName ??
+        profilePhone ??
+        'Chat';
     const avatarTint = colors.text;
-    const isGroupChat = activeChat?.chat_type === "group";
+    const isGroupChat = profileChatType === "group";
+    const rawGroupMembers = activeChat?.group_members;
+    const groupMembers = rawGroupMembers ?? EMPTY_GROUP_MEMBERS;
+    const currentMember = groupMembers.find((member) => member.user_id === currentUserId);
+    const isCurrentUserAdmin = Boolean(isGroupChat && currentMember?.is_admin);
+    const editableContact = useMemo(
+        () =>
+            profileChatType === "single"
+                ? profileContact ??
+                findContactByUserId(contacts, activeChat?.recipient_user_id) ??
+                findContactByPhone(contacts, activeChat?.contact_phone)
+                : null,
+        [activeChat?.contact_phone, activeChat?.recipient_user_id, contacts, profileChatType, profileContact]
+    );
+    const isViewingCurrentUser = Boolean(profileUserId && profileUserId === currentUserId);
+    const canEditProfileName = Boolean(activeChat && ((profileChatType === "single" && editableContact) || isCurrentUserAdmin));
+    const canEditGroupAvatar = Boolean(profileChatType === "group" && isCurrentUserAdmin);
+    const canCreateProfileContact = Boolean(profileChatType === "single" && profilePhone && !editableContact && !isViewingCurrentUser);
+    const canMessageProfileContact = Boolean(
+        profileChatType === "single" &&
+        profilePhone &&
+        !isViewingCurrentUser &&
+        (!routeDirectChat || routeDirectChat.chat_id !== selectedChatId)
+    );
+    const groupMemberRows = useMemo(
+        () =>
+            groupMembers.map((member) => {
+                const savedContact =
+                    findContactByUserId(contacts, member.user_id) ??
+                    findContactByPhone(contacts, member.phone_number);
+                const displayName = savedContact
+                    ? getContactDisplayName(savedContact)
+                    : member.name?.trim() ||
+                    formatPhoneNumber(member.phone_number) ||
+                    "Unknown member";
+                const description = savedContact
+                    ? formatPhoneNumber(member.phone_number ?? savedContact.contact_number)
+                    : member.user_id === currentUserId
+                        ? "You"
+                        : null;
+
+                return {
+                    member,
+                    displayName,
+                    description,
+                    avatar: savedContact?.contact_avatar || member.avatar || null,
+                };
+            }),
+        [contacts, currentUserId, groupMembers]
+    );
+
+    const [isMuted, setIsMuted] = useState(activeChat?.is_muted_chat_notifications || false);
+    const [pendingAction, setPendingAction] = useState<string | null>(null);
+    const [activeDialog, setActiveDialog] = useState<'delete-chat' | 'exit-group' | null>(null);
+    const [isEditingName, setIsEditingName] = useState(false);
+    const [nameDraft, setNameDraft] = useState(chatTitle);
+    const [profileError, setProfileError] = useState<string | null>(null);
+
+    useEffect(() => {
+        if (!isEditingName) {
+            setNameDraft(chatTitle);
+        }
+    }, [chatTitle, isEditingName]);
+
+    useEffect(() => {
+        setIsEditingName(false);
+        setProfileError(null);
+    }, [activeChatId]);
+
+    const resetAfterChatRemoval = () => {
+        setActiveDialog(null);
+
+        if (rightNavRef.isReady()) {
+            rightNavRef.dispatch(StackActions.popToTop());
+        }
+
+        router.dismissAll();
+    };
+
+    const handleBack = () => {
+        if (isTablet && rightNavRef.isReady()) {
+            rightNavRef.goBack()
+            return
+        }
+
+        router.back()
+    }
+
+    const handleToggleNotifications = async () => {
+        if (!activeChat?.chat_id || isToggling) {
+            return;
+        }
+
+        const nextMuted = !isMuted;
+        setIsMuted(nextMuted);
+        const didSave = await setChatNotificationsMuted(activeChat.chat_id, nextMuted);
+
+        if (!didSave) {
+            setIsMuted(!nextMuted);
+        }
+    };
+
+    const mergeUpdatedChat = useCallback(async (chat: ChatItemType) => {
+        const nextChat =
+            activeChat && chat.chat_id === activeChat.chat_id
+                ? {
+                    ...activeChat,
+                    ...chat,
+                    last_message_context:
+                        activeChat.last_message_context || chat.last_message_context,
+                    last_message_media:
+                        activeChat.last_message_media ?? chat.last_message_media,
+                }
+                : chat;
+
+        upsertChat(nextChat);
+        await upsertDbChats([nextChat]);
+    }, [activeChat, upsertChat]);
+
+    const handleEditNamePress = () => {
+        if (!canEditProfileName || pendingAction !== null) {
+            return;
+        }
+
+        setNameDraft(chatTitle);
+        setProfileError(null);
+        setIsEditingName(true);
+    };
+
+    const handleSaveGroupName = async () => {
+        if (!activeChat?.chat_id || !isCurrentUserAdmin || pendingAction !== null) {
+            return;
+        }
+
+        const trimmedName = nameDraft.trim();
+        if (!trimmedName) {
+            setProfileError("Group name is required.");
+            return;
+        }
+
+        if (trimmedName === (activeChat.display_name ?? "").trim()) {
+            setIsEditingName(false);
+            setNameDraft(chatTitle);
+            return;
+        }
+
+        setPendingAction("name");
+        setProfileError(null);
+
+        try {
+            const response = await fetch(`${API_BASE_URL}/api/chats/${encodeURIComponent(activeChat.chat_id)}`, {
+                method: "PATCH",
+                headers: {
+                    Cookie: authClient.getCookie() ?? "",
+                    "Content-Type": "application/json",
+                },
+                credentials: "omit",
+                body: JSON.stringify({ displayName: trimmedName }),
+            });
+            const payload = (await response.json().catch(() => null)) as ChatPatchResponse | null;
+
+            if (!response.ok) {
+                throw new Error(payload?.error ?? "Failed to update group name.");
+            }
+
+            const nextChat = payload?.chat
+                ? normalizeChatItem(payload.chat)
+                : {
+                    ...activeChat,
+                    display_name: trimmedName,
+                    updated_at: new Date(),
+                };
+
+            await mergeUpdatedChat(nextChat);
+            setIsEditingName(false);
+        } catch (error) {
+            setProfileError(error instanceof Error ? error.message : "Failed to update group name.");
+        } finally {
+            setPendingAction(null);
+        }
+    };
+
+    const handleSaveContactName = async () => {
+        if (!activeChat || activeChat.chat_type !== "single" || pendingAction !== null) {
+            return;
+        }
+
+        const trimmedName = nameDraft.trim();
+        if (!trimmedName) {
+            setProfileError("Contact name is required.");
+            return;
+        }
+
+        if (trimmedName === chatTitle.trim()) {
+            setIsEditingName(false);
+            setNameDraft(chatTitle);
+            return;
+        }
+
+        if (!editableContact?.contact_id) {
+            setProfileError("This chat is not saved as a contact yet.");
+            return;
+        }
+
+        if (!areCryptoKeysReady || !currentUserId) {
+            setProfileError("Unlock your encryption keys before saving a contact.");
+            return;
+        }
+
+        const { firstName, lastName } = splitFullName(trimmedName);
+        if (!firstName) {
+            setProfileError("Contact name is required.");
+            return;
+        }
+
+        setPendingAction("contact-name");
+        setProfileError(null);
+
+        try {
+            const encryptedContact = await encryptContactPayload(
+                {
+                    contact_first_name: firstName,
+                    contact_second_name: lastName || undefined,
+                    contact_number:
+                        editableContact.contact_number ||
+                        activeChat.contact_phone ||
+                        "",
+                    contact_avatar: editableContact.contact_avatar,
+                    contact_bio: editableContact.contact_bio,
+                },
+                currentUserId
+            );
+            const response = await fetch(`${API_BASE_URL}/api/contacts`, {
+                method: "PATCH",
+                credentials: "omit",
+                headers: {
+                    Cookie: authClient.getCookie() ?? "",
+                    "Content-Type": "application/json",
+                },
+                body: JSON.stringify({
+                    contactId: editableContact.contact_id,
+                    encryptedContact,
+                }),
+            });
+            const payload = (await response.json().catch(() => null)) as ContactPatchResponse | null;
+
+            if (!response.ok) {
+                throw new Error(payload?.error ?? "Failed to update contact name.");
+            }
+
+            const updatedRecords = [
+                ...(payload?.contacts ?? []),
+                ...(payload?.contact ? [payload.contact] : []),
+            ];
+
+            if (updatedRecords.length > 0) {
+                await upsertDbContacts(updatedRecords);
+                await hydrateLocalContacts({ currentUserId });
+            } else {
+                const nextContact: Contact = {
+                    ...editableContact,
+                    contact_first_name: firstName,
+                    contact_second_name: lastName || undefined,
+                    contact_letter_group: firstName.charAt(0).toUpperCase(),
+                };
+                setContacts(
+                    currentUserId,
+                    contacts.map((contact) =>
+                        contact.contact_id === editableContact.contact_id
+                            ? nextContact
+                            : contact
+                    )
+                );
+            }
+
+            const nextChat = applyContactToSingleChat(activeChat, {
+                ...editableContact,
+                contact_first_name: firstName,
+                contact_second_name: lastName || undefined,
+            });
+            upsertChat(nextChat);
+            await upsertDbChats([nextChat]);
+            setIsEditingName(false);
+        } catch (error) {
+            setProfileError(error instanceof Error ? error.message : "Failed to update contact name.");
+        } finally {
+            setPendingAction(null);
+        }
+    };
+
+    const handleSaveNamePress = () => {
+        if (pendingAction !== null) {
+            return;
+        }
+
+        if (profileChatType === "group") {
+            void handleSaveGroupName();
+            return;
+        }
+
+        void handleSaveContactName();
+    };
+
+    const handleCreateProfileContact = () => {
+        if (!profilePhone) {
+            return;
+        }
+
+        router.push({
+            pathname: "/create-new-contact",
+            params: { phoneNumber: profilePhone },
+        });
+    };
+
+    const handleMessageProfileContact = () => {
+        if (!profilePhone || isViewingCurrentUser) {
+            return;
+        }
+
+        let nextChatId = routeDirectChat?.chat_id ?? null;
+
+        if (nextChatId) {
+            setSelectedChatId(nextChatId);
+            setRecipientPhone(profilePhone);
+        } else {
+            if (!currentPhone || !currentUserId) {
+                setProfileError("Could not open this chat.");
+                return;
+            }
+
+            nextChatId = openDirectContactChat({
+                contact: {
+                    contact_id: profileUserId ?? profilePhone,
+                    linked_user_id: profileUserId ?? undefined,
+                    linked_user_public_key: profilePublicKey ?? undefined,
+                    contact_first_name: routeDisplayName || chatTitle || profilePhone,
+                    contact_number: profilePhone,
+                    contact_avatar: profileAvatar || undefined,
+                    contact_letter_group: (routeDisplayName || chatTitle || profilePhone).charAt(0).toUpperCase(),
+                },
+                currentPhone,
+                currentUserId,
+            });
+        }
+
+        if (isTablet && rightNavRef.isReady()) {
+            rightNavRef.navigate("chatId", { chatId: nextChatId });
+            return;
+        }
+
+        router.navigate({
+            pathname: "/chatId",
+            params: { chatId: nextChatId },
+        });
+    };
+
+    const handleAvatarPress = async () => {
+        if (!activeChat?.chat_id || !canEditGroupAvatar || pendingAction !== null) {
+            return;
+        }
+
+        const { status } = await ImagePicker.requestMediaLibraryPermissionsAsync();
+        if (status !== "granted") {
+            Alert.alert("Permission required", "Please allow access to your photo library.");
+            return;
+        }
+
+        const picked = await ImagePicker.launchImageLibraryAsync({
+            mediaTypes: ImagePicker.MediaTypeOptions.Images,
+            allowsEditing: true,
+            aspect: [1, 1],
+            quality: 0.8,
+        });
+
+        if (picked.canceled || !picked.assets[0]) {
+            return;
+        }
+
+        const recipientsById = new Map<string, string>();
+        for (const member of groupMembers) {
+            if (member.user_id && member.public_key) {
+                recipientsById.set(member.user_id, member.public_key);
+            }
+        }
+        if (currentUserId && currentPublicKey) {
+            recipientsById.set(currentUserId, currentPublicKey);
+        }
+
+        const recipients = [...recipientsById.entries()].map(([recipientUserId, publicKey]) => ({
+            recipientUserId,
+            publicKey,
+        }));
+
+        if (recipients.length === 0) {
+            setProfileError("Group members are missing encryption keys.");
+            return;
+        }
+
+        const asset = picked.assets[0];
+        setPendingAction("avatar");
+        setProfileError(null);
+
+        try {
+            const file = await createUploadFileFromLocalUri({
+                uri: asset.uri,
+                fallbackName: asset.fileName ?? `group-avatar-${Date.now()}.jpg`,
+                mimeType: asset.mimeType ?? "image/jpeg",
+                size: asset.fileSize ?? null,
+            });
+            const upload = await uploadEncryptedMessageMedia(file, recipients, null);
+            const response = await fetch(`${API_BASE_URL}/api/chats/${encodeURIComponent(activeChat.chat_id)}`, {
+                method: "PATCH",
+                headers: {
+                    Cookie: authClient.getCookie() ?? "",
+                    "Content-Type": "application/json",
+                },
+                credentials: "omit",
+                body: JSON.stringify({ avatar: upload.mediaUrl }),
+            });
+            const payload = (await response.json().catch(() => null)) as ChatPatchResponse | null;
+
+            if (!response.ok) {
+                throw new Error(payload?.error ?? "Failed to update group avatar.");
+            }
+
+            const nextChat = payload?.chat
+                ? normalizeChatItem(payload.chat)
+                : {
+                    ...activeChat,
+                    avatar: upload.mediaUrl,
+                    updated_at: new Date(),
+                };
+
+            await mergeUpdatedChat(nextChat);
+        } catch (error) {
+            setProfileError(error instanceof Error ? error.message : "Failed to update group avatar.");
+        } finally {
+            setPendingAction(null);
+        }
+    };
+
+    const handleToggleBlockUser = async () => {
+        if (!activeChat?.chat_id || isGroupChat || pendingAction !== null) {
+            return;
+        }
+
+        const previousChat = activeChat;
+        const nextBlocked = !previousChat.is_blocked_chat;
+        const nextChat = {
+            ...previousChat,
+            is_blocked_chat: nextBlocked,
+        };
+
+        setPendingAction("block");
+        upsertChat(nextChat);
+        void upsertDbChats([nextChat]).catch((error) => {
+            console.log("Failed to persist blocked chat locally:", error);
+        });
+
+        try {
+            const response = await fetch("https://halabakk-web.nawaf-alhasosah.workers.dev/api/chats", {
+                method: "PATCH",
+                headers: {
+                    Cookie: authClient.getCookie() ?? "",
+                    "Content-Type": "application/json",
+                },
+                body: JSON.stringify({
+                    chatId: previousChat.chat_id,
+                    isBlocked: nextBlocked,
+                }),
+            });
+
+            if (!response.ok) {
+                const payload = await response.json().catch(() => null) as { error?: string } | null;
+                throw new Error(payload?.error ?? "Failed to update blocked setting.");
+            }
+        } catch (error) {
+            upsertChat(previousChat);
+            void upsertDbChats([previousChat]).catch((persistError) => {
+                console.log("Failed to restore blocked chat locally:", persistError);
+            });
+            console.log("Failed to update blocked setting:", error);
+        } finally {
+            setPendingAction(null);
+        }
+    };
+
+    const handleChatRemove = () => {
+        if (pendingAction !== null) {
+            return;
+        }
+
+        if (activeDialog === 'delete-chat') {
+            void handleConfirmDeleteChat();
+            return;
+        }
+
+        if (activeDialog === 'exit-group') {
+            void handleConfirmExitGroup();
+        }
+    };
+
+    const handleChatRemoveCancel = () => {
+        if (pendingAction !== null) {
+            return;
+        }
+
+        setActiveDialog(null);
+    };
+
+    const handleConfirmExitGroup = async () => {
+        if (!activeChat?.chat_id || !isGroupChat || pendingAction !== null) {
+            return;
+        }
+
+        setPendingAction("exit");
+
+        try {
+            const response = await fetch(`https://halabakk-web.nawaf-alhasosah.workers.dev/api/chats/${encodeURIComponent(activeChat.chat_id)}`, {
+                method: "DELETE",
+                headers: {
+                    Cookie: authClient.getCookie() ?? "",
+                },
+            });
+
+            if (!response.ok) {
+                const payload = await response.json().catch(() => null) as { error?: string } | null;
+                throw new Error(payload?.error ?? "Failed to remove chat.");
+            }
+
+            try {
+                await deleteDbChat(activeChat.chat_id);
+            } catch (error) {
+                console.log("Failed to remove chat from local database:", error);
+            }
+
+            removeChat(activeChat.chat_id);
+            resetAfterChatRemoval();
+        } catch (error) {
+            console.log("Failed to remove chat:", error);
+        } finally {
+            setPendingAction(null);
+        }
+    };
+
+    const handleConfirmDeleteChat = async () => {
+        if (!activeChat?.chat_id || isGroupChat || pendingAction !== null) {
+            return;
+        }
+
+        const chat = activeChat;
+        const chatId = chat.chat_id;
+        setPendingAction("delete");
+        removeChat(chatId);
+
+        try {
+            const response = await fetch("https://halabakk-web.nawaf-alhasosah.workers.dev/api/chats", {
+                method: "PATCH",
+                headers: {
+                    Cookie: authClient.getCookie() ?? "",
+                    "Content-Type": "application/json",
+                },
+                body: JSON.stringify({
+                    chatId,
+                    isDeleted: true,
+                }),
+            });
+
+            if (!response.ok) {
+                const payload = await response.json().catch(() => null) as { error?: string } | null;
+                throw new Error(payload?.error ?? "Failed to delete chat.");
+            }
+
+            try {
+                await deleteDbChat(chatId);
+            } catch (error) {
+                console.log("Failed to delete chat from local database:", error);
+            }
+
+            resetAfterChatRemoval();
+        } catch (error) {
+            upsertChat(chat);
+            console.log("Failed to delete chat:", error);
+        } finally {
+            setPendingAction(null);
+        }
+    };
 
     const formatBytes = useCallback((bytes?: number | null) => {
         if (!bytes || bytes <= 0) {
@@ -108,160 +951,189 @@ const TargetUserProfile = () => {
         return `${formatted} ${units[unitIndex]}`;
     }, []);
 
-    const MediaItem = useCallback(({ message, isDark }: { message: Message; isDark: boolean }) => {
-        const hasLocalFullMedia = isLocalMediaUri(message.media_url);
-        const photoSource = message.media_url ?? null;
-        const previewObjectKey =
-            message.media_preview_object_key ?? message.encrypted_media?.preview_object_key ?? null;
-        const photoPreviewSource = message.media_preview_url ?? previewObjectKey;
-        const shouldShowMediaDownloadOverlay =
-            (message.attached_media === "photo" || message.attached_media === "video") &&
-            Boolean(message.media_url) &&
-            !hasLocalFullMedia;
-        const canDownloadFullMedia = isMessageMediaSafeForJsDecrypt(message);
-        const fileSize = message.media_size_bytes ?? message.client_local_media_size ?? null;
-        const fileName =
-            message.media_file_name ??
-            message.client_local_media_name ??
-            message.media_url?.split("?")[0].split("/").filter(Boolean).pop() ??
-            "File";
-        const fileExtension = getFileExtension(fileName, message.client_local_media_mime_type);
-        const fileDetails = [formatBytes(fileSize), fileExtension]
-            .filter(Boolean)
-            .join(" - ");
-        const senderGroupMember =
-            isGroupChat
-                ? activeChat?.group_members?.find(
-                    (member) => member.user_id === message.sender_user_id
-                ) ?? null
-                : null;
-        const senderContact =
-            findContactByUserId(contacts, message.sender_user_id) ??
-            findContactByPhone(contacts, senderGroupMember?.phone_number);
-        const senderDisplayName = senderContact
-            ? getContactDisplayName(senderContact)
-            : senderGroupMember?.name?.trim() || senderGroupMember?.phone_number || "You";
-
-        const formattedTime = useMemo(
-            () => message.created_at.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
-            [message.created_at]
-        );
-        const videoThumbnailSource =
-            message.video_thumbnail ?? message.media_preview_url ?? previewObjectKey;
-        const videoPreviewSource =
-            message.media_preview_url && message.media_preview_url !== videoThumbnailSource
-                ? message.media_preview_url
-                : null;
-        const canDownloadMediaFromBubble = canDownloadFullMedia;
-
-        const [isDownloading, setIsDownloading] = useState(false);
-
-        const handleDownloadMedia = useCallback(async () => {
-            if (!currentUserId || isDownloading) {
-                return;
-            }
-
-            setIsDownloading(true);
-            try {
-                const localMessage = await materializeMessageMedia(message, {
-                    downloadFull: true,
-                });
-
-                useActiveChatStore.getState().updateMessage(
-                    localMessage.chat_room_id,
-                    localMessage.message_id,
-                    () => localMessage
-                );
-                await upsertDbMessages([localMessage], currentUserId);
-            } catch (error) {
-                console.log("Failed to download message media:", error);
-            } finally {
-                setIsDownloading(false);
-            }
-        }, [currentUserId, isDownloading, message]);
-
-        if (message.attached_media === 'video') {
-            return (
-                <SmallVideoMessagePreview
-                    localVideoUri={hasLocalFullMedia ? message.media_url : null}
-                    source={videoThumbnailSource}
-                    previewSource={videoPreviewSource}
-                    isDark={isDark}
-                    showDownloadOverlay={shouldShowMediaDownloadOverlay}
-                    isDownloading={isDownloading}
-                    downloadDetails={
-                        canDownloadMediaFromBubble
-                            ? fileDetails || formatBytes(message.media_size_bytes)
-                            : "Too large"
-                    }
-                    onDownload={canDownloadMediaFromBubble ? handleDownloadMedia : undefined}
-                    message_id={message.message_id}
-                    senderName={senderDisplayName}
-                    timeStamp={formattedTime}
-                    formatAudioTime={formatAudioTime}
-                />
-            )
-        }
-
-        return (
-            <SmallDecryptedMediaImage
-                source={hasLocalFullMedia ? photoSource : null}
-                previewSource={photoPreviewSource}
-                isDark={isDark}
-                showDownloadOverlay={shouldShowMediaDownloadOverlay}
-                isDownloading={isDownloading}
-                downloadDetails={
-                    canDownloadFullMedia
-                        ? fileDetails || formatBytes(message.media_size_bytes)
-                        : "Too large"
-                }
-                onDownload={canDownloadFullMedia ? handleDownloadMedia : undefined}
-                message_id={message.message_id}
-                senderName={senderDisplayName}
-                timeStamp={formattedTime}
-            />
-        );
-    }, [activeChat?.group_members, contacts, currentUserId, formatBytes, isGroupChat]);
-
     return (
         <ThemedView style={styles.main}>
+            <Host matchContents style={styles.logoutDialogHost} colorScheme={resolvedScheme}>
+                {activeDialog !== null && (
+                    <BasicAlertDialog
+                        onDismissRequest={handleChatRemoveCancel}
+                        properties={{
+                            dismissOnBackPress: true,
+                            dismissOnClickOutside: true,
+                            usePlatformDefaultWidth: true,
+                        }}
+                    >
+                        <Surface
+                            color={colors.background}
+                            contentColor={colors.text}
+                            tonalElevation={6}
+                            shadowElevation={8}
+                            modifiers={[
+                                wrapContentWidth(),
+                                wrapContentHeight(),
+                                clip(Shapes.RoundedCorner(18)),
+                            ]}
+                        >
+                            <Column modifiers={[padding(22, 20, 22, 18)]}>
+                                <ComposeText
+                                    color={colors.text}
+                                    style={{
+                                        typography: 'titleMedium',
+                                        fontWeight: '700',
+                                    }}
+                                >
+                                    {activeDialog === 'delete-chat' ? 'Delete this chat?' : 'Exit group?'}
+                                </ComposeText>
+                                <Spacer modifiers={[height(10)]} />
+                                <ComposeText
+                                    color={colors.textSecondary}
+                                    style={{
+                                        typography: 'bodyMedium',
+                                        lineHeight: 20,
+                                    }}
+                                >
+                                    {activeDialog === 'delete-chat' ? 'Are you sure you want to delete this chat, all messages will be deleted forever.' : 'Are you sure you want to exit from this group, are messages will be deleted.'}
+                                </ComposeText>
+                                <Spacer modifiers={[height(22)]} />
+                                <Row
+                                    horizontalArrangement="end"
+                                    verticalAlignment="center"
+                                    modifiers={[fillMaxWidth()]}
+                                >
+                                    <TextButton onClick={handleChatRemoveCancel}>
+                                        <ComposeText color={colors.textSecondary}>Cancel</ComposeText>
+                                    </TextButton>
+                                    <Spacer modifiers={[width(8)]} />
+                                    <ComposeButton
+                                        onClick={handleChatRemove}
+                                        colors={{
+                                            containerColor: '#D92D20',
+                                            contentColor: '#FFFFFF',
+                                        }}
+                                    >
+                                        {pendingAction !== null ?
+                                            <ActivityIndicator color="#FFFFFF" size={'small'} /> :
+                                            <ComposeText color="#FFFFFF">{activeDialog === 'delete-chat' ? 'Delete' : 'Exit'}</ComposeText>
+                                        }
+                                    </ComposeButton>
+                                </Row>
+                            </Column>
+                        </Surface>
+                    </BasicAlertDialog>
+                )}
+            </Host>
             <Appbar.Header style={{ backgroundColor: colors.background }}>
-                <Appbar.BackAction onPress={() => router.back()} />
+                <Appbar.BackAction onPress={handleBack} />
                 <Appbar.Content title="" />
-                <Appbar.Action icon="pencil" onPress={() => { }} />
+                {canEditProfileName ? (
+                    <Appbar.Action
+                        icon={isEditingName ? "check" : "pencil"}
+                        disabled={pendingAction !== null}
+                        onPress={isEditingName ? handleSaveNamePress : handleEditNamePress}
+                    />
+                ) : null}
             </Appbar.Header>
             <ScrollView style={{ flex: 1 }}>
                 <ThemedView style={styles.topContentContainer}>
-                    <ChatAvatar
-                        userId={
-                            activeChat?.recipient_user_id ??
-                            activeChat?.chat_id ??
-                            activeChatId
-                        }
-                        imageUrl={activeChat?.avatar}
-                        displayName={chatTitle}
-                        contactPhone={activeChat?.contact_phone}
-                        style={styles.avatar}
-                        iconColor={avatarTint}
-                        backgroundColor={colors.card}
-                        textColor={avatarTint}
-                        chatType={activeChat?.chat_type}
-                    />
-                    <ThemedView style={{ flexDirection: 'column', justifyContent: 'center', alignItems: 'center', gap: 10 }}>
-                        <ThemedText style={{ fontSize: 22, fontWeight: '600' }} numberOfLines={1}>{chatTitle}</ThemedText>
+                    <Pressable
+                        disabled={!canEditGroupAvatar || pendingAction !== null}
+                        onPress={handleAvatarPress}
+                        style={styles.avatarButton}
+                    >
+                        <ChatAvatar
+                            userId={
+                                profileUserId ??
+                                activeChat?.chat_id ??
+                                activeChatId
+                            }
+                            imageUrl={profileAvatar}
+                            displayName={chatTitle}
+                            contactPhone={profilePhone}
+                            style={styles.avatar}
+                            iconColor={avatarTint}
+                            backgroundColor={colors.card}
+                            textColor={avatarTint}
+                            chatType={profileChatType}
+                        />
+                        {canEditGroupAvatar ? (
+                            pendingAction === "avatar" ? (
+                                <View style={styles.avatarOverlay}>
+                                    <ActivityIndicator color="#fff" size="small" />
+                                </View>
+                            ) : (
+                                <ThemedView style={[styles.cameraIcon, { backgroundColor: Colors.dark.card }]}>
+                                    <Icon
+                                        source="camera-plus-outline"
+                                        color={Colors.dark.text}
+                                        size={24}
+                                    />
+                                </ThemedView>
+                            )
+                        ) : null}
+                    </Pressable>
+                    <ThemedView style={styles.profileNameContainer}>
+                        {isEditingName ? (
+                            <TextInput
+                                label={profileChatType === "group" ? "Group name" : "Contact name"}
+                                value={nameDraft}
+                                onChangeText={setNameDraft}
+                                disabled={pendingAction !== null}
+                                mode="flat"
+                                cursorColor="#25D366"
+                                underlineColor={colors.indicator}
+                                activeUnderlineColor="#25D366"
+                                autoFocus
+                                style={[
+                                    styles.nameInput,
+                                    {
+                                        backgroundColor: colors.background,
+                                    },
+                                ]}
+                            />
+                        ) : (
+                            <ThemedText style={styles.profileName} numberOfLines={1}>{chatTitle}</ThemedText>
+                        )}
                         <ThemedText numberOfLines={1} style={{ color: colors.textSecondary }}>
-                            {formatPhoneNumber(activeChat?.contact_phone)}
+                            {formatPhoneNumber(profilePhone)}
                         </ThemedText>
+                        {(canCreateProfileContact || canMessageProfileContact) ? (
+                            <ThemedView style={styles.profileActionRow}>
+                                {canCreateProfileContact ? (
+                                    <IconButton
+                                        icon="account-plus"
+                                        mode="contained"
+                                        iconColor="#1C1E21"
+                                        containerColor="#25D366"
+                                        size={22}
+                                        onPress={handleCreateProfileContact}
+                                        disabled={pendingAction !== null}
+                                    />
+                                ) : null}
+                                {canMessageProfileContact ? (
+                                    <IconButton
+                                        icon="message-text-outline"
+                                        mode="contained"
+                                        iconColor="#1C1E21"
+                                        containerColor="#25D366"
+                                        size={22}
+                                        onPress={handleMessageProfileContact}
+                                        disabled={pendingAction !== null}
+                                    />
+                                ) : null}
+                            </ThemedView>
+                        ) : null}
+                        <HelperText
+                            type="error"
+                            visible={Boolean(profileError)}
+                            style={styles.profileHelperText}
+                        >
+                            {profileError}
+                        </HelperText>
                     </ThemedView>
                     <List.Item
                         title="Media Videos, Photos and Docs"
-                        titleStyle={{ color: colors.textSecondary, fontFamily: Fonts.regular }}
-                        right={props => (
-                            <ThemedView style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
-                                <ThemedText style={{ color: colors.textSecondary }}>{mediaContent.length}</ThemedText>
-                                <List.Icon {...props} icon="chevron-right" color={colors.textSecondary} />
-                            </ThemedView>
-                        )}
+                        titleStyle={{ color: colors.textSecondary, fontFamily: Fonts.regular, lineHeight: 20 }}
+                        right={props => <ThemedText style={{ color: colors.textSecondary }}>{mediaContent.length}</ThemedText>}
                         onPress={() => console.log('pressed')}
                         containerStyle={{ paddingHorizontal: 8 }}
                     />
@@ -269,45 +1141,143 @@ const TargetUserProfile = () => {
                         <FlatList
                             data={mediaContent.slice(0, 12)}
                             keyExtractor={(m) => m.message_id}
-                            renderItem={({ item }) => <MediaItem message={item} isDark={scheme === 'dark'} />}
+                            renderItem={({ item }) => (
+                                <MediaItem
+                                    message={item}
+                                    isDark={scheme === 'dark'}
+                                    activeChatGroupMembers={activeChat?.group_members}
+                                    contacts={contacts}
+                                    currentUserId={currentUserId}
+                                    formatBytes={formatBytes}
+                                    isGroupChat={isGroupChat}
+                                />
+                            )}
                             horizontal
                             showsHorizontalScrollIndicator={false}
                             contentContainerStyle={{ gap: 8 }}
                         />
                     </ThemedView>
                     {activeChat?.chat_type === 'group' && (
-                        <List.Item
-                            title="Invite new user"
-                            titleStyle={{ fontFamily: Fonts.regular }}
-                            description="Add contact to this group"
-                            descriptionStyle={{ color: colors.textSecondary, fontFamily: Fonts.regular }}
-                            left={props => <List.Icon icon={'account-plus'} color={colors.text} />}
-                            containerStyle={{ paddingHorizontal: 24 }}
-                        />
+                        <TouchableRipple
+                            disabled={!isCurrentUserAdmin}
+                            rippleColor={colors.textSecondary + '33'}
+                            underlayColor={colors.textSecondary + '22'}
+                            background={{ type: 'ripple', color: colors.textSecondary + '33', foreground: true }}
+                            onPress={() => console.log('invite user')}
+                            style={{ width: '100%' }}
+                        >
+                            <List.Item
+                                title="Invite new user"
+                                titleStyle={{
+                                    color: isCurrentUserAdmin ? colors.text : colors.textSecondary,
+                                    fontFamily: Fonts.regular,
+                                    lineHeight: 20
+                                }}
+                                description={isCurrentUserAdmin ? "Add contact to this group" : "Only admins can invite members"}
+                                descriptionStyle={{ color: colors.textSecondary, fontFamily: Fonts.regular, lineHeight: 20 }}
+                                left={props => (
+                                    <List.Icon
+                                        {...props}
+                                        icon={'account-plus'}
+                                        color={isCurrentUserAdmin ? colors.text : colors.textSecondary}
+                                    />
+                                )}
+                                containerStyle={{ paddingHorizontal: 24 }}
+                            />
+                        </TouchableRipple>
+                    )}
+                    {activeChat?.chat_type === 'group' && (
+                        <ThemedView style={styles.groupMembersSection}>
+                            <ThemedText style={[styles.sectionHeader, { color: colors.text }]}>
+                                Group members
+                            </ThemedText>
+                            {groupMemberRows.map(({ member, displayName, description, avatar }) => (
+                                <List.Item
+                                    key={member.user_id}
+                                    title={displayName}
+                                    titleStyle={{ color: colors.text, fontFamily: Fonts.regular, lineHeight: 20 }}
+                                    description={description}
+                                    descriptionStyle={{ color: colors.textSecondary, fontFamily: Fonts.regular, lineHeight: 20 }}
+                                    left={() => (
+                                        <ChatAvatar
+                                            userId={member.user_id}
+                                            imageUrl={avatar}
+                                            displayName={displayName}
+                                            contactPhone={member.phone_number}
+                                            style={styles.memberAvatar}
+                                            iconColor={avatarTint}
+                                            backgroundColor={colors.card}
+                                            textColor={avatarTint}
+                                            chatType="single"
+                                        />
+                                    )}
+                                    right={() => (
+                                        <ThemedView style={styles.memberRightContent}>
+                                            {member.is_admin ? (
+                                                <ThemedView
+                                                    style={[
+                                                        styles.adminBadge,
+                                                        { backgroundColor: colors.backgroundElement }
+                                                    ]}
+                                                >
+                                                    <ThemedText style={[styles.adminBadgeText, { color: colors.textSecondary }]}>
+                                                        Admin
+                                                    </ThemedText>
+                                                </ThemedView>
+                                            ) : null}
+                                            <IconButton
+                                                icon="dots-vertical"
+                                                size={20}
+                                                iconColor={colors.textSecondary}
+                                                onPress={() => console.log('group member more', member.user_id)}
+                                            />
+                                        </ThemedView>
+                                    )}
+                                    containerStyle={styles.groupMemberItem}
+                                />
+                            ))}
+                        </ThemedView>
                     )}
                     <List.Item
                         title="Mute notifications"
-                        titleStyle={{fontFamily: Fonts.regular}}
+                        titleStyle={{ fontFamily: Fonts.regular, lineHeight: 20 }}
                         description="Turn off notifications for this conversation"
-                        descriptionStyle={{ color: colors.textSecondary, fontFamily: Fonts.regular }}
+                        descriptionStyle={{ color: colors.textSecondary, fontFamily: Fonts.regular, lineHeight: 20 }}
                         right={props => (
-                            <Switch />
+                            <Switch
+                                onValueChange={handleToggleNotifications}
+                                value={isMuted}
+                                disabled={!activeChat?.chat_id || isToggling}
+                                color='#25D366'
+                            />
                         )}
                         containerStyle={{ paddingHorizontal: 8 }}
                     />
                     {activeChat?.chat_type === 'single' && (
                         <>
                             <List.Item
-                                title={`Block ${chatTitle}`}
-                                titleStyle={{ color: 'red', fontFamily: Fonts.regular }}
+                                title={`${activeChat.is_blocked_chat ? 'Unblock' : 'Block'} ${chatTitle}`}
+                                titleStyle={{ color: 'red', fontFamily: Fonts.regular, lineHeight: 20 }}
+                                disabled={pendingAction !== null}
+                                onPress={handleToggleBlockUser}
                                 left={props => (
-                                    <Icon source="block-helper" color="red" size={24} />
+                                    pendingAction === "block" ? (
+                                        <ActivityIndicator color="red" size="small" />
+                                    ) : (
+                                        <Icon
+                                            source={activeChat.is_blocked_chat ? "check-circle-outline" : "block-helper"}
+                                            color="red"
+                                            size={24}
+                                        />
+                                    )
                                 )}
                                 containerStyle={{ paddingHorizontal: 24 }}
                             />
                             <List.Item
                                 title="Delete chat"
-                                titleStyle={{ color: 'red', fontFamily: Fonts.regular }}
+                                titleStyle={{ color: 'red', fontFamily: Fonts.regular, lineHeight: 20 }}
+                                disabled={pendingAction !== null}
+                                onPress={() => setActiveDialog('delete-chat')}
                                 left={props => (
                                     <Icon source="trash-can-outline" color="red" size={24} />
                                 )}
@@ -318,7 +1288,9 @@ const TargetUserProfile = () => {
                     {activeChat?.chat_type === 'group' && (
                         <List.Item
                             title="Exit group"
-                            titleStyle={{ color: 'red', fontFamily: Fonts.regular }}
+                            titleStyle={{ color: 'red', fontFamily: Fonts.regular, lineHeight: 20 }}
+                            disabled={pendingAction !== null}
+                            onPress={() => setActiveDialog('exit-group')}
                             left={props => (
                                 <Icon source="logout" color="red" size={24} />
                             )}
@@ -335,13 +1307,14 @@ export default TargetUserProfile
 
 const styles = StyleSheet.create({
     main: {
-        flex: 1
+        flex: 1,
     },
     topContentContainer: {
         flexDirection: 'column',
         justifyContent: 'center',
         alignItems: 'center',
-        gap: 20
+        gap: 20,
+        paddingBottom: 60
     },
     avatar: {
         width: 145,
@@ -349,5 +1322,101 @@ const styles = StyleSheet.create({
         borderRadius: 99,
         alignItems: 'center',
         justifyContent: 'center',
+    },
+    avatarButton: {
+        position: 'relative',
+        width: 145,
+        height: 145,
+        borderRadius: 99,
+        alignItems: 'center',
+        justifyContent: 'center',
+        overflow: 'visible',
+    },
+    avatarOverlay: {
+        ...StyleSheet.absoluteFillObject,
+        borderRadius: 99,
+        backgroundColor: 'rgba(0,0,0,0.45)',
+        alignItems: 'center',
+        justifyContent: 'center',
+    },
+    cameraIcon: {
+        position: 'absolute',
+        right: 4,
+        bottom: 6,
+        width: 42,
+        height: 42,
+        borderRadius: 21,
+        alignItems: 'center',
+        justifyContent: 'center',
+        elevation: 3,
+    },
+    profileNameContainer: {
+        width: '100%',
+        maxWidth: 430,
+        flexDirection: 'column',
+        justifyContent: 'center',
+        alignItems: 'center',
+        gap: 10,
+        paddingHorizontal: 24,
+    },
+    profileName: {
+        maxWidth: '100%',
+        fontSize: 22,
+        fontWeight: '600',
+    },
+    nameInput: {
+        width: '100%',
+        borderRadius: 0,
+    },
+    profileHelperText: {
+        alignSelf: 'stretch',
+        marginTop: -10,
+        marginBottom: -10,
+    },
+    profileActionRow: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        justifyContent: 'center',
+        gap: 10,
+    },
+    groupMembersSection: {
+        width: '100%',
+        paddingTop: 4,
+    },
+    sectionHeader: {
+        fontSize: 16,
+        fontWeight: '600',
+        paddingHorizontal: 24,
+        paddingBottom: 4,
+    },
+    groupMemberItem: {
+        paddingHorizontal: 24,
+    },
+    memberAvatar: {
+        width: 44,
+        height: 44,
+        borderRadius: 22,
+        alignItems: 'center',
+        justifyContent: 'center',
+    },
+    memberRightContent: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        justifyContent: 'flex-end',
+        gap: 4,
+    },
+    adminBadge: {
+        borderRadius: 999,
+        paddingHorizontal: 8,
+        paddingVertical: 3,
+    },
+    adminBadgeText: {
+        fontSize: 12,
+        lineHeight: 14,
+        fontFamily: Fonts.regular,
+    },
+    logoutDialogHost: {
+        position: 'absolute',
+        zIndex: 20,
     },
 })

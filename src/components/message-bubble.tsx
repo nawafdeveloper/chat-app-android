@@ -1,5 +1,7 @@
-import { Colors } from "@/constants/theme";
+import { Colors, Fonts } from "@/constants/theme";
+import { useIsTablet } from "@/context/screen-checking-context";
 import { findContactByPhone, findContactByUserId, getContactDisplayName } from "@/lib/contact-display";
+import { phoneValuesMatch } from "@/lib/contact-utils";
 import {
     fetchAndDecryptMessageMedia,
     isLocalMediaUri,
@@ -7,6 +9,7 @@ import {
     materializeMessageMedia,
 } from "@/lib/message-media";
 import { upsertDbMessages } from "@/lib/upsert-db-messages";
+import { rightNavRef } from "@/store/right-nav-ref";
 import { useActiveChatStore } from "@/store/use-active-chat-store";
 import { useContactDirectoryStore } from "@/store/use-contact-directory-store";
 import { Message } from "@/types/messages";
@@ -14,6 +17,7 @@ import Slider from "@react-native-community/slider";
 import { useAudioPlayer, useAudioPlayerStatus } from "expo-audio";
 import * as Haptics from 'expo-haptics';
 import { Image } from "expo-image";
+import { router } from "expo-router";
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { ActivityIndicator, Linking, Pressable, StyleSheet, TouchableWithoutFeedback, View } from "react-native";
 import { Gesture, GestureDetector } from "react-native-gesture-handler";
@@ -34,6 +38,8 @@ type BubbleProps = {
     currentUserId: string | null;
     isDark: boolean;
     showTail?: boolean;
+    isGroupedWithPrevious?: boolean;
+    isGroupedWithNext?: boolean;
     isSelected: boolean;
     selectedCount: number;
     onLongPress: (messageId: string) => void;
@@ -47,6 +53,7 @@ type BubbleProps = {
         originalMessageId: string,
         originalSenderUserId: string
     ) => void;
+    isStarredByCurrentUser: boolean
 };
 
 const DARK = {
@@ -89,10 +96,6 @@ function debugBubble(stage: string, payload: Record<string, unknown> = {}) {
         return;
     }
 
-    console.log(`[chat-debug][message-bubble][${stage}]`, {
-        at: new Date().toISOString(),
-        ...payload,
-    });
 }
 
 function summarizeBubbleMessage(message: Message) {
@@ -617,7 +620,7 @@ const Tail = memo(function Tail({ color, sent }: { color: string; sent: boolean 
     );
 });
 
-function Bubble({ message, currentUserId, isDark, showTail = true, isSelected, selectedCount, onLongPress, onPress, onRetryMessage, handleReply }: BubbleProps) {
+function Bubble({ message, currentUserId, isDark, showTail = true, isGroupedWithPrevious = false, isGroupedWithNext = false, isSelected, selectedCount, onLongPress, onPress, onRetryMessage, handleReply, isStarredByCurrentUser }: BubbleProps) {
     const {
         message_id,
         sender_user_id,
@@ -646,6 +649,7 @@ function Bubble({ message, currentUserId, isDark, showTail = true, isSelected, s
         () => created_at.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
         [created_at]
     );
+    const isTablet = useIsTablet();
     const chats = useActiveChatStore((state) => state.chats);
     const contacts = useContactDirectoryStore((state) => state.contacts);
     const [isMediaDownloading, setIsMediaDownloading] = useState(false);
@@ -727,6 +731,13 @@ function Bubble({ message, currentUserId, isDark, showTail = true, isSelected, s
     const shouldShowSenderPhone = Boolean(!senderContact && senderPhone);
     const senderAvatar =
         senderContact?.contact_avatar || senderGroupMember?.avatar || "";
+    const senderDirectChat = chats.find((chat) =>
+        chat.chat_type === "single" &&
+        (
+            (!!message.sender_user_id && chat.recipient_user_id === message.sender_user_id) ||
+            (!!senderPhone && phoneValuesMatch(chat.contact_phone, senderPhone))
+        )
+    ) ?? null;
     const senderHue = getUserHue(message.sender_user_id);
     const groupSenderAccent = isDark
         ? `hsl(${senderHue}, 80%, 65%)`
@@ -739,7 +750,43 @@ function Bubble({ message, currentUserId, isDark, showTail = true, isSelected, s
                 ? getContactDisplayName(replySenderContact)
                 : isGroupChat && replySenderGroupMember
                     ? (replySenderGroupMember.name?.trim() || replySenderGroupMember.phone_number) ?? ""
-                    : replySenderUserId ?? "";
+            : replySenderUserId ?? "";
+
+    const handleOpenSenderProfile = useCallback(() => {
+        if (!isGroupChat || sent) {
+            return;
+        }
+
+        const profileParams = {
+            chatId: senderDirectChat?.chat_id ?? undefined,
+            targetUserId: message.sender_user_id,
+            contactNumber: senderPhone ?? undefined,
+            displayName: senderDisplayName,
+            avatar: senderAvatar || undefined,
+            publicKey: senderGroupMember?.public_key ?? senderContact?.linked_user_public_key ?? undefined,
+        };
+
+        if (isTablet && rightNavRef.isReady()) {
+            rightNavRef.navigate("targetUserProfile", profileParams);
+            return;
+        }
+
+        router.navigate({
+            pathname: "/targetUserProfile",
+            params: profileParams,
+        });
+    }, [
+        isGroupChat,
+        isTablet,
+        message.sender_user_id,
+        senderAvatar,
+        senderContact?.linked_user_public_key,
+        senderDirectChat?.chat_id,
+        senderDisplayName,
+        senderGroupMember?.public_key,
+        senderPhone,
+        sent,
+    ]);
 
     debugBubble('render', {
         message: summarizeBubbleMessage(message),
@@ -959,6 +1006,10 @@ function Bubble({ message, currentUserId, isDark, showTail = true, isSelected, s
                 style={[
                     styles.row,
                     sent ? styles.rowSent : styles.rowReceived,
+                    {
+                        paddingTop: isGroupedWithPrevious ? 0 : 4,
+                        paddingBottom: isGroupedWithNext ? 0 : 4,
+                    },
                 ]}
             >
                 {isSelected && (
@@ -1000,17 +1051,23 @@ function Bubble({ message, currentUserId, isDark, showTail = true, isSelected, s
                         {!sent && isGroupChat && (
                             <View style={styles.groupAvatarColumn}>
                                 {showTail ? (
-                                    <ChatAvatar
-                                        userId={senderGroupMember?.user_id ?? sender_user_id}
-                                        imageUrl={senderAvatar}
-                                        displayName={senderDisplayName}
-                                        contactPhone={senderPhone}
-                                        style={styles.groupSenderAvatar}
-                                        iconColor={groupSenderAccent}
-                                        backgroundColor={isDark ? "#182229" : "#e8f0ef"}
-                                        textColor={groupSenderAccent}
-                                        chatType={activeChat.chat_type}
-                                    />
+                                    <Pressable
+                                        accessibilityRole="button"
+                                        hitSlop={6}
+                                        onPress={handleOpenSenderProfile}
+                                    >
+                                        <ChatAvatar
+                                            userId={senderGroupMember?.user_id ?? sender_user_id}
+                                            imageUrl={senderAvatar}
+                                            displayName={senderDisplayName}
+                                            contactPhone={senderPhone}
+                                            style={styles.groupSenderAvatar}
+                                            iconColor={groupSenderAccent}
+                                            backgroundColor={isDark ? "#182229" : "#e8f0ef"}
+                                            textColor={groupSenderAccent}
+                                            chatType={activeChat.chat_type}
+                                        />
+                                    </Pressable>
                                 ) : (
                                     <View style={styles.groupSenderAvatarSpacer} />
                                 )}
@@ -1027,26 +1084,35 @@ function Bubble({ message, currentUserId, isDark, showTail = true, isSelected, s
                                 !sent && showTail && styles.receivedBubbleWithTail,
                                 sent && showTail && styles.sentBubbleWithTail,
                             ]}>
-                                {!sent && isGroupChat && (
-                                    <ThemedView style={styles.groupSenderHeader}>
-                                        <ThemedText
-                                            numberOfLines={1}
-                                            style={[styles.groupSenderName, { color: groupSenderAccent }]}
-                                        >
-                                            {senderDisplayName}
-                                        </ThemedText>
-                                        {shouldShowSenderPhone && senderPhone ? (
+                                {!sent && isGroupChat && showTail && (
+                                    <TouchableRipple
+                                        key={message_id}
+                                        rippleColor={colors.textSecondary + '33'}
+                                        underlayColor={colors.textSecondary + '22'}
+                                        background={{ type: 'ripple', color: colors.textSecondary + '33', foreground: true }}
+                                        style={styles.groupSenderHeader}
+                                        onPress={handleOpenSenderProfile}
+                                    >
+                                        <>
                                             <ThemedText
                                                 numberOfLines={1}
-                                                style={[
-                                                    styles.groupSenderPhone,
-                                                    { color: isDark ? "#9CA3AF" : "#6B7280" },
-                                                ]}
+                                                style={[styles.groupSenderName, { color: groupSenderAccent }]}
                                             >
-                                                {senderPhone}
+                                                {senderDisplayName}
                                             </ThemedText>
-                                        ) : null}
-                                    </ThemedView>
+                                            {shouldShowSenderPhone && senderPhone ? (
+                                                <ThemedText
+                                                    numberOfLines={1}
+                                                    style={[
+                                                        styles.groupSenderPhone,
+                                                        { color: isDark ? "#9CA3AF" : "#6B7280" },
+                                                    ]}
+                                                >
+                                                    {senderPhone}
+                                                </ThemedText>
+                                            ) : null}
+                                        </>
+                                    </TouchableRipple>
                                 )}
                                 {is_forward_message && (
                                     <ThemedView style={styles.forwardContainer}>
@@ -1059,20 +1125,29 @@ function Bubble({ message, currentUserId, isDark, showTail = true, isSelected, s
                                     </ThemedView>
                                 )}
                                 {reply_message && (
-                                    <ThemedView style={{ flexDirection: 'row', flex: 1, minWidth: 120, alignItems: 'center', justifyContent: 'space-between', marginHorizontal: attached_media ? 0 : -4, marginBottom: 4, backgroundColor: sent ? theme.cardSent : theme.cardReceived, borderRadius: 7, overflow: 'hidden' }}>
-                                        <ThemedView style={[styles.replyContainer, { borderLeftColor: '#25D366', backgroundColor: 'transparent' }]}>
-                                            <ThemedText style={{ fontSize: 14 }}>{replySenderDisplayName}</ThemedText>
-                                            <ThemedText numberOfLines={2} ellipsizeMode='tail' style={{ fontSize: 12, color: colors.textSecondary, minWidth: 0, lineHeight: 16 }}>
-                                                {reply_message.original_message_text ? reply_message.original_message_text : (reply_message.original_attached_media === 'contact' ? '👤 Contact' : reply_message.original_attached_media === 'file' ? '📂 File' : reply_message.original_attached_media === 'photo' ? '🖼️ Photo' : reply_message.original_attached_media === 'video' ? '📽️ Video' : '🎤 Voice')}
-                                            </ThemedText>
-                                        </ThemedView>
-                                        {reply_message.original_attached_media === 'photo' && (
-                                            <ReplyPhotoThumbnail
-                                                url={reply_message.original_attached_media_url}
-                                                isDark={isDark}
-                                            />
-                                        )}
-                                    </ThemedView>
+                                    <TouchableRipple
+                                        key={reply_message.original_message_id}
+                                        rippleColor={colors.textSecondary + '33'}
+                                        underlayColor={colors.textSecondary + '22'}
+                                        background={{ type: 'ripple', color: colors.textSecondary + '33', foreground: true }}
+                                        style={{ flexDirection: 'row', flex: 1, minWidth: 120, alignItems: 'center', justifyContent: 'space-between', marginHorizontal: attached_media ? 0 : -4, marginBottom: 4, backgroundColor: sent ? theme.cardSent : theme.cardReceived, borderRadius: 7, overflow: 'hidden' }}
+                                        onPress={() => console.log('reply message pressed')}
+                                    >
+                                        <>
+                                            <ThemedView style={[styles.replyContainer, { borderLeftColor: '#25D366', backgroundColor: 'transparent' }]}>
+                                                <ThemedText style={{ fontSize: 14 }}>{replySenderDisplayName}</ThemedText>
+                                                <ThemedText numberOfLines={2} ellipsizeMode='tail' style={{ fontSize: 12, color: colors.textSecondary, minWidth: 0, lineHeight: 16 }}>
+                                                    {reply_message.original_message_text ? reply_message.original_message_text : (reply_message.original_attached_media === 'contact' ? '👤 Contact' : reply_message.original_attached_media === 'file' ? '📂 File' : reply_message.original_attached_media === 'photo' ? '🖼️ Photo' : reply_message.original_attached_media === 'video' ? '📽️ Video' : '🎤 Voice')}
+                                                </ThemedText>
+                                            </ThemedView>
+                                            {reply_message.original_attached_media === 'photo' && (
+                                                <ReplyPhotoThumbnail
+                                                    url={reply_message.original_attached_media_url}
+                                                    isDark={isDark}
+                                                />
+                                            )}
+                                        </>
+                                    </TouchableRipple>
                                 )}
                                 {open_graph_data && (
                                     <Pressable
@@ -1255,6 +1330,13 @@ function Bubble({ message, currentUserId, isDark, showTail = true, isSelected, s
                                             size={14}
                                         />
                                     )}
+                                    {isStarredByCurrentUser && (
+                                        <Icon
+                                            source={'star'}
+                                            color={colors.textSecondary}
+                                            size={14}
+                                        />
+                                    )}
                                 </View>
                                 {attached_media === 'contact' && (
                                     <ThemedView style={[styles.contactActionContainer, { borderTopColor: sent ? theme.borderSent : theme.borderReceive }]}>
@@ -1295,11 +1377,14 @@ function areBubblePropsEqual(previous: BubbleProps, next: BubbleProps) {
         previous.currentUserId !== next.currentUserId ||
         previous.isDark !== next.isDark ||
         previous.showTail !== next.showTail ||
+        previous.isGroupedWithPrevious !== next.isGroupedWithPrevious ||
+        previous.isGroupedWithNext !== next.isGroupedWithNext ||
         previous.isSelected !== next.isSelected ||
         previous.onLongPress !== next.onLongPress ||
         previous.onPress !== next.onPress ||
         previous.onRetryMessage !== next.onRetryMessage ||
-        previous.handleReply !== next.handleReply
+        previous.handleReply !== next.handleReply ||
+        previous.isStarredByCurrentUser !== next.isStarredByCurrentUser
     ) {
         return false;
     }
@@ -1322,10 +1407,10 @@ const styles = StyleSheet.create({
     row: {
         position: 'relative',
         flexDirection: 'row',
-        marginVertical: 1,
+        marginVertical: 3,
         alignItems: 'flex-start',
         paddingHorizontal: 16,
-        paddingVertical: 10,
+        paddingVertical: 8,
         overflow: 'visible',
     },
     bubbleAndTailWrapper: {
@@ -1402,7 +1487,7 @@ const styles = StyleSheet.create({
         minWidth: 0,
         fontSize: 12,
         lineHeight: 15,
-        fontWeight: '700',
+        fontFamily: Fonts.bold
     },
     groupSenderPhone: {
         flexShrink: 1,
@@ -1423,12 +1508,13 @@ const styles = StyleSheet.create({
     },
     tailReceived: {
         marginRight: -3,
+        marginLeft: -6
     },
     tailSent: {
         marginLeft: -9,
     },
     tailSpacer: {
-        width: 16,
+        width: 0,
     },
     bubble: {
         maxWidth: '100%',
@@ -1731,7 +1817,8 @@ const styles = StyleSheet.create({
         alignItems: 'center',
         gap: 4,
         elevation: 1,
-        borderWidth: 1
+        borderWidth: 1,
+        marginBottom: 6
     },
     messageReactionEmoji: {
         fontSize: 10,

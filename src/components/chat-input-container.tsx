@@ -44,10 +44,6 @@ function debugChatInput(stage: string, payload: Record<string, unknown> = {}) {
         return;
     }
 
-    console.log(`[chat-debug][chat-input][${stage}]`, {
-        at: new Date().toISOString(),
-        ...payload,
-    });
 }
 
 async function fetchOpenGraphPreview(

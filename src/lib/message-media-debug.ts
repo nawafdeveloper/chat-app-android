@@ -24,8 +24,6 @@ export function logMediaDebug(
 ) {
     const timestamp = new Date().toISOString();
 
-    console.log("[media-debug]", step, details ?? null);
-
     if (details) {
         void forwardMediaDebugToServer(timestamp, step, details);
         return;

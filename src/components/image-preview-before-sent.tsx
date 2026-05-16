@@ -1,4 +1,4 @@
-import { Colors } from '@/constants/theme';
+import { Colors, Fonts } from '@/constants/theme';
 import { useSendChatMessage } from '@/hooks/use-send-chat-message';
 import { createUploadFileFromLocalUri } from '@/lib/local-upload-file';
 import { useImagePreviewBeforeSentStore } from '@/store/image-preview-before-sent';
@@ -27,8 +27,8 @@ import { Image } from 'expo-image';
 import * as MediaLibrary from 'expo-media-library';
 import React, { useEffect, useRef, useState } from 'react';
 import {
-    Alert,
     ActivityIndicator,
+    Alert,
     Dimensions,
     Keyboard,
     KeyboardAvoidingView,
@@ -907,10 +907,11 @@ const styles = StyleSheet.create({
         flexDirection: 'row',
         gap: 10,
         paddingHorizontal: 16,
-        paddingVertical: 12,
         flex: 1,
+        borderRadius: 99,
+        fontFamily: Fonts.regular,
+        height: 45,
         marginBottom: 4,
-        borderRadius: 99
     },
     bottomTextInput: {
         flex: 1,

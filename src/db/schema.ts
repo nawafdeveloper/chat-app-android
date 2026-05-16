@@ -52,6 +52,7 @@ export const chats = sqliteTable(
         recipient_user_id: text("recipient_user_id"),
         contact_phone: text("contact_phone"),
         display_name: text("display_name"),
+        group_members_json: text("group_members_json"),
         last_message_is_read_by_recipient: integer("last_message_is_read_by_recipient", { mode: "boolean" }),
         created_at: text("created_at").notNull(),
         updated_at: text("updated_at").notNull(),

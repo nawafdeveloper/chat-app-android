@@ -1,4 +1,4 @@
-import { Colors } from '@/constants/theme'
+import { Colors, Fonts } from '@/constants/theme'
 import { db } from '@/db/client'
 import { currentUser } from '@/db/schema'
 import { authClient } from '@/lib/auth-client'
@@ -22,7 +22,7 @@ const ProfileSettings = () => {
     const {
         firstName, lastName, about, profileImage,
         setFirstName, setLastName, setAbout, setProfileImage,
-        setOriginals 
+        setOriginals
     } = useProfileStore()
 
     const [loading, setLoading] = useState(false)
@@ -172,6 +172,7 @@ const ProfileSettings = () => {
                         cursorColor='#25D366'
                         underlineColor={colors.indicator}
                         activeUnderlineColor='#25D366'
+                        contentStyle={{ fontFamily: Fonts.regular }}
                         style={{ backgroundColor: colors.card, width: '100%' }}
                     />
                 </ThemedView>
@@ -185,6 +186,7 @@ const ProfileSettings = () => {
                         cursorColor='#25D366'
                         underlineColor={colors.indicator}
                         activeUnderlineColor='#25D366'
+                        contentStyle={{ fontFamily: Fonts.regular }}
                         style={{ backgroundColor: colors.card, width: '100%' }}
                     />
                 </ThemedView>
@@ -198,6 +200,7 @@ const ProfileSettings = () => {
                         cursorColor='#25D366'
                         underlineColor={colors.indicator}
                         activeUnderlineColor='#25D366'
+                        contentStyle={{ fontFamily: Fonts.regular }}
                         style={{ backgroundColor: colors.card, width: '100%' }}
                     />
                 </ThemedView>

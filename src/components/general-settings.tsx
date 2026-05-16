@@ -24,19 +24,6 @@ const GeneralSettings = () => {
                     </ThemedView>
                 </TouchableRipple>
             </ThemedView>
-            <ThemedView style={styles.sectionContainer}>
-                <ThemedText style={[styles.sectionHeading, { color: colors.textSecondary }]}>Font scaling</ThemedText>
-                <TouchableRipple>
-                    <ThemedView style={[styles.dropDownContainer, { backgroundColor: colors.card, borderBottomColor: colors.indicator }]}>
-                        <ThemedText>100%</ThemedText>
-                        <Icon
-                            source="unfold-more-horizontal"
-                            color={colors.text}
-                            size={20}
-                        />
-                    </ThemedView>
-                </TouchableRipple>
-            </ThemedView>
         </ThemedView>
     )
 }

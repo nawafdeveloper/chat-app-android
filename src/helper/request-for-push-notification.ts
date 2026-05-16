@@ -57,7 +57,6 @@ async function ensureMessagesChannel() {
         vibration: true,
     });
 
-    console.log("[push-client] Android channel ready");
 }
 
 export async function registerForPushNotificationsAsync(): Promise<string | null> {

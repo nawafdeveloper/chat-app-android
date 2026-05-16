@@ -1,5 +1,5 @@
 import { NewChatFilledIcon, NewChatIcon } from '@/components/chat-icon'
-import { ChatAvatar } from '@/components/decrypted-chat-avatar'
+import { MemoChatListItem } from '@/components/chat-list-item'
 import { ThemedText } from '@/components/themed-text'
 import { ThemedView } from '@/components/themed-view'
 import { Colors } from '@/constants/theme'
@@ -10,6 +10,7 @@ import { authClient } from '@/lib/auth-client'
 import { deleteMobilePushToken, getDecryptedDbMessagePage, MESSAGE_PAGE_SIZE } from '@/lib/chat-sync'
 import { clearAllSensitiveData } from '@/lib/crypto-storage'
 import { deleteCachedLocalMediaFiles } from '@/lib/message-media'
+import { upsertDbChats } from '@/lib/upsert-db-chats'
 import { useAuthStore } from '@/store/auth-store'
 import { useNotificationStore } from '@/store/notification-store'
 import { rightNavRef } from '@/store/right-nav-ref'
@@ -31,21 +32,43 @@ import {
     useColorScheme,
     View
 } from 'react-native'
-import { ActivityIndicator, Appbar, Checkbox, Divider, FAB, Icon, Menu, Searchbar, TouchableRipple } from 'react-native-paper'
+import { ActivityIndicator, Appbar, FAB, Icon, Menu, Searchbar } from 'react-native-paper'
 
 const SCROLL_THRESHOLD = 10
 const APP_GREEN = '#25D366'
 const CHAT_DEBUG = true
+const API_BASE_URL = 'https://halabakk-web.nawaf-alhasosah.workers.dev'
+
+type ChatPreferenceKey =
+    | 'is_archived_chat'
+    | 'is_pinned_chat'
+
+const preferenceRequestKeys: Record<ChatPreferenceKey, string> = {
+    is_archived_chat: 'isArchived',
+    is_pinned_chat: 'isPinned',
+}
+
+async function patchChatAction(body: Record<string, unknown>) {
+    const response = await fetch(`${API_BASE_URL}/api/chats`, {
+        method: 'PATCH',
+        headers: {
+            Cookie: authClient.getCookie() ?? '',
+            'Content-Type': 'application/json',
+        },
+        credentials: 'omit',
+        body: JSON.stringify(body),
+    })
+
+    if (!response.ok) {
+        throw new Error('Failed to update chat.')
+    }
+}
 
 function debugChatsPage(stage: string, payload: Record<string, unknown> = {}) {
     if (!CHAT_DEBUG) {
         return
     }
 
-    console.log(`[chat-debug][chats-index][${stage}]`, {
-        at: new Date().toISOString(),
-        ...payload,
-    })
 }
 
 function summarizeChatForDebug(chat: ChatItemType) {
@@ -62,80 +85,6 @@ function summarizeChatForDebug(chat: ChatItemType) {
         updatedAt: chat.updated_at instanceof Date
             ? chat.updated_at.toISOString()
             : String(chat.updated_at),
-    }
-}
-
-type ThemeColors = typeof Colors.light | typeof Colors.dark
-
-type MediaType = 'image' | 'video' | 'audio' | 'document' | 'location' | 'contact' | null
-type MessageStatus = 'sending' | 'sent' | 'delivered' | 'read' | 'error'
-
-const MessageStatusIcon = ({ status }: { status: MessageStatus }) => {
-    switch (status) {
-        case 'sending':
-            return <MaterialIcons name="schedule" size={14} color="#9ca3af" />
-        case 'sent':
-            return <MaterialIcons name="check" size={14} color="#9ca3af" />
-        case 'delivered':
-            return <MaterialIcons name="done-all" size={14} color="#9ca3af" />
-        case 'read':
-            return <MaterialIcons name="done-all" size={14} color={APP_GREEN} />
-        case 'error':
-            return <MaterialIcons name="error-outline" size={14} color="#ef4444" />
-        default:
-            return null
-    }
-}
-
-const MediaPreviewText = ({
-    mediaType,
-}: {
-    mediaType: string | null
-}) => {
-    if (!mediaType) return null
-
-    const getText = () => {
-        switch (mediaType) {
-            case 'image': return 'Photo'
-            case 'video': return 'Video'
-            case 'audio': return 'Voice message'
-            case 'document': return 'Document'
-            case 'location': return 'Location'
-            case 'contact': return 'Contact'
-            default: return null
-        }
-    }
-
-    const text = getText()
-    if (!text) return null
-
-    return <ThemedText style={styles.mediaPreviewText}>{text}</ThemedText>
-}
-
-const MediaTypeIcon = ({
-    mediaType,
-    size = 16,
-    color = '#9ca3af',
-}: {
-    mediaType: MediaType | undefined
-    size?: number
-    color?: string
-}) => {
-    switch (mediaType) {
-        case 'image':
-            return <MaterialIcons name="image" size={size} color={color} />
-        case 'video':
-            return <MaterialIcons name="videocam" size={size} color={color} />
-        case 'audio':
-            return <MaterialIcons name="mic" size={size} color={color} />
-        case 'document':
-            return <MaterialIcons name="description" size={size} color={color} />
-        case 'location':
-            return <MaterialIcons name="location-on" size={size} color={color} />
-        case 'contact':
-            return <MaterialIcons name="person" size={size} color={color} />
-        default:
-            return null
     }
 }
 
@@ -179,8 +128,6 @@ const createAppbarIcon = (
 }
 
 const CloseAppbarIcon = createAppbarIcon('close', 'CloseAppbarIcon')
-const DeleteAppbarIcon = createAppbarIcon('delete', 'DeleteAppbarIcon')
-const ReadAllAppbarIcon = createAppbarIcon('done-all', 'ReadAllAppbarIcon')
 const ArchiveAppbarIcon = createAppbarIcon('archive', 'ArchiveAppbarIcon')
 const PinAppbarIcon = createAppbarIcon('push-pin', 'PinAppbarIcon')
 
@@ -196,156 +143,11 @@ const toggleSelection = (currentSelection: Set<string>, chatId: string) => {
     return nextSelection
 }
 
-type ChatItemProps = {
-    item: ChatItemType
-    colors: ThemeColors
-    isSelected: boolean
-    isSelectionMode: boolean
-    onPress: (chatId: string) => void
-    onLongPress: (chatId: string) => void
-}
-
-const ChatItem = ({
-    item,
-    colors,
-    isSelected,
-    isSelectionMode,
-    onPress,
-    onLongPress,
-}: ChatItemProps) => {
-    const avatarBg = colors.card
-    const avatarText = colors.text
-
-    const hasMedia = !!item.last_message_media
-    const hasText = !!item.last_message_context && !hasMedia
-
-    const messageStatus: MessageStatus = item.last_message_sender_is_me
-        ? item.last_message_is_read_by_recipient
-            ? 'read'
-            : 'delivered'
-        : 'received' as MessageStatus
-
-    const displayName = item.display_name ?? item.contact_phone ?? 'Unknown'
-    const chatTime = useMemo(
-        () => new Date(item.updated_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
-        [item.updated_at]
-    )
-
-    useEffect(() => {
-        debugChatsPage('chat-item-rendered', {
-            chat: summarizeChatForDebug(item),
-            isSelected,
-            isSelectionMode,
-            hasMedia,
-            hasText,
-            messageStatus,
-        })
-    }, [hasMedia, hasText, isSelected, isSelectionMode, item, messageStatus])
-
-    return (
-        <TouchableRipple
-            onPress={() => {
-                debugChatsPage('chat-item-press', {
-                    chat: summarizeChatForDebug(item),
-                    isSelectionMode,
-                })
-                onPress(item.chat_id)
-            }}
-            onLongPress={() => {
-                debugChatsPage('chat-item-long-press', {
-                    chat: summarizeChatForDebug(item),
-                    isSelectionMode,
-                })
-                onLongPress(item.chat_id)
-            }}
-            style={[styles.chatRipple, { backgroundColor: isSelected ? colors.card : 'transparent' }]}>
-            <View style={styles.chatItem}>
-                {isSelectionMode && (
-                    <View pointerEvents="none" style={styles.selectionCheckbox}>
-                        <Checkbox.Android
-                            status={isSelected ? 'checked' : 'unchecked'}
-                            color={APP_GREEN}
-                            uncheckedColor={colors.textSecondary}
-                        />
-                    </View>
-                )}
-
-                <ChatAvatar
-                    userId={item.chat_type === 'group' ? item.chat_id : item.recipient_user_id}
-                    imageUrl={item.avatar}
-                    displayName={displayName}
-                    style={styles.avatar}
-                    iconColor={avatarText}
-                    backgroundColor={avatarBg}
-                    textColor={avatarText}
-                    chatType={item.chat_type}
-                />
-
-                <View style={styles.chatBody}>
-                    <View style={styles.chatTop}>
-                        <View style={styles.chatNameContainer}>
-                            <ThemedText style={[styles.chatName, { color: colors.text }]} numberOfLines={1}>
-                                {displayName}
-                            </ThemedText>
-                            {item.is_muted_chat_notifications && (
-                                <MaterialIcons
-                                    name="volume-off"
-                                    size={12}
-                                    color={colors.textSecondary}
-                                    style={styles.mutedIcon}
-                                />
-                            )}
-                        </View>
-                        <ThemedText style={[styles.chatTime, { color: item.is_unreaded_chat ? APP_GREEN : colors.textSecondary }]}>
-                            {chatTime}
-                        </ThemedText>
-                    </View>
-
-                    <View style={styles.chatBottom}>
-                        <View style={styles.previewContainer}>
-                            {hasMedia && (
-                                <MediaTypeIcon
-                                    mediaType={item.last_message_media as MediaType}
-                                    size={16}
-                                    color={colors.textSecondary}
-                                />
-                            )}
-                            {hasText && item.last_message_sender_is_me && (
-                                <MessageStatusIcon status={messageStatus} />
-                            )}
-                            <ThemedText style={[styles.chatPreview, { color: colors.textSecondary }]} numberOfLines={1}>
-                                {hasMedia
-                                    ? <MediaPreviewText mediaType={item.last_message_media} />
-                                    : item.last_message_context
-                                }
-                            </ThemedText>
-                        </View>
-
-                        <View style={styles.rightContainer}>
-                            {!hasText && !hasMedia && item.last_message_sender_is_me && (
-                                <MessageStatusIcon status={messageStatus} />
-                            )}
-                            {item.unreaded_messages_length > 0 && (
-                                <View style={styles.badge}>
-                                    <ThemedText style={[styles.badgeText, { color: colors.background }]}>
-                                        {item.unreaded_messages_length}
-                                    </ThemedText>
-                                </View>
-                            )}
-                        </View>
-                    </View>
-                </View>
-            </View>
-        </TouchableRipple>
-    )
-}
-
-const MemoChatItem = React.memo(ChatItem)
-
 const ChatsPage = () => {
     const { data: session } = authClient.useSession();
     const chats = useActiveChatStore((state) => state.chats);
     const chatsLoading = useActiveChatStore((state) => state.chatsLoading);
+    const upsertChat = useActiveChatStore((state) => state.upsertChat);
     const realtimeStatus = useRealtimeStore((state) => state.status);
     const { setHasSession } = useAuthStore();
 
@@ -359,6 +161,7 @@ const ChatsPage = () => {
     const [searchQuery, setSearchQuery] = useState('')
     const [appbarBg, setAppbarBg] = useState<string>(colors.background)
     const [selectedChatIds, setSelectedChatIds] = useState<Set<string>>(new Set())
+    const [isUpdatingSelection, setIsUpdatingSelection] = useState(false)
     const [visible, setVisible] = useState(false);
     const [logoutDialogVisible, setLogoutDialogVisible] = useState(false);
     const ignoreNextChatPressRef = useRef<string | null>(null);
@@ -405,12 +208,75 @@ const ChatsPage = () => {
         setAppbarBg(isScrolled ? colors.card : colors.background)
     }, [colors.background, colors.card])
 
-    const clearSelection = () => {
+    const clearSelection = useCallback(() => {
         debugChatsPage('selection-clear', {
             selectedChatIds: Array.from(selectedChatIds),
         })
         setSelectedChatIds(new Set())
-    }
+    }, [selectedChatIds])
+
+    const setSelectedChatPreference = useCallback(async (
+        key: ChatPreferenceKey,
+        getValue: (chat: ChatItemType, selectedChats: ChatItemType[]) => boolean
+    ) => {
+        if (selectedChatIds.size === 0 || isUpdatingSelection) {
+            return
+        }
+
+        const selectedIds = [...selectedChatIds]
+        const selectedChats = useActiveChatStore
+            .getState()
+            .chats
+            .filter((chat) => selectedIds.includes(chat.chat_id))
+
+        if (selectedChats.length === 0) {
+            clearSelection()
+            return
+        }
+
+        const previousChats = selectedChats
+        const nextChats = selectedChats.map((chat) => ({
+            ...chat,
+            [key]: getValue(chat, selectedChats),
+        }))
+
+        setIsUpdatingSelection(true)
+        nextChats.forEach(upsertChat)
+        void upsertDbChats(nextChats).catch((error) => {
+            console.log('Failed to persist chat preference locally:', error)
+        })
+
+        try {
+            await Promise.all(
+                nextChats.map((chat) =>
+                    patchChatAction({
+                        chatId: chat.chat_id,
+                        [preferenceRequestKeys[key]]: chat[key],
+                    })
+                )
+            )
+            clearSelection()
+        } catch (error) {
+            previousChats.forEach(upsertChat)
+            void upsertDbChats(previousChats).catch((persistError) => {
+                console.log('Failed to restore chat preference locally:', persistError)
+            })
+            console.log('Failed to update selected chats:', error)
+        } finally {
+            setIsUpdatingSelection(false)
+        }
+    }, [clearSelection, isUpdatingSelection, selectedChatIds, upsertChat])
+
+    const handleArchiveSelectedChats = useCallback(() => {
+        void setSelectedChatPreference('is_archived_chat', () => true)
+    }, [setSelectedChatPreference])
+
+    const handlePinSelectedChats = useCallback(() => {
+        const selectedChats = chats.filter((chat) => selectedChatIds.has(chat.chat_id))
+        const shouldPin = selectedChats.some((chat) => !chat.is_pinned_chat)
+
+        void setSelectedChatPreference('is_pinned_chat', () => shouldPin)
+    }, [chats, selectedChatIds, setSelectedChatPreference])
 
     const primeMessagesFromCache = useCallback((chatId: string) => {
         const currentUserId = session?.user.id;
@@ -519,12 +385,12 @@ const ChatsPage = () => {
             }
 
             await deleteToken();
+            setHasSession(false);
             useNotificationStore.getState().setExpoPushToken('');
             useActiveChatStore.getState().reset();
 
             await authClient.signOut();
-            setHasSession(false);
-            authClient.getSession();
+            void authClient.getSession();
         } catch (error) {
             debugChatsPage('logout-confirm-error', { error });
             console.log(error);
@@ -567,7 +433,7 @@ const ChatsPage = () => {
                 <>
                     <ThemedText style={[styles.sectionLabel, { color: colors.textSecondary }]}>Pinned</ThemedText>
                     {pinnedChats.map((item) => (
-                        <MemoChatItem
+                        <MemoChatListItem
                             key={item.chat_id}
                             item={item}
                             colors={colors}
@@ -596,7 +462,7 @@ const ChatsPage = () => {
         })
 
         return (
-            <MemoChatItem
+            <MemoChatListItem
                 item={item}
                 colors={colors}
                 isSelected={selectedChatIds.has(item.chat_id)}
@@ -706,16 +572,14 @@ const ChatsPage = () => {
                             titleStyle={styles.selectionCount}
                         />
                         <Appbar.Action
-                            icon={ReadAllAppbarIcon}
-                        />
-                        <Appbar.Action
-                            icon={DeleteAppbarIcon}
-                        />
-                        <Appbar.Action
                             icon={ArchiveAppbarIcon}
+                            disabled={isUpdatingSelection}
+                            onPress={handleArchiveSelectedChats}
                         />
                         <Appbar.Action
                             icon={PinAppbarIcon}
+                            disabled={isUpdatingSelection}
+                            onPress={handlePinSelectedChats}
                         />
                     </>
                 ) : isSearchFocus ? (
@@ -752,10 +616,6 @@ const ChatsPage = () => {
                                 debugChatsPage('menu-open', { userId: session?.user.id })
                                 openMenu()
                             }} />}>
-                            <Menu.Item onPress={() => { }} title="New group" leadingIcon={'account-multiple-plus-outline'} />
-                            <Menu.Item onPress={() => { }} title="Starred messages" leadingIcon={'star-outline'} />
-                            <Menu.Item onPress={() => { }} title="Mar all as read" leadingIcon={'message-badge-outline'} />
-                            <Divider />
                             <Menu.Item onPress={handleLogout} title="Logout" leadingIcon={'logout'} />
                         </Menu>
                     </>
@@ -846,98 +706,6 @@ const styles = StyleSheet.create({
         textTransform: 'uppercase',
         letterSpacing: 0.4,
     },
-    chatRipple: {
-        borderRadius: 18,
-        marginHorizontal: 8,
-        overflow: 'hidden',
-    },
-    chatItem: {
-        flexDirection: 'row',
-        alignItems: 'center',
-        paddingLeft: 8,
-        paddingRight: 16,
-        paddingVertical: 8,
-    },
-    selectionCheckbox: {
-        marginRight: 2,
-    },
-    avatar: {
-        width: 50,
-        height: 50,
-        borderRadius: 25,
-        alignItems: 'center',
-        justifyContent: 'center',
-        marginRight: 12,
-    },
-    avatarText: {
-        color: '#fff',
-        fontSize: 18,
-        fontWeight: '500',
-    },
-    chatBody: {
-        flex: 1,
-        paddingVertical: 4,
-    },
-    chatTop: {
-        flexDirection: 'row',
-        justifyContent: 'space-between',
-        alignItems: 'center',
-        marginBottom: 4,
-    },
-    chatNameContainer: {
-        flex: 1,
-        flexDirection: 'row',
-        alignItems: 'center',
-        marginRight: 8,
-    },
-    chatName: {
-        fontSize: 16,
-        fontWeight: '500',
-        flex: 1,
-    },
-    mutedIcon: {
-        marginLeft: 4,
-    },
-    chatTime: {
-        fontSize: 12,
-    },
-    chatBottom: {
-        flexDirection: 'row',
-        justifyContent: 'space-between',
-        alignItems: 'center',
-    },
-    previewContainer: {
-        flex: 1,
-        flexDirection: 'row',
-        alignItems: 'center',
-        marginRight: 8,
-        gap: 4,
-    },
-    mediaPreviewText: {
-        marginLeft: 4,
-    },
-    chatPreview: {
-        fontSize: 14,
-        flex: 1,
-    },
-    rightContainer: {
-        flexDirection: 'row',
-        alignItems: 'center',
-        gap: 4,
-    },
-    badge: {
-        backgroundColor: APP_GREEN,
-        borderRadius: 10,
-        minWidth: 20,
-        height: 20,
-        alignItems: 'center',
-        justifyContent: 'center',
-        paddingHorizontal: 5,
-    },
-    badgeText: {
-        fontSize: 11,
-        fontWeight: '700',
-    },
     emptyContainer: {
         flexDirection: 'row',
         alignItems: 'flex-start',
@@ -954,5 +722,5 @@ const styles = StyleSheet.create({
         right: 0,
         bottom: 0,
         backgroundColor: '#25D366'
-    },
+    }
 })

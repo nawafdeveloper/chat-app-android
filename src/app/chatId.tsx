@@ -7,40 +7,166 @@ import Bubble from '@/components/message-bubble';
 import { TiledBackground } from '@/components/tailed-wallpaper';
 import { ThemedText } from '@/components/themed-text';
 import { ThemedView } from '@/components/themed-view';
+import { ForwardIcon } from '@/components/ui/file-icons';
 import VideoPreviewBeforeSent from '@/components/video-preview-before-sent';
 import { Colors } from '@/constants/theme';
+import { useCryptoKeys } from '@/context/crypto';
+import { useIsTablet } from '@/context/screen-checking-context';
 import { useChatMessages } from '@/hooks/use-chat-realtime';
+import { useForwardMessages } from '@/hooks/use-forward-messages';
+import { useMessageActions } from '@/hooks/use-message-actions';
 import { useSendChatMessage } from '@/hooks/use-send-chat-message';
 import { authClient } from '@/lib/auth-client';
-import { areDirectChatIdsEquivalent } from '@/lib/chat-utils';
+import { buildDirectChatId, decryptMessageBatch } from '@/lib/chat-e2ee';
+import { areDirectChatIdsEquivalent, normalizeMessage } from '@/lib/chat-utils';
+import { findContactByPhone, findContactByUserId, getContactDisplayName } from '@/lib/contact-display';
 import { markDbChatRead } from '@/lib/upsert-db-chats';
 import { useContactPreviewBeforeSentStore } from '@/store/contact-preview-before-sent';
 import { useFilePreviewBeforeSentStore } from '@/store/file-preview-before-sent';
 import { useImagePreviewBeforeSentStore } from '@/store/image-preview-before-sent';
 import { rightNavRef } from '@/store/right-nav-ref';
 import { useActiveChatStore } from '@/store/use-active-chat-store';
+import { useContactDirectoryStore } from '@/store/use-contact-directory-store';
 import { useRealtimeStore } from '@/store/use-realtime-store';
 import { useVideoPreviewBeforeSentStore } from '@/store/video-preview-before-sent';
+import type { ChatItemType } from '@/types/chats.type';
+import type { Contact } from '@/types/contacts.type';
 import type { Message } from '@/types/messages';
 import { useFocusEffect, useIsFocused, useRoute } from '@react-navigation/native';
 import * as Haptics from 'expo-haptics';
 import { router, useLocalSearchParams } from 'expo-router';
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { FlatList, Keyboard, KeyboardAvoidingView, Platform, Pressable, StyleSheet, TextInput, useColorScheme } from 'react-native';
-import { ActivityIndicator, Appbar, Icon, TouchableRipple } from 'react-native-paper';
+import { FlatList, Keyboard, KeyboardAvoidingView, Modal, NativeScrollEvent, NativeSyntheticEvent, Platform, Pressable, StyleSheet, TextInput, useColorScheme, type FlatListProps } from 'react-native';
+import { ActivityIndicator, Appbar, Icon, IconButton, TouchableRipple } from 'react-native-paper';
+import Animated, { ZoomIn, ZoomOut } from 'react-native-reanimated';
 
 const EMPTY_MESSAGES: Message[] = [];
 const CHAT_DEBUG = true;
+
+type MessageListItem =
+    | {
+        type: "message";
+        id: string;
+        message: Message;
+    }
+    | {
+        type: "date";
+        id: string;
+        label: string;
+    };
+
+type MessageGroupMeta = {
+    showTail: boolean;
+    isGroupedWithPrevious: boolean;
+    isGroupedWithNext: boolean;
+};
+
+type RawMessage = Omit<Message, "created_at" | "updated_at"> & {
+    created_at: string | Date;
+    updated_at: string | Date;
+};
+
+function sortPinnedMessages(messages: Message[]) {
+    return [...messages].sort(
+        (left, right) => right.created_at.getTime() - left.created_at.getTime()
+    );
+}
+
+function isMessageFlaggedByUser(
+    message: Message | null | undefined,
+    userId: string | null | undefined,
+    flag: "pin" | "star"
+) {
+    if (!message || !userId) {
+        return false;
+    }
+
+    const userIds =
+        flag === "pin" ? message.user_ids_pin_it : message.user_ids_star_it;
+
+    return userIds?.includes(userId) ?? false;
+}
+
+function buildForwardTargetChat({
+    contact,
+    currentPhone,
+    currentUserId,
+    existingChat,
+}: {
+    contact: Contact;
+    currentPhone: string;
+    currentUserId: string;
+    existingChat?: ChatItemType | null;
+}): ChatItemType {
+    const chatId = buildDirectChatId(currentPhone, contact.contact_number);
+
+    return {
+        chat_id: chatId,
+        chat_type: "single",
+        avatar: contact.contact_avatar ?? existingChat?.avatar ?? "",
+        display_name: getContactDisplayName(contact) || contact.contact_number,
+        recipient_user_id: contact.linked_user_id,
+        recipient_public_key: contact.linked_user_public_key ?? null,
+        contact_phone: contact.contact_number,
+        recipient_last_seen: existingChat?.recipient_last_seen ?? null,
+        recipient_who_can_see_last_seen:
+            existingChat?.recipient_who_can_see_last_seen ?? null,
+        recipient_last_seen_visible:
+            existingChat?.recipient_last_seen_visible ?? null,
+        recipient_who_can_see_status:
+            existingChat?.recipient_who_can_see_status ?? null,
+        recipient_who_can_see_profile_picture:
+            existingChat?.recipient_who_can_see_profile_picture ?? null,
+        recipient_profile_picture_visible:
+            existingChat?.recipient_profile_picture_visible ?? null,
+        recipient_about_ciphertext:
+            existingChat?.recipient_about_ciphertext ?? null,
+        recipient_about_encrypted_aes_key:
+            existingChat?.recipient_about_encrypted_aes_key ?? null,
+        recipient_about_iv: existingChat?.recipient_about_iv ?? null,
+        recipient_who_can_see_about:
+            existingChat?.recipient_who_can_see_about ?? null,
+        recipient_about_visible: existingChat?.recipient_about_visible ?? null,
+        stored_contact: existingChat?.stored_contact ?? null,
+        is_provisional: !existingChat,
+        last_message_id: existingChat?.last_message_id ?? null,
+        encrypted_preview_ciphertext:
+            existingChat?.encrypted_preview_ciphertext ?? null,
+        encrypted_preview_iv: existingChat?.encrypted_preview_iv ?? null,
+        encrypted_preview_algorithm:
+            existingChat?.encrypted_preview_algorithm ?? null,
+        chat_recipient_keys: existingChat?.chat_recipient_keys ?? null,
+        last_message_context: existingChat?.last_message_context ?? "",
+        last_message_media: existingChat?.last_message_media ?? null,
+        last_message_sender_is_me:
+            existingChat?.last_message_sender_is_me ?? false,
+        last_message_sender_nickname:
+            existingChat?.last_message_sender_nickname ?? currentUserId,
+        last_message_is_read_by_recipient:
+            existingChat?.last_message_is_read_by_recipient ?? null,
+        last_message_read_by_user_ids:
+            existingChat?.last_message_read_by_user_ids ?? null,
+        last_message_recipient_user_ids:
+            existingChat?.last_message_recipient_user_ids ?? null,
+        is_unreaded_chat: existingChat?.is_unreaded_chat ?? false,
+        unreaded_messages_length:
+            existingChat?.unreaded_messages_length ?? 0,
+        is_archived_chat: existingChat?.is_archived_chat ?? false,
+        is_muted_chat_notifications:
+            existingChat?.is_muted_chat_notifications ?? false,
+        is_pinned_chat: existingChat?.is_pinned_chat ?? false,
+        is_favourite_chat: existingChat?.is_favourite_chat ?? false,
+        is_blocked_chat: existingChat?.is_blocked_chat ?? false,
+        created_at: existingChat?.created_at ?? new Date(),
+        updated_at: existingChat?.updated_at ?? new Date(),
+    };
+}
 
 function debugChatId(stage: string, payload: Record<string, unknown> = {}) {
     if (!CHAT_DEBUG) {
         return;
     }
 
-    console.log(`[chat-debug][chatId][${stage}]`, {
-        at: new Date().toISOString(),
-        ...payload,
-    });
 }
 
 function summarizeMessageForDebug(message: Message) {
@@ -72,6 +198,200 @@ function resolveCanonicalChatId(
     );
 }
 
+function getPinnedMessageLabel(message: Message) {
+    switch (message.attached_media) {
+        case "photo":
+            return "Photo";
+        case "video":
+            return "Video";
+        case "voice":
+            return "Voice message";
+        case "file":
+            return message.media_file_name ?? "File";
+        case "contact":
+            return message.contact?.contact_name ?? "Contact";
+        case "location":
+            return message.location?.name ?? message.location?.formatted_address ?? "Location";
+        default:
+            break;
+    }
+
+    const textContent = message.message_text_content?.trim();
+    if (textContent) {
+        return textContent;
+    }
+
+    if (message.poll?.poll_question) {
+        return message.poll.poll_question;
+    }
+
+    if (message.event && "event_name" in message.event) {
+        return message.event.event_name;
+    }
+
+    return "Pinned message";
+}
+
+function getPinnedMessageIcon(message: Message) {
+    switch (message.attached_media) {
+        case 'file': return 'paperclip';
+        case 'video': return 'video-outline';
+        case 'photo': return 'image-outline';
+        case 'voice': return 'microphone-outline';
+        case 'contact': return 'account-box-outline';
+        case 'location': return 'map-marker-outline';
+        default: return null;
+    }
+}
+
+function getLocalDateKey(date: Date) {
+    const year = date.getFullYear();
+    const month = `${date.getMonth() + 1}`.padStart(2, "0");
+    const day = `${date.getDate()}`.padStart(2, "0");
+
+    return `${year}-${month}-${day}`;
+}
+
+function formatDateSeparator(date: Date) {
+    const today = new Date();
+    const yesterday = new Date();
+    yesterday.setDate(today.getDate() - 1);
+
+    if (getLocalDateKey(date) === getLocalDateKey(today)) {
+        return "Today";
+    }
+
+    if (getLocalDateKey(date) === getLocalDateKey(yesterday)) {
+        return "Yesterday";
+    }
+
+    return date.toLocaleDateString(undefined, {
+        day: "numeric",
+        month: "long",
+        year: date.getFullYear() === today.getFullYear() ? undefined : "numeric",
+    });
+}
+
+function buildMessageListItems(messages: Message[]): MessageListItem[] {
+    const newestFirstMessages = [...messages].reverse();
+    const items: MessageListItem[] = [];
+
+    newestFirstMessages.forEach((message, index) => {
+        items.push({
+            type: "message",
+            id: message.message_id,
+            message,
+        });
+
+        const nextOlderMessage = newestFirstMessages[index + 1];
+        const isTopOfDateGroup =
+            !nextOlderMessage ||
+            getLocalDateKey(nextOlderMessage.created_at) !==
+                getLocalDateKey(message.created_at);
+
+        if (isTopOfDateGroup) {
+            const dateKey = getLocalDateKey(message.created_at);
+
+            items.push({
+                type: "date",
+                id: `date-${dateKey}`,
+                label: formatDateSeparator(message.created_at),
+            });
+        }
+    });
+
+    return items;
+}
+
+function getGroupSystemEventLabel(
+    event: Extract<NonNullable<Message["event"]>, { kind: "group-system" }>,
+    currentUserId: string | null
+) {
+    const actorName =
+        event.actor_user_id === currentUserId
+            ? "You"
+            : event.actor_name?.trim() || "Someone";
+    const targetNames = event.target_names?.filter(Boolean).join(", ");
+
+    switch (event.action) {
+        case "member-left":
+            return `${actorName} left`;
+        case "member-added":
+            return targetNames
+                ? `${actorName} added ${targetNames}`
+                : `${actorName} added a member`;
+        case "name-changed":
+            return event.next_name
+                ? `${actorName} changed the group name to ${event.next_name}`
+                : `${actorName} changed the group name`;
+        case "image-changed":
+            return `${actorName} changed the group photo`;
+        default:
+            return "Group updated";
+    }
+}
+
+function getMessageEventLabel(message: Message, currentUserId: string | null) {
+    const event = message.event;
+
+    if (!event) {
+        return null;
+    }
+
+    if ("kind" in event && event.kind === "group-system") {
+        return getGroupSystemEventLabel(event, currentUserId);
+    }
+
+    if ("event_name" in event) {
+        return event.event_name;
+    }
+
+    return "Event";
+}
+
+function canGroupMessage(message: Message) {
+    return !getMessageEventLabel(message, null);
+}
+
+function areMessagesContinuousFromSameSender(
+    left: Message | undefined,
+    right: Message | undefined
+) {
+    return Boolean(
+        left &&
+        right &&
+        canGroupMessage(left) &&
+        canGroupMessage(right) &&
+        left.sender_user_id === right.sender_user_id &&
+        getLocalDateKey(left.created_at) === getLocalDateKey(right.created_at)
+    );
+}
+
+function buildMessageGroupMetaById(messages: Message[]) {
+    const metaById = new Map<string, MessageGroupMeta>();
+
+    messages.forEach((message, index) => {
+        const previousMessage = messages[index - 1];
+        const nextMessage = messages[index + 1];
+        const isGroupedWithPrevious = areMessagesContinuousFromSameSender(
+            previousMessage,
+            message
+        );
+        const isGroupedWithNext = areMessagesContinuousFromSameSender(
+            message,
+            nextMessage
+        );
+
+        metaById.set(message.message_id, {
+            showTail: !isGroupedWithPrevious,
+            isGroupedWithPrevious,
+            isGroupedWithNext,
+        });
+    });
+
+    return metaById;
+}
+
 function hasRenderableMessage(message: Message) {
     return Boolean(
         message.message_text_content?.trim() ||
@@ -85,11 +405,13 @@ function hasRenderableMessage(message: Message) {
 
 const ChatId = () => {
     const { data: session } = authClient.useSession()
-    const listRef = useRef<FlatList<Message>>(null);
+    const listRef = useRef<FlatList<MessageListItem>>(null);
+    const { isReady } = useCryptoKeys();
     const inputRef = useRef<TextInput>(null);
     const scheme = useColorScheme();
     const isDark = scheme === 'dark';
     const colors = Colors[scheme === 'unspecified' ? 'light' : scheme ?? 'light']
+    const isTablet = useIsTablet();
     const params = useLocalSearchParams<{ chatId?: string | string[] }>();
     const navigationRoute = useRoute();
     const nativeChatId = (navigationRoute.params as { chatId?: string | string[] } | undefined)?.chatId;
@@ -102,17 +424,24 @@ const ChatId = () => {
     const { isVideoVisible } = useVideoPreviewBeforeSentStore();
     const { isFileVisible } = useFilePreviewBeforeSentStore();
     const { isContactVisible } = useContactPreviewBeforeSentStore();
+    const { starMessage, pinMessage, reactToMessage } = useMessageActions();
+    const { forwardMessages, isForwarding } = useForwardMessages();
 
     const selectedChatId = useActiveChatStore((state) => state.selectedChatId);
     const chats = useActiveChatStore((state) => state.chats);
+    const lastPinUpdate = useActiveChatStore((s) => s.lastPinUpdate);
     const setSelectedChatId = useActiveChatStore((state) => state.setSelectedChatId);
     const setReplyDraft = useActiveChatStore((state) => state.setReplyDraft);
     const clearReplyDraft = useActiveChatStore((state) => state.clearReplyDraft);
+    const upsertChat = useActiveChatStore((state) => state.upsertChat);
     const activeChatId = useMemo(
         () => resolveCanonicalChatId(routeChatId ?? selectedChatId, chats),
         [chats, routeChatId, selectedChatId]
     );
+    const contacts = useContactDirectoryStore((state) => state.contacts);
     const currentUserId = session?.user.id ?? null;
+    const currentPhone = (session?.user as { phoneNumber?: string | null } | undefined)
+        ?.phoneNumber ?? null;
     const { loadOlderMessages } = useChatMessages(activeChatId);
     const { retryMessage } = useSendChatMessage();
     const activeChat = useActiveChatStore((state) =>
@@ -126,6 +455,14 @@ const ChatId = () => {
             : EMPTY_MESSAGES
     );
     const visibleMessages = useMemo(() => [...messages].reverse(), [messages]);
+    const messageListItems = useMemo(
+        () => buildMessageListItems(messages),
+        [messages]
+    );
+    const messageGroupMetaById = useMemo(
+        () => buildMessageGroupMetaById(messages),
+        [messages]
+    );
     const olderMessagesLoading = useActiveChatStore((state) =>
         activeChatId
             ? state.olderMessagesLoadingByChatId[activeChatId] ?? false
@@ -149,10 +486,25 @@ const ChatId = () => {
     const [replyMediaUrl, setReplyMediaUrl] = useState('');
     const [keyboardOffset, setKeyboardOffset] = useState(-30);
     const [isReactionVisible, setIsReactionVisible] = useState(false);
+    const [pinnedMessages, setPinnedMessages] = useState<Message[]>([]);
+    const [activePinnedMessageId, setActivePinnedMessageId] = useState<
+        string | null
+    >(null);
+    const [showGoDownButton, setShowGoDownButton] = useState(false);
+    const [isForwardVisible, setIsForwardVisible] = useState(false);
+    const [selectedForwardContactIds, setSelectedForwardContactIds] = useState<Set<string>>(new Set());
+
     const selectedCount = selectedMessageIds.size;
     const selectionModeRef = useRef(selectionMode);
     const hasStartedMessageScrollRef = useRef(false);
     const lastReadReceiptKeyRef = useRef<string | null>(null);
+    const pinnedMessagesRef = useRef<Message[]>([]);
+    const activePinnedMessageIdRef = useRef<string | null>(null);
+    const pendingPinnedScrollMessageIdRef = useRef<string | null>(null);
+    const isLoadingPinnedScrollTargetRef = useRef(false);
+    const pinnedViewabilityConfigRef = useRef({
+        itemVisiblePercentThreshold: 55,
+    });
 
     const reactions = [
         { key: '1', label: '👍' },
@@ -162,6 +514,131 @@ const ChatId = () => {
         { key: '5', label: '😢' },
         { key: '6', label: '🙏' },
     ];
+
+    const activePinnedMessage = useMemo(() => {
+        if (pinnedMessages.length === 0) {
+            return null;
+        }
+
+        return (
+            pinnedMessages.find(
+                (message) => message.message_id === activePinnedMessageId
+            ) ?? pinnedMessages[0]
+        );
+    }, [activePinnedMessageId, pinnedMessages]);
+
+    const selectedMessage = messages.find((m) => selectedMessageIds.has(m.message_id));
+    const isSelectedMessageStarred = isMessageFlaggedByUser(
+        selectedMessage,
+        currentUserId,
+        "star"
+    );
+    const isSelectedMessagePinned = isMessageFlaggedByUser(
+        selectedMessage,
+        currentUserId,
+        "pin"
+    );
+
+    const activePinnedMessageIndex = useMemo(() => {
+        if (!activePinnedMessage) {
+            return -1;
+        }
+
+        return pinnedMessages.findIndex(
+            (message) => message.message_id === activePinnedMessage.message_id
+        );
+    }, [activePinnedMessage, pinnedMessages]);
+
+    const activePinnedMessageIcon = activePinnedMessage
+        ? getPinnedMessageIcon(activePinnedMessage)
+        : null;
+    const forwardableContacts = useMemo(
+        () =>
+            [...contacts].sort((left, right) =>
+                getContactDisplayName(left).localeCompare(
+                    getContactDisplayName(right)
+                )
+            ),
+        [contacts]
+    );
+
+    useEffect(() => {
+        pinnedMessagesRef.current = pinnedMessages;
+        setActivePinnedMessageId((current) => {
+            if (pinnedMessages.length === 0) {
+                return null;
+            }
+
+            return current && pinnedMessages.some((message) => message.message_id === current)
+                ? current
+                : pinnedMessages[0].message_id;
+        });
+    }, [pinnedMessages]);
+
+    useEffect(() => {
+        activePinnedMessageIdRef.current = activePinnedMessageId;
+    }, [activePinnedMessageId]);
+
+    useEffect(() => {
+        setPinnedMessages([]);
+        setActivePinnedMessageId(null);
+    }, [activeChatId]);
+
+    useEffect(() => {
+        if (!activeChatId || !currentUserId || !isReady) {
+            return;
+        }
+
+        let isCancelled = false;
+
+        const fetchPinnedMessages = async () => {
+            const response = await fetch(
+                `https://halabakk-web.nawaf-alhasosah.workers.dev/api/messages?chatRoomId=${encodeURIComponent(activeChatId)}&limit=100&pinnedOnly=true`,
+                {
+                    cache: "no-store",
+                    headers: {
+                        Cookie: authClient.getCookie() ?? "",
+                    },
+                    credentials: "omit",
+                }
+            );
+
+            if (!response.ok) {
+                return;
+            }
+
+            const payload = (await response.json()) as {
+                messages: RawMessage[];
+            };
+            const normalizedMessages = payload.messages.map(normalizeMessage);
+            const decryptedMessages = await decryptMessageBatch({
+                currentUserId,
+                messages: normalizedMessages,
+            });
+
+            if (!isCancelled) {
+                const nextPinnedMessages = sortPinnedMessages(
+                    decryptedMessages.filter(
+                        (message) =>
+                            isMessageFlaggedByUser(message, currentUserId, "pin")
+                    )
+                );
+                setPinnedMessages(nextPinnedMessages);
+                setActivePinnedMessageId(
+                    (current) =>
+                        current && nextPinnedMessages.some((message) => message.message_id === current)
+                            ? current
+                            : nextPinnedMessages[0]?.message_id ?? null
+                );
+            }
+        };
+
+        void fetchPinnedMessages();
+
+        return () => {
+            isCancelled = true;
+        };
+    }, [activeChatId, currentUserId, isReady, lastPinUpdate]);
 
     debugChatId('render', {
         routeChatId,
@@ -290,7 +767,6 @@ const ChatId = () => {
             useActiveChatStore.getState().markChatRead(activeChatId);
             void markDbChatRead(activeChatId).catch((error) => {
                 debugChatId('read-receipt-db-error', { activeChatId, error });
-                console.log('Failed to mark chat read locally:', error);
             });
             useRealtimeStore.getState().sendEvent({
                 type: 'MARK_READ',
@@ -436,6 +912,7 @@ const ChatId = () => {
         });
         selectionModeRef.current = false;
         setSelectionMode(false);
+        setIsReactionVisible(false);
         setSelectedMessageIds(new Set());
     }, [activeChatId, selectedMessageIds]);
 
@@ -451,6 +928,168 @@ const ChatId = () => {
 
         router.dismissAll();
     };
+
+    const setNextPinnedMessageAfter = useCallback((messageId: string) => {
+        const currentPinnedMessages = pinnedMessagesRef.current;
+        const currentPinnedIndex = currentPinnedMessages.findIndex(
+            (message) => message.message_id === messageId
+        );
+
+        if (currentPinnedIndex < 0) {
+            return;
+        }
+
+        const nextPinnedMessage =
+            currentPinnedMessages[currentPinnedIndex + 1] ??
+            currentPinnedMessages[currentPinnedIndex];
+
+        if (
+            nextPinnedMessage &&
+            activePinnedMessageIdRef.current !== nextPinnedMessage.message_id
+        ) {
+            setActivePinnedMessageId(nextPinnedMessage.message_id);
+        }
+    }, []);
+
+    const tryScrollToMessageId = useCallback((messageId: string) => {
+        const messageIndex = messageListItems.findIndex(
+            (item) => item.type === "message" && item.message.message_id === messageId
+        );
+
+        if (messageIndex < 0) {
+            return false;
+        }
+
+        try {
+            listRef.current?.scrollToIndex({
+                index: messageIndex,
+                animated: true,
+                viewPosition: 0.5,
+            });
+            return true;
+        } catch (error) {
+            debugChatId('pinned-scroll-to-index-error', {
+                activeChatId,
+                messageId,
+                messageIndex,
+                error,
+            });
+            return false;
+        }
+    }, [activeChatId, messageListItems]);
+
+    const loadOlderMessagesForPinnedScroll = useCallback(() => {
+        if (
+            !activeChatId ||
+            !hasOlderMessages ||
+            olderMessagesLoading ||
+            isLoadingPinnedScrollTargetRef.current
+        ) {
+            return;
+        }
+
+        isLoadingPinnedScrollTargetRef.current = true;
+        void loadOlderMessages(activeChatId).finally(() => {
+            isLoadingPinnedScrollTargetRef.current = false;
+        });
+    }, [activeChatId, hasOlderMessages, loadOlderMessages, olderMessagesLoading]);
+
+    const requestPinnedMessageScroll = useCallback((messageId: string) => {
+        pendingPinnedScrollMessageIdRef.current = messageId;
+        debugChatId('pinned-scroll-request', { activeChatId, messageId });
+
+        if (tryScrollToMessageId(messageId)) {
+            pendingPinnedScrollMessageIdRef.current = null;
+            window.setTimeout(() => setNextPinnedMessageAfter(messageId), 350);
+            return;
+        }
+
+        loadOlderMessagesForPinnedScroll();
+    }, [
+        activeChatId,
+        loadOlderMessagesForPinnedScroll,
+        setNextPinnedMessageAfter,
+        tryScrollToMessageId,
+    ]);
+
+    useEffect(() => {
+        const pendingMessageId = pendingPinnedScrollMessageIdRef.current;
+        if (!pendingMessageId) {
+            return;
+        }
+
+        if (tryScrollToMessageId(pendingMessageId)) {
+            pendingPinnedScrollMessageIdRef.current = null;
+            window.setTimeout(
+                () => setNextPinnedMessageAfter(pendingMessageId),
+                350
+            );
+            return;
+        }
+
+        loadOlderMessagesForPinnedScroll();
+    }, [
+        loadOlderMessagesForPinnedScroll,
+        setNextPinnedMessageAfter,
+        tryScrollToMessageId,
+    ]);
+
+    const handlePinnedPress = useCallback(() => {
+        if (!activePinnedMessage) {
+            return;
+        }
+
+        void Haptics.selectionAsync();
+        requestPinnedMessageScroll(activePinnedMessage.message_id);
+    }, [activePinnedMessage, requestPinnedMessageScroll]);
+
+    const handlePinnedScrollToIndexFailed = useCallback<
+        NonNullable<FlatListProps<MessageListItem>["onScrollToIndexFailed"]>
+    >((info) => {
+        const failedItem = messageListItems[info.index];
+        const pendingMessageId =
+            pendingPinnedScrollMessageIdRef.current ??
+            (failedItem?.type === "message" ? failedItem.message.message_id : null) ??
+            null;
+
+        if (!pendingMessageId) {
+            return;
+        }
+
+        pendingPinnedScrollMessageIdRef.current = pendingMessageId;
+        window.setTimeout(() => {
+            tryScrollToMessageId(pendingMessageId);
+        }, 250);
+    }, [messageListItems, tryScrollToMessageId]);
+
+    const handlePinnedViewableItemsChanged = useRef<
+        NonNullable<FlatListProps<MessageListItem>["onViewableItemsChanged"]>
+    >(({ viewableItems }) => {
+        const currentPinnedMessages = pinnedMessagesRef.current;
+        if (currentPinnedMessages.length === 0) {
+            return;
+        }
+
+        const visiblePinnedMessage = viewableItems
+            .map((viewableItem) => viewableItem.item)
+            .filter(
+                (item): item is Extract<MessageListItem, { type: "message" }> =>
+                    Boolean(item) && item.type === "message"
+            )
+            .map((item) => ({
+                message: item.message,
+                pinnedIndex: currentPinnedMessages.findIndex(
+                    (pinnedMessage) =>
+                        pinnedMessage.message_id === item.message.message_id
+                ),
+            }))
+            .filter(({ pinnedIndex }) => pinnedIndex >= 0)
+            .sort((left, right) => left.pinnedIndex - right.pinnedIndex)[0];
+
+        if (visiblePinnedMessage) {
+            setNextPinnedMessageAfter(visiblePinnedMessage.message.message_id);
+        }
+    }).current;
 
     const handleLoadOlderMessages = useCallback(() => {
         debugChatId('load-older-request', {
@@ -483,24 +1122,89 @@ const ChatId = () => {
         hasStartedMessageScrollRef.current = true;
     }, [activeChatId]);
 
-    const renderMessageItem = useCallback(({ item }: { item: Message }) => {
+    const handleScroll = useCallback(
+        (event: NativeSyntheticEvent<NativeScrollEvent>) => {
+            const offsetY = event.nativeEvent.contentOffset.y;
+            // In an inverted FlatList, offsetY > 150 means the user is viewing older messages (scrolled up)
+            setShowGoDownButton(offsetY > 150);
+            handleMessageScroll(); // keep existing scroll logic
+        },
+        [handleMessageScroll]
+    );
+
+    const scrollToBottom = useCallback(() => {
+        listRef.current?.scrollToOffset({ offset: 0, animated: true });
+    }, []);
+
+    const renderCenterBadge = useCallback(
+        (label: string) => (
+            <ThemedView style={styles.centerBadgeOuter}>
+                <ThemedView
+                    style={[
+                        styles.centerBadge,
+                        {
+                            backgroundColor:
+                                scheme === 'dark' ? '#13181C' : '#fff',
+                        },
+                    ]}
+                >
+                    <ThemedText
+                        style={[
+                            styles.centerBadgeText,
+                            { color: colors.textSecondary },
+                        ]}
+                    >
+                        {label}
+                    </ThemedText>
+                </ThemedView>
+            </ThemedView>
+        ),
+        [colors.textSecondary, scheme]
+    );
+
+    const renderMessageItem = useCallback(({ item }: { item: MessageListItem }) => {
+        if (item.type === "date") {
+            return renderCenterBadge(item.label);
+        }
+
+        const { message: rowMessage } = item;
+        const eventLabel = getMessageEventLabel(rowMessage, currentUserId);
+
+        if (eventLabel) {
+            return renderCenterBadge(eventLabel);
+        }
+
         debugChatId('render-message-item', {
             activeChatId,
-            message: summarizeMessageForDebug(item),
-            isSelected: selectedMessageIds.has(item.message_id),
+            message: summarizeMessageForDebug(rowMessage),
+            isSelected: selectedMessageIds.has(rowMessage.message_id),
         });
+        const groupMeta =
+            messageGroupMetaById.get(rowMessage.message_id) ?? {
+                showTail: true,
+                isGroupedWithPrevious: false,
+                isGroupedWithNext: false,
+            };
 
         return (
             <Bubble
-                message={item}
+                message={rowMessage}
                 currentUserId={currentUserId}
                 isDark={isDark}
-                isSelected={selectedMessageIds.has(item.message_id)}
+                showTail={groupMeta.showTail}
+                isGroupedWithPrevious={groupMeta.isGroupedWithPrevious}
+                isGroupedWithNext={groupMeta.isGroupedWithNext}
+                isSelected={selectedMessageIds.has(rowMessage.message_id)}
                 selectedCount={selectedCount}
                 onLongPress={handleLongPress}
                 onPress={handleBubblePress}
                 onRetryMessage={handleRetryMessage}
                 handleReply={handleReply}
+                isStarredByCurrentUser={isMessageFlaggedByUser(
+                    rowMessage,
+                    currentUserId,
+                    "star"
+                )}
             />
         );
     }, [
@@ -511,6 +1215,8 @@ const ChatId = () => {
         handleRetryMessage,
         handleReply,
         isDark,
+        messageGroupMetaById,
+        renderCenterBadge,
         selectedCount,
         selectedMessageIds,
     ]);
@@ -536,11 +1242,259 @@ const ChatId = () => {
     }
 
     const handleOpenProfile = () => {
-        debugChatId('open-profile', { activeChatId });
+        debugChatId('open-profile', {
+            activeChatId,
+            isTablet,
+            rightNavReady: rightNavRef.isReady(),
+        });
+
+        if (!activeChatId) {
+            return;
+        }
+
+        if (isTablet && rightNavRef.isReady()) {
+            rightNavRef.navigate('targetUserProfile', { chatId: activeChatId });
+            return;
+        }
+
         router.navigate({
             pathname: '/targetUserProfile',
             params: { chatId: activeChatId }
         })
+    };
+
+    const pressReply = () => {
+        const isGroupChat = activeChat?.chat_type === "group";
+        const senderGroupMember =
+            isGroupChat
+                ? activeChat?.group_members?.find(
+                    (member) => member.user_id === selectedMessage?.sender_user_id
+                ) ?? null
+                : null;
+        const senderContact =
+            findContactByUserId(contacts, selectedMessage?.sender_user_id) ??
+            findContactByPhone(contacts, senderGroupMember?.phone_number);
+        const senderDisplayName = senderContact
+            ? getContactDisplayName(senderContact)
+            : senderGroupMember?.name?.trim() || senderGroupMember?.phone_number || "You";
+        handleReply(
+            senderDisplayName,
+            selectedMessage?.message_text_content || null,
+            selectedMessage?.media_preview_url,
+            selectedMessage?.attached_media || null,
+            selectedMessage?.message_id || '',
+            selectedMessage?.sender_user_id || ''
+        );
+    };
+
+    const pressStarMessage = () => {
+        if (selectedMessageIds.size === 0) {
+            return;
+        }
+
+        const selectedMessages = messages.filter(m =>
+            selectedMessageIds.has(m.message_id)
+        );
+
+        const anyUnstarred = selectedMessages.some(m =>
+            !m.user_ids_star_it?.includes(currentUserId || '')
+        );
+
+        selectedMessages.forEach(message => {
+            void starMessage(message, anyUnstarred);
+        });
+    };
+
+    const pressPinMessage = () => {
+        if (!currentUserId || selectedMessageIds.size !== 1 || !selectedMessage) {
+            return;
+        }
+
+        const shouldPin = !isSelectedMessagePinned;
+
+        if (
+            shouldPin &&
+            !pinnedMessages.some(
+                (message) => message.message_id === selectedMessage.message_id
+            ) &&
+            pinnedMessages.length >= 2
+        ) {
+            return;
+        }
+
+        const previousPinnedMessages = pinnedMessages;
+        const nextPinnedMessages = shouldPin
+            ? sortPinnedMessages([
+                ...pinnedMessages.filter(
+                    (message) => message.message_id !== selectedMessage.message_id
+                ),
+                selectedMessage,
+            ])
+            : pinnedMessages.filter(
+                (message) => message.message_id !== selectedMessage.message_id
+            );
+
+        setPinnedMessages(nextPinnedMessages);
+
+        void pinMessage(selectedMessage, shouldPin).then((success) => {
+            if (!success) {
+                setPinnedMessages(previousPinnedMessages);
+            }
+        });
+    };
+
+    const pressReaction = (reactionEmoji: string) => {
+        if (selectedMessageIds.size !== 1 || !selectedMessage) {
+            return;
+        }
+
+        void Haptics.selectionAsync();
+        setIsReactionVisible(false);
+        selectionModeRef.current = false;
+        setSelectionMode(false);
+        setSelectedMessageIds(new Set());
+        void reactToMessage(selectedMessage, reactionEmoji);
+    };
+
+    const openForwardOverlay = () => {
+        if (selectedMessageIds.size === 0) {
+            return;
+        }
+
+        setIsReactionVisible(false);
+        setSelectedForwardContactIds(new Set());
+        setIsForwardVisible(true);
+    };
+
+    const closeForwardOverlay = () => {
+        if (isForwarding) {
+            return;
+        }
+
+        setIsForwardVisible(false);
+        setSelectedForwardContactIds(new Set());
+    };
+
+    const toggleForwardContact = (contact: Contact) => {
+        if (!contact.linked_user_id || !contact.linked_user_public_key) {
+            return;
+        }
+
+        setSelectedForwardContactIds((currentSelection) => {
+            const nextSelection = new Set(currentSelection);
+
+            if (nextSelection.has(contact.contact_id)) {
+                nextSelection.delete(contact.contact_id);
+            } else {
+                nextSelection.add(contact.contact_id);
+            }
+
+            return nextSelection;
+        });
+    };
+
+    const submitForwardMessages = async () => {
+        if (
+            !currentUserId ||
+            !currentPhone ||
+            selectedMessageIds.size === 0 ||
+            selectedForwardContactIds.size === 0
+        ) {
+            return;
+        }
+
+        const messagesToForward = messages.filter((message) =>
+            selectedMessageIds.has(message.message_id)
+        );
+        const targetContacts = contacts.filter(
+            (contact) =>
+                selectedForwardContactIds.has(contact.contact_id) &&
+                contact.linked_user_id &&
+                contact.linked_user_public_key
+        );
+        const targetChatIds = targetContacts.map((contact) => {
+            const chatId = buildDirectChatId(currentPhone, contact.contact_number);
+            const existingChat =
+                chats.find((chat) => chat.chat_id === chatId) ??
+                chats.find((chat) => areDirectChatIdsEquivalent(chat.chat_id, chatId)) ??
+                null;
+
+            upsertChat(
+                buildForwardTargetChat({
+                    contact,
+                    currentPhone,
+                    currentUserId,
+                    existingChat,
+                })
+            );
+
+            return chatId;
+        });
+
+        const didForward = await forwardMessages({
+            messages: messagesToForward,
+            targetChatIds,
+        });
+
+        if (didForward) {
+            setIsForwardVisible(false);
+            setSelectedForwardContactIds(new Set());
+            selectionModeRef.current = false;
+            setSelectionMode(false);
+            setSelectedMessageIds(new Set());
+        }
+    };
+
+    const renderForwardContact = ({ item }: { item: Contact }) => {
+        const isSelected = selectedForwardContactIds.has(item.contact_id);
+        const isDisabled = !item.linked_user_id || !item.linked_user_public_key;
+        const displayName = getContactDisplayName(item) || item.contact_number;
+
+        return (
+            <Pressable
+                disabled={isDisabled || isForwarding}
+                onPress={() => toggleForwardContact(item)}
+                style={({ pressed }) => [
+                    styles.forwardContactRow,
+                    {
+                        opacity: isDisabled ? 0.45 : pressed ? 0.75 : 1,
+                        backgroundColor: colors.background,
+                    },
+                ]}
+            >
+                <ChatAvatar
+                    userId={item.linked_user_id ?? item.contact_number}
+                    imageUrl={item.contact_avatar}
+                    displayName={displayName}
+                    contactPhone={item.contact_number}
+                    style={styles.forwardContactAvatar}
+                    iconColor={colors.text}
+                    backgroundColor={colors.card}
+                    textColor={colors.text}
+                    chatType="single"
+                />
+                <ThemedView style={styles.forwardContactTextContainer}>
+                    <ThemedText numberOfLines={1} style={styles.forwardContactName}>
+                        {displayName}
+                    </ThemedText>
+                    <ThemedText
+                        numberOfLines={1}
+                        style={[styles.forwardContactPhone, { color: colors.textSecondary }]}
+                    >
+                        {isDisabled ? "Unavailable" : item.contact_number}
+                    </ThemedText>
+                </ThemedView>
+                <Icon
+                    source={
+                        isSelected
+                            ? "checkbox-marked-circle"
+                            : "checkbox-blank-circle-outline"
+                    }
+                    color={isSelected ? "#25D366" : colors.textSecondary}
+                    size={26}
+                />
+            </Pressable>
+        );
     };
 
     return (
@@ -560,13 +1514,20 @@ const ChatId = () => {
                     <>
                         <Appbar.BackAction onPress={handleCancelSelectionMode} />
                         <Appbar.Content title={<ThemedText>{selectedMessageIds.size}</ThemedText>} />
-                        <Appbar.Action icon="arrow-right-top" onPress={() => { }} />
-                        <Appbar.Action icon="star-outline" onPress={() => { }} />
+                        <Appbar.Action icon={() => <ForwardIcon color={colors.text} size={24} />} onPress={openForwardOverlay} />
                         {selectedMessageIds.size < 2 && (
                             <>
-                                <Appbar.Action icon="pin-outline" onPress={() => { }} />
-                                <Appbar.Action icon="emoticon-outline" onPress={toggleReactionContainer} />
-                                <Appbar.Action icon="arrow-left-top" onPress={() => { }} /></>
+                                <Appbar.Action icon={isSelectedMessageStarred ? "star" : "star-outline"} onPress={pressStarMessage} color={colors.text} />
+                                {(isSelectedMessagePinned || pinnedMessages.length < 2) && (
+                                    <Appbar.Action
+                                        icon={isSelectedMessagePinned ? "pin-off-outline" : "pin-outline"}
+                                        onPress={pressPinMessage}
+                                        color={colors.text}
+                                    />
+                                )}
+                                <Appbar.Action icon="emoticon-outline" onPress={toggleReactionContainer} color={colors.text} />
+                                <Appbar.Action icon="arrow-u-left-top" onPress={pressReply} color={colors.text} />
+                            </>
                         )}
                     </>
                 ) : (
@@ -574,7 +1535,12 @@ const ChatId = () => {
                         <Appbar.BackAction onPress={handleExitFromChat} />
                         <Appbar.Content
                             title={
-                                <TouchableRipple onPress={handleOpenProfile}>
+                                <TouchableRipple
+                                    key={activeChat?.chat_id}
+                                    rippleColor={colors.textSecondary + '33'}
+                                    underlayColor={colors.textSecondary + '22'}
+                                    background={{ type: 'ripple', color: colors.textSecondary + '33', foreground: true }}
+                                    onPress={handleOpenProfile}>
                                     <ThemedView style={styles.profileContainer}>
                                         <ChatAvatar
                                             userId={
@@ -601,31 +1567,146 @@ const ChatId = () => {
                                 <ActivityIndicator size="small" color={avatarTint} />
                             </ThemedView>
                         )}
-                        <Appbar.Action icon="dots-vertical" onPress={() => { }} />
                     </>
                 )}
             </Appbar.Header>
+            <Modal
+                animationType="slide"
+                visible={isForwardVisible}
+                onRequestClose={closeForwardOverlay}
+            >
+                <ThemedView style={[styles.forwardOverlay, { backgroundColor: colors.background }]}>
+                    <Appbar.Header
+                        style={[
+                            styles.forwardHeader,
+                            {
+                                backgroundColor: colors.background,
+                                borderBottomColor: colors.indicator + '33',
+                            },
+                        ]}
+                    >
+                        <Appbar.BackAction
+                            onPress={closeForwardOverlay}
+                            disabled={isForwarding}
+                        />
+                        <Appbar.Content
+                            title={
+                                <ThemedText>
+                                    Forward to
+                                    {selectedForwardContactIds.size > 0
+                                        ? ` ${selectedForwardContactIds.size}`
+                                        : ""}
+                                </ThemedText>
+                            }
+                        />
+                        {isForwarding ? (
+                            <ActivityIndicator size="small" color="#25D366" />
+                        ) : (
+                            <Appbar.Action
+                                icon="send"
+                                color={
+                                    selectedForwardContactIds.size > 0
+                                        ? "#25D366"
+                                        : colors.textSecondary
+                                }
+                                disabled={selectedForwardContactIds.size === 0}
+                                onPress={submitForwardMessages}
+                            />
+                        )}
+                    </Appbar.Header>
+                    <FlatList
+                        data={forwardableContacts}
+                        keyExtractor={(item) => item.contact_id}
+                        renderItem={renderForwardContact}
+                        contentContainerStyle={styles.forwardContactsContent}
+                        keyboardShouldPersistTaps="handled"
+                        ListEmptyComponent={
+                            <ThemedView style={styles.forwardEmptyContainer}>
+                                <ThemedText style={{ color: colors.textSecondary }}>
+                                    No contacts available
+                                </ThemedText>
+                            </ThemedView>
+                        }
+                    />
+                </ThemedView>
+            </Modal>
             {isReactionVisible && (
                 <ThemedView style={{ paddingVertical: 10, paddingHorizontal: 16, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-evenly' }}>
                     {reactions.map((r) => (
-                        <Pressable key={r.key}>
+                        <Pressable key={r.key} onPress={() => pressReaction(r.label)}>
                             <ThemedText style={{ fontSize: 24 }}>{r.label}</ThemedText>
                         </Pressable>
                     ))}
                 </ThemedView>
             )}
+            {activePinnedMessage && (
+                <Pressable
+                    accessibilityRole="button"
+                    onPress={handlePinnedPress}
+                    style={({ pressed }) => [
+                        styles.pinnedBanner,
+                        {
+                            backgroundColor: colors.background,
+                            borderBottomColor: colors.indicator + '33',
+                            opacity: pressed ? 0.78 : 1,
+                        },
+                    ]}
+                >
+                    <ThemedView style={styles.pinnedBannerContent}>
+                        <ThemedView style={styles.pinnedBarsContainer}>
+                            {pinnedMessages.map((message, index) => (
+                                <ThemedView
+                                    key={message.message_id}
+                                    style={[
+                                        styles.pinnedBar,
+                                        {
+                                            backgroundColor:
+                                                index === activePinnedMessageIndex
+                                                    ? '#25D366'
+                                                    : colors.textSecondary + '70',
+                                        },
+                                    ]}
+                                />
+                            ))}
+                        </ThemedView>
+                        <ThemedView style={[styles.pinnedPinIcon, { backgroundColor: colors.card }]}>
+                            <Icon
+                                source="pin-outline"
+                                color={colors.textSecondary}
+                                size={22}
+                            />
+                        </ThemedView>
+                        {activePinnedMessageIcon && (
+                            <Icon
+                                source={activePinnedMessageIcon}
+                                color={colors.textSecondary}
+                                size={18}
+                            />
+                        )}
+                        <ThemedText
+                            numberOfLines={1}
+                            style={[styles.pinnedMessageText, { color: colors.text }]}
+                        >
+                            {getPinnedMessageLabel(activePinnedMessage)}
+                        </ThemedText>
+                    </ThemedView>
+                </Pressable>
+            )}
             <TiledBackground source={isDark ? require('@/assets/bg-pattern-dark.png') : require('@/assets/bg-pattern-light.png')} style={styles.background}>
                 <FlatList
                     ref={listRef}
-                    data={visibleMessages}
-                    keyExtractor={(item) => item.message_id}
+                    data={messageListItems}
+                    keyExtractor={(item) => item.id}
                     renderItem={renderMessageItem}
                     inverted
                     contentContainerStyle={styles.messagesContent}
                     contentInsetAdjustmentBehavior="automatic"
                     keyboardShouldPersistTaps="handled"
-                    onScroll={handleMessageScroll}
+                    onScroll={handleScroll}
                     scrollEventThrottle={32}
+                    onScrollToIndexFailed={handlePinnedScrollToIndexFailed}
+                    onViewableItemsChanged={handlePinnedViewableItemsChanged}
+                    viewabilityConfig={pinnedViewabilityConfigRef.current}
                     initialNumToRender={18}
                     maxToRenderPerBatch={10}
                     updateCellsBatchingPeriod={32}
@@ -634,14 +1715,14 @@ const ChatId = () => {
                     onEndReached={handleLoadOlderMessages}
                     onEndReachedThreshold={0.25}
                     ListFooterComponent={
-                        <ThemedView style={{ backgroundColor: 'transparent', paddingHorizontal: 16, paddingVertical: 8 }}>
-                            <ThemedView style={{ flexDirection: 'row', alignItems: 'center', width: 'auto', marginHorizontal: 'auto', gap: 8, paddingHorizontal: 10, paddingVertical: 6, borderRadius: 10, backgroundColor: scheme === 'dark' ? '#13181C' : '#fff' }}>
+                        <ThemedView style={styles.centerBadgeOuter}>
+                            <ThemedView style={[styles.centerBadge, { backgroundColor: scheme === 'dark' ? '#13181C' : '#fff' }]}>
                                 <Icon
                                     source="lock-check-outline"
                                     color="#25D366"
                                     size={20}
                                 />
-                                <ThemedText style={{ fontSize: 14, fontWeight: '400', color: colors.textSecondary }}>
+                                <ThemedText style={[styles.centerBadgeText, { color: colors.textSecondary }]}>
                                     All of your messages are end-to-end encrypted.
                                 </ThemedText>
                             </ThemedView>
@@ -658,6 +1739,23 @@ const ChatId = () => {
                     replyMediaType={replyMediaType}
                     inputRef={inputRef}
                 />
+                {showGoDownButton && (
+                    <ThemedView style={styles.goDownButtonContainer}>
+                        <Animated.View
+                            key={'go-down-button'}
+                            entering={ZoomIn.duration(150)}
+                            exiting={ZoomOut.duration(150)}
+                            style={[{ backgroundColor: 'transparent' }]}>
+                            <IconButton
+                                icon="chevron-double-down"
+                                iconColor={colors.textSecondary}
+                                containerColor={colors.card}
+                                size={18}
+                                onPress={scrollToBottom}
+                            />
+                        </Animated.View>
+                    </ThemedView>
+                )}
             </TiledBackground>
         </KeyboardAvoidingView>
     );
@@ -672,6 +1770,28 @@ const styles = StyleSheet.create({
     messagesContent: {
         paddingVertical: 8,
     },
+    centerBadgeOuter: {
+        backgroundColor: 'transparent',
+        paddingHorizontal: 16,
+        paddingVertical: 8,
+        alignItems: 'center',
+    },
+    centerBadge: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        alignSelf: 'center',
+        gap: 8,
+        paddingHorizontal: 10,
+        paddingVertical: 6,
+        borderRadius: 10,
+        maxWidth: '88%',
+    },
+    centerBadgeText: {
+        fontSize: 14,
+        fontWeight: '400',
+        lineHeight: 18,
+        textAlign: 'center',
+    },
     profileContainer: {
         flexDirection: 'row',
         alignItems: 'center',
@@ -684,6 +1804,89 @@ const styles = StyleSheet.create({
         justifyContent: 'center',
         backgroundColor: 'transparent',
     },
+    forwardOverlay: {
+        flex: 1,
+    },
+    forwardHeader: {
+        borderBottomWidth: 1,
+    },
+    forwardContactsContent: {
+        paddingVertical: 8,
+    },
+    forwardContactRow: {
+        minHeight: 68,
+        paddingHorizontal: 18,
+        paddingVertical: 10,
+        flexDirection: 'row',
+        alignItems: 'center',
+        gap: 12,
+    },
+    forwardContactAvatar: {
+        width: 44,
+        height: 44,
+        borderRadius: 22,
+        alignItems: 'center',
+        justifyContent: 'center',
+    },
+    forwardContactTextContainer: {
+        flex: 1,
+        minWidth: 0,
+        backgroundColor: 'transparent',
+    },
+    forwardContactName: {
+        fontSize: 16,
+        lineHeight: 20,
+        fontWeight: '500',
+    },
+    forwardContactPhone: {
+        marginTop: 3,
+        fontSize: 13,
+        lineHeight: 16,
+    },
+    forwardEmptyContainer: {
+        paddingVertical: 40,
+        alignItems: 'center',
+        backgroundColor: 'transparent',
+    },
+    pinnedBanner: {
+        paddingVertical: 9,
+        paddingHorizontal: 16,
+        borderBottomWidth: 1,
+    },
+    pinnedBannerContent: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        gap: 10,
+        minHeight: 34,
+        backgroundColor: 'transparent',
+    },
+    pinnedBarsContainer: {
+        width: 18,
+        alignItems: 'center',
+        justifyContent: 'center',
+        gap: 3,
+        backgroundColor: 'transparent',
+        flexDirection: 'column-reverse'
+    },
+    pinnedBar: {
+        width: 2,
+        height: 8,
+        borderRadius: 999,
+    },
+    pinnedPinIcon: {
+        width: 34,
+        height: 34,
+        borderRadius: 8,
+        justifyContent: 'center',
+        alignItems: 'center',
+    },
+    pinnedMessageText: {
+        flex: 1,
+        minWidth: 0,
+        fontSize: 14,
+        lineHeight: 18,
+        fontWeight: '500',
+    },
     avatar: {
         width: 44,
         height: 44,
@@ -692,4 +1895,11 @@ const styles = StyleSheet.create({
         justifyContent: 'center',
         marginRight: 12,
     },
+    goDownButtonContainer: {
+        position: 'absolute',
+        bottom: 110,
+        right: 16,
+        zIndex: 99,
+        backgroundColor: 'transparent'
+    }
 })

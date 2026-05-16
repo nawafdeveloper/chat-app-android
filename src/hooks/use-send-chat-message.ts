@@ -61,11 +61,6 @@ function debugSendMessage(stage: string, payload: Record<string, unknown> = {}) 
     if (!CHAT_DEBUG) {
         return;
     }
-
-    console.log(`[chat-debug][send-message][${stage}]`, {
-        at: new Date().toISOString(),
-        ...payload,
-    });
 }
 
 function summarizeOutgoingMessage(message: Message) {
@@ -1432,17 +1427,6 @@ export function useSendChatMessage() {
         }
 
         try {
-            console.log("[voice-send] starting encrypted voice send", {
-                debugTraceId,
-                messageId,
-                chatId,
-                uri,
-                fileName: voiceFile.name,
-                fileType: voiceFile.type,
-                fileSize: voiceFile.size,
-                durationMillis: durationMillis ?? null,
-                recipients: conversation.recipients.length,
-            });
             logMediaDebug("client.voice.prepare", {
                 debugTraceId,
                 messageId,
@@ -1463,14 +1447,6 @@ export function useSendChatMessage() {
                 null,
                 debugTraceId
             );
-            console.log("[voice-send] encrypted upload complete", {
-                debugTraceId,
-                messageId,
-                mediaUrl: upload.mediaUrl,
-                previewUrl: upload.previewUrl,
-                sizeBytes: upload.sizeBytes,
-                recipientKeyCount: upload.recipientEncryptionKeys.length,
-            });
             const uploadedMessage: Message = {
                 ...optimisticMessage,
                 media_url: upload.mediaUrl,
@@ -1506,10 +1482,6 @@ export function useSendChatMessage() {
                 chatId,
                 messageId,
                 debugTraceId,
-            });
-            console.log("[voice-send] dispatch complete", {
-                debugTraceId,
-                messageId,
             });
 
             return true;

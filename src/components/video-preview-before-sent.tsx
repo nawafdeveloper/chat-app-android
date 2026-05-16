@@ -251,7 +251,7 @@ const styles = StyleSheet.create({
         flexDirection: 'row',
         gap: 10,
         paddingHorizontal: 16,
-        paddingVertical: 12,
+        paddingVertical: 6,
         flex: 1,
         borderRadius: 99,
         fontFamily: Fonts.regular,

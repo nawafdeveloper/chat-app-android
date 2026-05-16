@@ -1,5 +1,5 @@
 import { db } from "@/db/client";
-import { messages as dbMessages } from "@/db/schema";
+import { encryptedMedia, messages as dbMessages } from "@/db/schema";
 import { upsertEncryptedMediaMetadataForMessage } from "@/lib/message-media";
 import type { Message } from "@/types/messages";
 import type { InferInsertModel, InferSelectModel } from "drizzle-orm";
@@ -200,6 +200,18 @@ export async function upsertDbMessages(
 
 // Delete all messages for a chat room (called when chat is deleted locally)
 export async function deleteDbMessagesByChatRoom(chatRoomId: string): Promise<void> {
+    const messageRows = await db
+        .select({ message_id: dbMessages.message_id })
+        .from(dbMessages)
+        .where(eq(dbMessages.chat_room_id, chatRoomId));
+    const messageIds = messageRows.map((message) => message.message_id);
+
+    if (messageIds.length > 0) {
+        await db
+            .delete(encryptedMedia)
+            .where(inArray(encryptedMedia.message_id, messageIds));
+    }
+
     await db
         .delete(dbMessages)
         .where(eq(dbMessages.chat_room_id, chatRoomId));

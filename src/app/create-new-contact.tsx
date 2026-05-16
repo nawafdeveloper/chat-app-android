@@ -1,10 +1,12 @@
 import { ThemedText } from '@/components/themed-text'
 import { ThemedView } from '@/components/themed-view'
+import { countryCodes } from '@/constants/country-code'
 import { Colors } from '@/constants/theme'
 import { useCryptoKeys } from '@/context/crypto'
+import { buildFullPhoneNumber, normalizePhoneNumber } from '@/lib/contact-utils'
 import { useCreateContactStore } from '@/store/use-create-contact-store'
 import type { AccountStatus } from '@/store/use-create-contact-store'
-import { router } from 'expo-router'
+import { router, useLocalSearchParams } from 'expo-router'
 import React, { useEffect } from 'react'
 import { StyleSheet, useColorScheme } from 'react-native'
 import {
@@ -40,13 +42,51 @@ const getPhoneHelperText = (
     return ' '
 }
 
+const countriesByLongestDialCode = [...countryCodes].sort(
+    (left, right) =>
+        right.code.replace(/\D/g, '').length -
+        left.code.replace(/\D/g, '').length
+)
+
+const resolvePhonePrefill = (phoneNumber: string) => {
+    const normalized = normalizePhoneNumber(phoneNumber)
+    const digits = normalized.replace(/\D/g, '')
+
+    if (!digits) {
+        return null
+    }
+
+    const country = countriesByLongestDialCode.find((item) => {
+        const dialDigits = item.code.replace(/\D/g, '')
+        return dialDigits.length > 0 && digits.startsWith(dialDigits)
+    })
+
+    if (!country) {
+        return null
+    }
+
+    const dialDigits = country.code.replace(/\D/g, '')
+    const localDigits = digits.slice(dialDigits.length).slice(0, country.maxLength)
+
+    return {
+        country,
+        localDigits,
+        fullPhoneNumber: buildFullPhoneNumber(country.code, localDigits),
+    }
+}
+
 const CreateNewContact = () => {
     const scheme = useColorScheme()
     const resolvedScheme = scheme === 'unspecified' ? 'light' : scheme ?? 'light'
     const colors = Colors[resolvedScheme]
     const { isReady } = useCryptoKeys()
+    const params = useLocalSearchParams<{ phoneNumber?: string | string[] }>()
+    const initialPhoneNumber = Array.isArray(params.phoneNumber)
+        ? params.phoneNumber[0]
+        : params.phoneNumber
     const {
         selectedCountry,
+        setSelectedCountry,
         firstName,
         setFirstName,
         lastName,
@@ -64,6 +104,20 @@ const CreateNewContact = () => {
         isCreating,
         isVerifying,
     } = useCreateContactStore()
+
+    useEffect(() => {
+        if (!initialPhoneNumber) {
+            return
+        }
+
+        const prefill = resolvePhonePrefill(initialPhoneNumber)
+        if (!prefill || prefill.fullPhoneNumber === fullPhoneNumber) {
+            return
+        }
+
+        setSelectedCountry(prefill.country)
+        setPhoneNumber(prefill.localDigits)
+    }, [fullPhoneNumber, initialPhoneNumber, setPhoneNumber, setSelectedCountry])
 
     useEffect(() => {
         if (!fullPhoneNumber || phoneNumber.length < 5) {

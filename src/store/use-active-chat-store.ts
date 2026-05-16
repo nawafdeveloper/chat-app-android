@@ -29,8 +29,11 @@ interface ActiveChatState {
     hasOlderMessagesByChatId: Record<string, boolean>;
     presenceByChatId: Record<string, PresenceState>;
     typingByChatId: Record<string, TypingState>;
+    lastPinUpdate: { chatId: string; messageId: string } | null;
+    notifyPinUpdate: (chatId: string, messageId: string) => void;
     setChats: (chats: ChatItemType[]) => void;
     upsertChat: (chat: ChatItemType) => void;
+    removeChat: (chatId: string) => void;
     setChatsLoading: (loading: boolean) => void;
     setChatsError: (error: string | null) => void;
     setSelectedChatId: (chatId: string | null) => void;
@@ -79,10 +82,33 @@ export const useActiveChatStore = create<ActiveChatState>((set) => ({
     hasOlderMessagesByChatId: {},
     presenceByChatId: {},
     typingByChatId: {},
+    lastPinUpdate: null as { chatId: string; messageId: string } | null,
+    notifyPinUpdate: (chatId: string, messageId: string) =>
+        set({ lastPinUpdate: { chatId, messageId } }),
     setChats: (chats) =>
-        set(() => ({
-            chats: sortChatsByRecent(chats),
-        })),
+        set((state) => {
+            const existingChatsById = new Map(
+                state.chats.map((chat) => [chat.chat_id, chat])
+            );
+            const nextChats = chats.map((chat) => {
+                if (
+                    chat.chat_type !== "group" ||
+                    (chat.group_members && chat.group_members.length > 0)
+                ) {
+                    return chat;
+                }
+
+                const existingChat = existingChatsById.get(chat.chat_id);
+
+                return existingChat?.group_members?.length
+                    ? { ...chat, group_members: existingChat.group_members }
+                    : chat;
+            });
+
+            return {
+                chats: sortChatsByRecent(nextChats),
+            };
+        }),
     upsertChat: (chat) =>
         set((state) => {
             const existingChat = state.chats.find(
@@ -145,6 +171,26 @@ export const useActiveChatStore = create<ActiveChatState>((set) => ({
 
             return {
                 chats: sortChatsByRecent([...existingWithoutChat, nextChat]),
+            };
+        }),
+    removeChat: (chatId) =>
+        set((state) => {
+            const messagesByChatId = { ...state.messagesByChatId };
+            const draftsByChatId = { ...state.draftsByChatId };
+            const replyDraftByChatId = { ...state.replyDraftByChatId };
+            delete messagesByChatId[chatId];
+            delete draftsByChatId[chatId];
+            delete replyDraftByChatId[chatId];
+
+            return {
+                chats: state.chats.filter((chat) => chat.chat_id !== chatId),
+                selectedChatId:
+                    state.selectedChatId === chatId
+                        ? null
+                        : state.selectedChatId,
+                messagesByChatId,
+                draftsByChatId,
+                replyDraftByChatId,
             };
         }),
     setChatsLoading: (loading) => set({ chatsLoading: loading }),

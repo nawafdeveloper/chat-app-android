@@ -1,6 +1,9 @@
+import ChatsSettings from '@/components/chats-settings'
 import GeneralSettings from '@/components/general-settings'
+import NotificationsSettings from '@/components/notifications-settings'
 import PrivacySettings from '@/components/privacy-settings'
 import ProfileSettings from '@/components/profile-settings'
+import SubPrivacySettings from '@/components/sub-privacy-settings'
 import { ThemedView } from '@/components/themed-view'
 import { Colors } from '@/constants/theme'
 import { db } from '@/db/client'
@@ -117,36 +120,42 @@ const SubSettingPage = ({ route }: SubSettingPageProps) => {
                 return 'General';
             case 'profile-settings':
                 return 'Profile';
-            case 'account-settings':
-                return 'Account';
             case 'privacy-settings':
                 return 'Privacy';
             case 'chats-settings':
                 return 'Chats';
             case 'notifications-settings':
                 return 'Notifications';
-            case 'help-settings':
-                return 'Help Center';
+            case 'last-seen-settings':
+                return 'Last seen & online';
+            case 'profile-seen-settings':
+                return 'Profile picture';
+            case 'about-seen-settings':
+                return 'About';
             default: return null;
         };
     };
 
     const getContent = () => {
+        if (
+            href === 'last-seen-settings' ||
+            href === 'profile-seen-settings' ||
+            href === 'about-seen-settings'
+        ) {
+            return <SubPrivacySettings href={href} />;
+        }
+
         switch (href) {
             case 'general-settings':
                 return <GeneralSettings />;
             case 'profile-settings':
                 return <ProfileSettings />;
-            case 'account-settings':
-                return null;
             case 'privacy-settings':
                 return <PrivacySettings />;
             case 'chats-settings':
-                return null;
+                return <ChatsSettings />;
             case 'notifications-settings':
-                return null;
-            case 'help-settings':
-                return null;
+                return <NotificationsSettings />;
             default: return null;
         }
     };

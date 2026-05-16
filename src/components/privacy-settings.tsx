@@ -1,8 +1,9 @@
 import { Colors } from '@/constants/theme';
 import { useIsTablet } from '@/context/screen-checking-context';
+import { authClient } from '@/lib/auth-client';
 import { rightNavRef } from '@/store/right-nav-ref';
 import { router } from 'expo-router';
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { ScrollView, StyleSheet, useColorScheme } from 'react-native';
 import { List, Switch } from 'react-native-paper';
 import { ThemedText } from './themed-text';
@@ -20,17 +21,48 @@ type SwitchItem = {
     title: string;
     description: string;
     isEnabled: boolean;
-    setEnable: React.Dispatch<React.SetStateAction<boolean>>;
+    onValueChange: (enabled: boolean) => void;
 };
 
 const PrivacySettings = () => {
     const isTablet = useIsTablet()
+    const { data: session } = authClient.useSession()
     const scheme = useColorScheme();
     const colors = Colors[scheme === 'unspecified' ? 'light' : scheme ?? 'light'];
 
-    const [readReceipts, setReadReceipts] = useState(true);
-    const [blockUnknown, setBlockUnknown] = useState(false);
-    const [linkPreview, setLinkPreview] = useState(false);
+    const [disableLinkPreview, setDisableLinkPreview] = useState(
+        Boolean(session?.user.disableLinkPreview)
+    );
+    const [updatingSwitch, setUpdatingSwitch] = useState<string | null>(null);
+
+    useEffect(() => {
+        setDisableLinkPreview(Boolean(session?.user.disableLinkPreview));
+    }, [session?.user.disableLinkPreview]);
+
+    const handleDisableLinkPreviewChange = async (enabled: boolean) => {
+        if (updatingSwitch) {
+            return;
+        }
+
+        const previousValue = disableLinkPreview;
+        setDisableLinkPreview(enabled);
+        setUpdatingSwitch('link-preview');
+
+        try {
+            const { error } = await authClient.updateUser({
+                disableLinkPreview: enabled,
+            });
+
+            if (error) {
+                throw new Error(error.message || 'Failed to update link preview setting.');
+            }
+        } catch (error) {
+            setDisableLinkPreview(previousValue);
+            console.log('Failed to update link preview setting:', error);
+        } finally {
+            setUpdatingSwitch(null);
+        }
+    };
 
     const firstListItems: ListItem[] = [
         {
@@ -40,25 +72,16 @@ const PrivacySettings = () => {
             href: 'last-seen-settings'
         },
         {
-            key: 'profile-picture',
+            key: 'profile-seen',
             title: 'Profile picture',
             description: 'Manage who can view your profile photo',
             href: 'profile-seen-settings'
         },
         {
-            key: 'about',
+            key: 'about-seen',
             title: 'About',
             description: 'Choose who can see your bio and information',
             href: 'about-seen-settings'
-        },
-    ];
-
-    const secondListItems: ListItem[] = [
-        {
-            key: 'blocked-contacts',
-            title: 'Blocked contacts',
-            description: 'View and manage blocked contacts',
-            href: 'blocked-contacts-settings'
         },
     ];
 
@@ -67,8 +90,8 @@ const PrivacySettings = () => {
             key: 'link-preview',
             title: 'Disable link previews',
             description: `To help protect your IP address, previews for the links you share in chats will no longer be generated.`,
-            isEnabled: linkPreview,
-            setEnable: setLinkPreview
+            isEnabled: disableLinkPreview,
+            onValueChange: handleDisableLinkPreviewChange,
         },
     ];
 
@@ -98,29 +121,6 @@ const PrivacySettings = () => {
                     ))}
                 </ThemedView>
                 <ThemedView style={styles.sectionContainer}>
-                    <ThemedText style={[styles.sectionTitle, { color: colors.textSecondary }]}>Privacy and security</ThemedText>
-                    {secondListItems.slice(0, 1).map((item) => (
-                        <List.Item
-                            key={item.key}
-                            title={item.title}
-                            description={item.description}
-                            descriptionStyle={{ color: colors.textSecondary }}
-                            onPress={() => handleNavigateToSubSetting(item.href)}
-                            style={{ borderBottomWidth: 1, borderBottomColor: colors.indicator + '33' }}
-                        />
-                    ))}
-                </ThemedView>
-                {secondListItems.slice(1, 3).map((item) => (
-                    <List.Item
-                        key={item.key}
-                        title={item.title}
-                        description={item.description}
-                        descriptionStyle={{ color: colors.textSecondary }}
-                        onPress={() => handleNavigateToSubSetting(item.href)}
-                        style={{ borderBottomWidth: 1, borderBottomColor: colors.indicator + '33' }}
-                    />
-                ))}
-                <ThemedView style={styles.sectionContainer}>
                     <ThemedText style={[styles.sectionTitle, { color: colors.textSecondary }]}>Advanced</ThemedText>
                     {switchsListItems.map((item) => (
                         <List.Item
@@ -129,10 +129,12 @@ const PrivacySettings = () => {
                             description={item.description}
                             descriptionStyle={{ color: colors.textSecondary }}
                             style={{ borderBottomWidth: 1, borderBottomColor: colors.indicator + '33' }}
+                            left={props => <List.Icon {...props} icon="link-variant-off" color={colors.textSecondary} />}
                             right={() => (
                                 <Switch
                                     value={item.isEnabled}
-                                    onValueChange={item.setEnable}
+                                    onValueChange={item.onValueChange}
+                                    disabled={updatingSwitch === item.key}
                                     color='#25D366'
                                 />
                             )}

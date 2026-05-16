@@ -13,7 +13,7 @@ import * as ImagePicker from 'expo-image-picker'
 import { router } from 'expo-router'
 import React, { useEffect, useState } from 'react'
 import { Alert, FlatList, Pressable, StyleSheet, useColorScheme, View } from 'react-native'
-import { ActivityIndicator, Appbar, Icon, List } from 'react-native-paper'
+import { ActivityIndicator, Appbar, Icon, List, TouchableRipple } from 'react-native-paper'
 import { IconSource } from 'react-native-paper/lib/typescript/components/Icon'
 
 type SettingList = {
@@ -125,13 +125,13 @@ const SettingsPage = () => {
             icon: 'account-circle-outline',
             href: 'profile-settings'
         },
-        {
-            key: 'account',
-            title: 'Account',
-            description: 'Account security and information',
-            icon: 'key-outline',
-            href: 'account-settings'
-        },
+        // {
+        //     key: 'account',
+        //     title: 'Account',
+        //     description: 'Account security and information',
+        //     icon: 'key-outline',
+        //     href: 'account-settings'
+        // },
         {
             key: 'privacy',
             title: 'Privacy',
@@ -153,13 +153,13 @@ const SettingsPage = () => {
             icon: 'bell-outline',
             href: 'notifications-settings'
         },
-        {
-            key: 'help',
-            title: 'Help and feedback',
-            description: 'Help center, contact us privacy & policy',
-            icon: 'help-circle-outline',
-            href: 'help-settings'
-        },
+        // {
+        //     key: 'help',
+        //     title: 'Help and feedback',
+        //     description: 'Help center, contact us privacy & policy',
+        //     icon: 'help-circle-outline',
+        //     href: 'help-settings'
+        // },
     ];
 
     const handleNavigateToSubSetting = (href: string) => {
@@ -187,16 +187,23 @@ const SettingsPage = () => {
                     style={styles.settingsList}
                     data={settingsList}
                     keyExtractor={(item) => item.key}
-                    contentContainerStyle={styles.settingsListContent}
                     renderItem={({ item }) => (
-                        <List.Item
+                        <TouchableRipple
                             key={item.key}
-                            title={item.title}
-                            description={item.description}
-                            descriptionStyle={{ color: colors.textSecondary }}
                             onPress={() => handleNavigateToSubSetting(item.href)}
-                            left={props => <List.Icon {...props} icon={item.icon} color={colors.textSecondary} />}
-                        />
+                            rippleColor={colors.textSecondary + '33'}
+                            underlayColor={colors.textSecondary + '22'}
+                            background={{ type: 'ripple', color: colors.textSecondary + '33', foreground: true }}
+                            style={{ width: '100%', paddingHorizontal: 10 }}
+                        >
+                            <List.Item
+                                key={item.key}
+                                title={item.title}
+                                description={item.description}
+                                descriptionStyle={{ color: colors.textSecondary }}
+                                left={props => <List.Icon {...props} icon={item.icon} color={colors.textSecondary} />}
+                            />
+                        </TouchableRipple>
                     )}
                     ListHeaderComponent={
                         <ThemedView style={styles.profileImageContainer}>
@@ -292,9 +299,5 @@ const styles = StyleSheet.create({
     },
     settingsList: {
         flex: 1,
-    },
-    settingsListContent: {
-        paddingBottom: 20,
-        paddingHorizontal: 16,
     },
 })

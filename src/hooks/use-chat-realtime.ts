@@ -10,8 +10,8 @@ import {
     MESSAGE_PAGE_SIZE,
 } from "@/lib/chat-sync";
 import {
-    areDirectChatIdsEquivalent,
     applyContactToSingleChat,
+    areDirectChatIdsEquivalent,
     buildChatFromMessage,
     buildChatFromReaction,
     normalizeChatItem,
@@ -26,8 +26,8 @@ import {
 import { flushPendingRealtimeEvents } from "@/lib/realtime-outbox";
 import { markDbChatRead, upsertDbChats } from "@/lib/upsert-db-chats";
 import { getDbMessage, upsertDbMessages } from "@/lib/upsert-db-messages";
-import { useActiveChatStore } from "@/store/use-active-chat-store";
 import { useAuthStore } from "@/store/auth-store";
+import { useActiveChatStore } from "@/store/use-active-chat-store";
 import { useContactDirectoryStore } from "@/store/use-contact-directory-store";
 import { useRealtimeStore } from "@/store/use-realtime-store";
 import type { ChatItemType } from "@/types/chats.type";
@@ -48,10 +48,6 @@ function debugRealtime(stage: string, payload: Record<string, unknown> = {}) {
         return;
     }
 
-    console.log(`[chat-debug][realtime][${stage}]`, {
-        at: new Date().toISOString(),
-        ...payload,
-    });
 }
 
 function summarizeRealtimeMessage(message: Message) {
@@ -877,10 +873,6 @@ export function useChatRealtime() {
                         debugRealtime("event-message-sent-skip-unreadable", {
                             message: summarizeRealtimeMessage(mergedMessage),
                         });
-                        console.log(
-                            "Skipping unreadable realtime confirmation:",
-                            mergedMessage.message_id
-                        );
                         break;
                     }
 
@@ -981,10 +973,6 @@ export function useChatRealtime() {
                         debugRealtime("event-new-message-skip-unreadable", {
                             message: summarizeRealtimeMessage(mergedMessage),
                         });
-                        console.log(
-                            "Skipping unreadable realtime message:",
-                            mergedMessage.message_id
-                        );
                         break;
                     }
 
@@ -1084,10 +1072,6 @@ export function useChatRealtime() {
                         debugRealtime("event-conversation-updated-skip-unreadable", {
                             message: summarizeRealtimeMessage(mergedMessage),
                         });
-                        console.log(
-                            "Skipping unreadable realtime conversation update:",
-                            mergedMessage.message_id
-                        );
                         break;
                     }
 

@@ -36,6 +36,7 @@ SplashScreen.preventAutoHideAsync();
 
 type AppStackProps = {
     hasSession: boolean
+    hasSessionUser: boolean
     isNewUser: boolean
     hasPin: boolean
     hasNoPin: boolean
@@ -93,7 +94,7 @@ function getChatIdFromUrl(url: string) {
     return null;
 }
 
-const AppStack = ({ hasSession, isNewUser, hasPin, hasNoPin, hasName }: AppStackProps) => {
+const AppStack = ({ hasSession, hasSessionUser, isNewUser, hasPin, hasNoPin, hasName }: AppStackProps) => {
     const { isHydrated: cryptoHydrated } = useCryptoKeys();
 
     if (!cryptoHydrated) return null;
@@ -103,16 +104,16 @@ const AppStack = ({ hasSession, isNewUser, hasPin, hasNoPin, hasName }: AppStack
             <Stack.Protected guard={!hasSession}>
                 <Stack.Screen name="(auth)" options={{ animation: 'none', gestureEnabled: false }} />
             </Stack.Protected>
-            <Stack.Protected guard={hasSession && isNewUser}>
+            <Stack.Protected guard={hasSession && hasSessionUser && isNewUser}>
                 <Stack.Screen name="(newUser)" options={{ animation: 'none', gestureEnabled: false }} />
             </Stack.Protected>
-            <Stack.Protected guard={hasSession && !isNewUser && hasNoPin}>
+            <Stack.Protected guard={hasSession && hasSessionUser && !isNewUser && hasNoPin}>
                 <Stack.Screen name="(oldUser)" options={{ animation: 'none', gestureEnabled: false }} />
             </Stack.Protected>
-            <Stack.Protected guard={hasSession && hasPin && !hasName}>
+            <Stack.Protected guard={hasSession && hasSessionUser && hasPin && !hasName}>
                 <Stack.Screen name="(complete-profile)" options={{ animation: 'none', gestureEnabled: false }} />
             </Stack.Protected>
-            <Stack.Protected guard={hasSession && !isNewUser && hasPin && hasName}>
+            <Stack.Protected guard={hasSession && hasSessionUser && !isNewUser && hasPin && hasName}>
                 <Stack.Screen name='(tabs)' options={{ headerShown: false }} />
                 <Stack.Screen name='chatId' options={{ headerShown: false }} />
                 <Stack.Screen name='create-chat' options={{ headerShown: false }} />
@@ -440,6 +441,7 @@ const AppLayout = () => {
     if (!isReady || !success || hasKeys === null || (!fontsLoaded && !fontError)) return null;
 
     const isNewUser = session?.user.isNewUser === true;
+    const hasSessionUser = !!session?.user.id;
     const hasName = !!session?.user.name?.trim();
     const hasPin = hasKeys === true;
     const hasNoPin = hasKeys === false;
@@ -455,6 +457,7 @@ const AppLayout = () => {
                             ) : null}
                             <AppStack
                                 hasSession={hasSession}
+                                hasSessionUser={hasSessionUser}
                                 isNewUser={isNewUser}
                                 hasPin={hasPin}
                                 hasNoPin={hasNoPin}

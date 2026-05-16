@@ -1,5 +1,6 @@
-import ChatId from '@/app/chatId';
 import SubSettingPage from '@/app/(tabs)/settings/sub-setting';
+import ChatId from '@/app/chatId';
+import TargetUserProfile from '@/app/targetUserProfile';
 import AppTabs from '@/components/app-tabs';
 import { ThemedView } from '@/components/themed-view';
 import { Colors } from '@/constants/theme';
@@ -39,6 +40,10 @@ export default function TabletAppTabs() {
                             <Stack.Screen
                                 name='subSetting'
                                 component={SubSettingPage}
+                            />
+                            <Stack.Screen
+                                name='targetUserProfile'
+                                component={TargetUserProfile}
                             />
                         </Stack.Navigator>
                     </NavigationContainer>

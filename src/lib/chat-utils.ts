@@ -24,10 +24,16 @@ type RawMessage = Omit<Message, "created_at" | "updated_at"> & {
 };
 
 export function normalizeChatItem(chat: RawChatItem): ChatItemType {
+    const rawGroupMembers =
+        chat.group_members ??
+        (chat as RawChatItem & { groupMembers?: RawChatItem["group_members"] })
+            .groupMembers ??
+        null;
+
     return {
         ...chat,
         avatar: resolveAvatarSource(chat.avatar),
-        group_members: chat.group_members?.map((member) => ({
+        group_members: rawGroupMembers?.map((member) => ({
             ...member,
             avatar: resolveAvatarSource(member.avatar),
         })) ?? null,

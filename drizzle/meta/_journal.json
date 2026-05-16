@@ -29,6 +29,13 @@
       "when": 1778296800000,
       "tag": "0003_cached_contact_links",
       "breakpoints": true
+    },
+    {
+      "idx": 4,
+      "version": "6",
+      "when": 1778383200000,
+      "tag": "0004_group_members_json",
+      "breakpoints": true
     }
   ]
 }
