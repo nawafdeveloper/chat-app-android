@@ -122,6 +122,51 @@ function applyLocalReadStateToChat(
     };
 }
 
+function mergeChatSnapshotForStableUi(
+    existingChat: ChatItemType | undefined,
+    incomingChat: ChatItemType
+) {
+    if (!existingChat) {
+        return incomingChat;
+    }
+
+    const existingUpdatedAt = existingChat.updated_at.getTime();
+    const incomingUpdatedAt = incomingChat.updated_at.getTime();
+    const incomingMissingPreview =
+        incomingChat.last_message_id === existingChat.last_message_id &&
+        !incomingChat.last_message_context &&
+        Boolean(existingChat.last_message_context);
+
+    if (existingUpdatedAt <= incomingUpdatedAt && !incomingMissingPreview) {
+        return incomingChat;
+    }
+
+    return {
+        ...incomingChat,
+        last_message_id: existingChat.last_message_id,
+        encrypted_preview_ciphertext:
+            existingChat.encrypted_preview_ciphertext,
+        encrypted_preview_iv: existingChat.encrypted_preview_iv,
+        encrypted_preview_algorithm:
+            existingChat.encrypted_preview_algorithm,
+        chat_recipient_keys: existingChat.chat_recipient_keys,
+        last_message_context: existingChat.last_message_context,
+        last_message_media: existingChat.last_message_media,
+        last_message_sender_is_me: existingChat.last_message_sender_is_me,
+        last_message_sender_nickname:
+            existingChat.last_message_sender_nickname,
+        last_message_is_read_by_recipient:
+            existingChat.last_message_is_read_by_recipient,
+        last_message_read_by_user_ids:
+            existingChat.last_message_read_by_user_ids,
+        last_message_recipient_user_ids:
+            existingChat.last_message_recipient_user_ids,
+        is_unreaded_chat: existingChat.is_unreaded_chat,
+        unreaded_messages_length: existingChat.unreaded_messages_length,
+        updated_at: existingChat.updated_at,
+    };
+}
+
 interface ActiveChatState {
     chats: ChatItemType[];
     chatsLoading: boolean;
@@ -206,18 +251,27 @@ export const useActiveChatStore = create<ActiveChatState>((set) => ({
                     chat.chat_type !== "group" ||
                     (chat.group_members && chat.group_members.length > 0)
                 ) {
-                    if (localRead && !shouldKeepChatLocallyRead(chat, localRead)) {
+                    const nextChat = mergeChatSnapshotForStableUi(
+                        existingChatsById.get(chat.chat_id),
+                        chat
+                    );
+
+                    if (localRead && !shouldKeepChatLocallyRead(nextChat, localRead)) {
                         delete nextLocalReadByChatId[chat.chat_id];
                     }
 
-                    return applyLocalReadStateToChat(chat, localRead);
+                    return applyLocalReadStateToChat(nextChat, localRead);
                 }
 
                 const existingChat = existingChatsById.get(chat.chat_id);
 
-                const nextChat = existingChat?.group_members?.length
+                const nextChatWithGroupMembers = existingChat?.group_members?.length
                     ? { ...chat, group_members: existingChat.group_members }
                     : chat;
+                const nextChat = mergeChatSnapshotForStableUi(
+                    existingChat,
+                    nextChatWithGroupMembers
+                );
 
                 if (localRead && !shouldKeepChatLocallyRead(nextChat, localRead)) {
                     delete nextLocalReadByChatId[chat.chat_id];
@@ -225,9 +279,24 @@ export const useActiveChatStore = create<ActiveChatState>((set) => ({
 
                 return applyLocalReadStateToChat(nextChat, localRead);
             });
+            const nextChatIds = new Set(nextChats.map((chat) => chat.chat_id));
+            const newestIncomingTime = chats.reduce(
+                (newestTime, chat) =>
+                    Math.max(newestTime, chat.updated_at.getTime()),
+                0
+            );
+            const missingFreshExistingChats = state.chats.filter(
+                (chat) =>
+                    !nextChatIds.has(chat.chat_id) &&
+                    (chats.length === 0 ||
+                        chat.updated_at.getTime() > newestIncomingTime)
+            );
 
             return {
-                chats: sortChatsByRecent(nextChats),
+                chats: sortChatsByRecent([
+                    ...nextChats,
+                    ...missingFreshExistingChats,
+                ]),
                 localReadByChatId: nextLocalReadByChatId,
             };
         }),

@@ -650,6 +650,7 @@ const ChatId = () => {
     const selectionModeRef = useRef(selectionMode);
     const hasStartedMessageScrollRef = useRef(false);
     const lastReadReceiptKeyRef = useRef<string | null>(null);
+    const lastOpenedChatReadKeyRef = useRef<string | null>(null);
     const pinnedMessagesRef = useRef<Message[]>([]);
     const activePinnedMessageIdRef = useRef<string | null>(null);
     const pendingMessageScrollRequestRef = useRef<MessageScrollRequest | null>(null);
@@ -874,8 +875,45 @@ const ChatId = () => {
                     state.setSelectedChatId(null);
                 }
             };
-        }, [routeChatId, selectedChatId, setSelectedChatId])
+        }, [routeChatId, setSelectedChatId])
     );
+
+    useEffect(() => {
+        if (
+            !activeChatId ||
+            !isFocused ||
+            !activeChat ||
+            (!activeChat.is_unreaded_chat &&
+                (activeChat.unreaded_messages_length ?? 0) === 0)
+        ) {
+            return;
+        }
+
+        const lastMessageUpdatedAt =
+            activeChat.updated_at instanceof Date
+                ? activeChat.updated_at.getTime()
+                : new Date(activeChat.updated_at).getTime();
+        const readKey = [
+            activeChatId,
+            activeChat.last_message_id ?? "conversation",
+            Number.isNaN(lastMessageUpdatedAt) ? "unknown" : lastMessageUpdatedAt,
+        ].join(":");
+
+        if (lastOpenedChatReadKeyRef.current === readKey) {
+            return;
+        }
+
+        lastOpenedChatReadKeyRef.current = readKey;
+        debugChatId('open-chat-mark-read', {
+            activeChatId,
+            messageId: activeChat.last_message_id,
+            unread: activeChat.unreaded_messages_length,
+        });
+        markChatReadOptimistically({
+            conversationId: activeChatId,
+            messageId: activeChat.last_message_id,
+        });
+    }, [activeChat, activeChatId, isFocused]);
 
     const latestReadableIncomingMessage = useMemo(
         () => [...messages]

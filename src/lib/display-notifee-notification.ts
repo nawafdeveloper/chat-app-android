@@ -16,6 +16,7 @@ import notifee, {
 import type { FirebaseMessagingTypes } from "@react-native-firebase/messaging";
 
 const MESSAGES_CHANNEL_ID = "messages";
+const ANDROID_NOTIFICATION_ICON = "notification_icon";
 
 function optionalString(value: unknown) {
     return typeof value === "string" && value.length > 0 ? value : undefined;
@@ -175,7 +176,7 @@ export async function displayNotifeeNotification(data: Record<string, unknown>) 
         channelId: MESSAGES_CHANNEL_ID,
         category: AndroidCategory.MESSAGE,
         color: "#ffffff",
-        smallIcon: "notification-icon",
+        smallIcon: ANDROID_NOTIFICATION_ICON,
         pressAction: { id: "default" },
         timestamp,
         showTimestamp: true,

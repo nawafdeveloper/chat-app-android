@@ -60,16 +60,17 @@ async function ensureMessagesChannel() {
 }
 
 export async function registerForPushNotificationsAsync(): Promise<string | null> {
-    const enabled =
+    await ensureMessagesChannel();
+
+    const notificationsEnabled =
         (await ensureAndroidNotificationPermission()) &&
         (await ensureIosNotificationPermission());
 
-    if (!enabled) {
-        console.log("[push-client] Permission not granted");
-        throw new Error("Permission not granted");
+    if (!notificationsEnabled) {
+        console.log(
+            "[push-client] Visible notification permission not granted; keeping FCM data sync registered."
+        );
     }
-
-    await ensureMessagesChannel();
 
     if (Platform.OS === "ios" && !isDeviceRegisteredForRemoteMessages(firebaseMessaging)) {
         await registerDeviceForRemoteMessages(firebaseMessaging);

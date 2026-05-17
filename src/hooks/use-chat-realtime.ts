@@ -30,7 +30,11 @@ import {
     flushPendingRealtimeEvents,
 } from "@/lib/realtime-outbox";
 import { upsertDbChats } from "@/lib/upsert-db-chats";
-import { getDbMessage, upsertDbMessages } from "@/lib/upsert-db-messages";
+import {
+    getDbMessage,
+    markDbMessagesReadByUser,
+    upsertDbMessages,
+} from "@/lib/upsert-db-messages";
 import { useAuthStore } from "@/store/auth-store";
 import { useActiveChatStore } from "@/store/use-active-chat-store";
 import { useContactDirectoryStore } from "@/store/use-contact-directory-store";
@@ -191,6 +195,34 @@ function sendSocketEvent(socket: WebSocket | null, event: ClientRealtimeEvent) {
     }
 }
 
+function markSelectedIncomingMessageReadImmediately({
+    conversationId,
+    message,
+    currentUserId,
+}: {
+    conversationId: string;
+    message: Message;
+    currentUserId: string;
+}) {
+    const state = useActiveChatStore.getState();
+    if (
+        state.selectedChatId !== conversationId ||
+        message.sender_user_id === currentUserId ||
+        !hasRenderableMessageContent(message)
+    ) {
+        return;
+    }
+
+    debugRealtime("mark-selected-incoming-read-immediately", {
+        conversationId,
+        message: summarizeRealtimeMessage(message),
+    });
+    markChatReadOptimistically({
+        conversationId,
+        messageId: message.message_id,
+    });
+}
+
 export function useChatMessages(chatIdOverride?: string | null) {
     const { isReady } = useCryptoKeys();
     const { data: session } = authClient.useSession();
@@ -319,25 +351,23 @@ export function useChatMessages(chatIdOverride?: string | null) {
                 });
                 setChatsError(null);
 
-                let cachedMessages =
+                const storeMessages =
                     useActiveChatStore.getState().messagesByChatId[activeChatId] ?? [];
                 debugRealtime("load-active-messages-store-cache", {
                     activeChatId,
-                    cachedCount: cachedMessages.length,
+                    cachedCount: storeMessages.length,
                 });
 
-                if (cachedMessages.length === 0) {
-                    cachedMessages = await getDecryptedDbMessagePage({
-                        chatId: activeChatId,
-                        currentUserId,
-                    });
-                    debugRealtime("load-active-messages-db-cache", {
-                        activeChatId,
-                        cachedCount: cachedMessages.length,
-                        firstMessage: cachedMessages[0] ? summarizeRealtimeMessage(cachedMessages[0]) : null,
-                        lastMessage: cachedMessages.at(-1) ? summarizeRealtimeMessage(cachedMessages.at(-1) as Message) : null,
-                    });
-                }
+                const cachedMessages = await getDecryptedDbMessagePage({
+                    chatId: activeChatId,
+                    currentUserId,
+                });
+                debugRealtime("load-active-messages-db-cache", {
+                    activeChatId,
+                    cachedCount: cachedMessages.length,
+                    firstMessage: cachedMessages[0] ? summarizeRealtimeMessage(cachedMessages[0]) : null,
+                    lastMessage: cachedMessages.at(-1) ? summarizeRealtimeMessage(cachedMessages.at(-1) as Message) : null,
+                });
 
                 if (!isCancelled && cachedMessages.length > 0) {
                     debugRealtime("load-active-messages-replace", {
@@ -349,6 +379,10 @@ export function useChatMessages(chatIdOverride?: string | null) {
                         activeChatId,
                         cachedMessages.length === MESSAGE_PAGE_SIZE
                     );
+                }
+
+                if (!isCancelled && cachedMessages.length === 0 && storeMessages.length === 0) {
+                    setHasOlderMessages(activeChatId, false);
                 }
 
             } catch (error) {
@@ -1020,6 +1054,11 @@ export function useChatRealtime() {
                         incomingMessage: summarizeRealtimeMessage(incomingMessage),
                     });
                     appendMessage(conversationId, incomingMessage);
+                    markSelectedIncomingMessageReadImmediately({
+                        conversationId,
+                        message: incomingMessage,
+                        currentUserId,
+                    });
                     void persistAndUpsertChat(nextChat);
                     void upsertDbMessages([incomingMessage], currentUserId).catch((error) => {
                         debugRealtime("event-new-message-db-error", {
@@ -1108,13 +1147,17 @@ export function useChatRealtime() {
                             fallbackExistingChat: existingChat,
                         })
                     );
-                    if (isSelected) {
-                        debugRealtime("event-conversation-updated-append-selected", {
-                            conversationId,
-                            conversationMessage: summarizeRealtimeMessage(conversationMessage),
-                        });
-                        appendMessage(conversationId, conversationMessage);
-                    }
+                    debugRealtime("event-conversation-updated-append", {
+                        conversationId,
+                        isSelected,
+                        conversationMessage: summarizeRealtimeMessage(conversationMessage),
+                    });
+                    appendMessage(conversationId, conversationMessage);
+                    markSelectedIncomingMessageReadImmediately({
+                        conversationId,
+                        message: conversationMessage,
+                        currentUserId,
+                    });
                     void persistAndUpsertChat(nextChat);
                     void upsertDbMessages([conversationMessage], currentUserId).catch((error) => {
                         debugRealtime("event-conversation-updated-db-error", {
@@ -1261,6 +1304,42 @@ export function useChatRealtime() {
                             event.userId,
                             readAt
                         );
+
+                        const updatedChat = useActiveChatStore
+                            .getState()
+                            .chats.find((chat) => chat.chat_id === conversationId);
+                        if (updatedChat) {
+                            void upsertDbChats([updatedChat]).catch((error) => {
+                                debugRealtime("event-mark-read-persist-chat-error", {
+                                    conversationId,
+                                    messageId: event.messageId,
+                                    userId: event.userId,
+                                    error,
+                                });
+                                console.log(
+                                    "Failed to persist realtime read receipt:",
+                                    error
+                                );
+                            });
+                        }
+
+                        void markDbMessagesReadByUser({
+                            chatId: conversationId,
+                            userId: event.userId,
+                            readAt,
+                            currentUserId,
+                        }).catch((error) => {
+                            debugRealtime("event-mark-read-persist-messages-error", {
+                                conversationId,
+                                messageId: event.messageId,
+                                userId: event.userId,
+                                error,
+                            });
+                            console.log(
+                                "Failed to persist realtime message read receipts:",
+                                error
+                            );
+                        });
                     }
 
                     if (event.userId === currentUserId) {
@@ -1467,11 +1546,6 @@ export function useChatRealtime() {
                     reconnectDelayRef.current = INITIAL_RECONNECT_DELAY_MS;
                     setStatus("connected");
 
-                    void flushPendingRealtimeEvents(nextSocket).catch((error) => {
-                        debugRealtime("socket-flush-outbox-error", { error });
-                        console.log("Failed to flush realtime outbox:", error);
-                    });
-
                     const didJoinSelectedConversation =
                         syncSelectedConversationJoin(nextSocket);
                     debugRealtime("socket-open-join-result", {
@@ -1485,7 +1559,13 @@ export function useChatRealtime() {
                     ) {
                         setStatus("connecting");
                         nextSocket.close();
+                        return;
                     }
+
+                    void flushPendingRealtimeEvents(nextSocket).catch((error) => {
+                        debugRealtime("socket-flush-outbox-error", { error });
+                        console.log("Failed to flush realtime outbox:", error);
+                    });
                 });
 
                 nextSocket.addEventListener("message", (messageEvent) => {
@@ -1588,7 +1668,15 @@ export function useChatRealtime() {
                 if (!didSync) {
                     setStatus("connecting");
                     socket.close();
+                    return;
                 }
+
+                void flushPendingRealtimeEvents(socket).catch((error) => {
+                    debugRealtime("socket-network-restored-flush-outbox-error", {
+                        error,
+                    });
+                    console.log("Failed to flush realtime outbox:", error);
+                });
                 return;
             }
 
@@ -1632,7 +1720,15 @@ export function useChatRealtime() {
                     if (!didSync) {
                         setStatus("connecting");
                         socket.close();
+                        return;
                     }
+
+                    void flushPendingRealtimeEvents(socket).catch((error) => {
+                        debugRealtime("socket-app-active-flush-outbox-error", {
+                            error,
+                        });
+                        console.log("Failed to flush realtime outbox:", error);
+                    });
                     return;
                 }
 
@@ -1700,6 +1796,16 @@ export function useChatRealtime() {
         if (!didSync && socket?.readyState === WebSocket.OPEN) {
             setStatus("connecting");
             socket.close();
+            return;
+        }
+
+        if (didSync && socket?.readyState === WebSocket.OPEN) {
+            void flushPendingRealtimeEvents(socket).catch((error) => {
+                debugRealtime("selected-chat-sync-flush-outbox-error", {
+                    error,
+                });
+                console.log("Failed to flush realtime outbox:", error);
+            });
         }
     }, [selectedChatId, setStatus, syncSelectedConversationJoin]);
 }

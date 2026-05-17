@@ -1,5 +1,6 @@
 import { db } from "@/db/client";
 import { encryptedMedia, messages as dbMessages } from "@/db/schema";
+import { applyMessageReadByUser } from "@/lib/message-read-receipts";
 import { upsertEncryptedMediaMetadataForMessage } from "@/lib/message-media";
 import type { Message } from "@/types/messages";
 import type { InferInsertModel, InferSelectModel } from "drizzle-orm";
@@ -7,6 +8,29 @@ import { and, asc, desc, eq, inArray, lt } from "drizzle-orm";
 
 type DbMessage = InferSelectModel<typeof dbMessages>;
 type DbMessageInsert = InferInsertModel<typeof dbMessages>;
+
+function parseJsonValue<T>(json: string | null | undefined): T | null {
+    if (!json) return null;
+    try {
+        return JSON.parse(json) as T;
+    } catch {
+        return null;
+    }
+}
+
+function mergeReadByUserIds(
+    existingReadByUserIds: string[] | null | undefined,
+    incomingReadByUserIds: string[] | null | undefined
+) {
+    const merged = [
+        ...new Set([
+            ...(existingReadByUserIds ?? []),
+            ...(incomingReadByUserIds ?? []),
+        ].filter(Boolean)),
+    ];
+
+    return merged.length > 0 ? merged : null;
+}
 
 function toDbMessageInsert(msg: Message, currentUserId: string): DbMessageInsert {
     return {
@@ -46,6 +70,10 @@ function toDbMessageInsert(msg: Message, currentUserId: string): DbMessageInsert
         is_edited: msg.edited,
         is_pinned: msg.user_ids_pin_it?.includes(currentUserId) ?? false,
         is_starred: msg.user_ids_star_it?.includes(currentUserId) ?? false,
+        is_read_by_recipient: msg.is_read_by_recipient ?? false,
+        read_by_user_ids_json: msg.read_by_user_ids?.length
+            ? JSON.stringify(msg.read_by_user_ids)
+            : null,
         send_status: msg.client_status ?? "sent",
         created_at:
             msg.created_at instanceof Date
@@ -59,15 +87,6 @@ function toDbMessageInsert(msg: Message, currentUserId: string): DbMessageInsert
 }
 
 function dbRowToMessage(row: DbMessage): Message {
-    const parseJson = <T>(json: string | null): T | null => {
-        if (!json) return null;
-        try {
-            return JSON.parse(json) as T;
-        } catch {
-            return null;
-        }
-    };
-
     return {
         message_id: row.message_id,
         chat_room_id: row.chat_room_id,
@@ -79,7 +98,7 @@ function dbRowToMessage(row: DbMessage): Message {
         encrypted_content_iv: row.encrypted_content_iv ?? null,
         encrypted_content_algorithm:
             (row.encrypted_content_algorithm as Message["encrypted_content_algorithm"]) ?? null,
-        message_recipient_keys: parseJson(row.encrypted_aes_key),
+        message_recipient_keys: parseJsonValue(row.encrypted_aes_key),
         attached_media: (row.attached_media as Message["attached_media"]) ?? null,
         media_url: row.media_url ?? null,
         media_preview_url: row.media_preview_url ?? null,
@@ -95,13 +114,13 @@ function dbRowToMessage(row: DbMessage): Message {
         media_iv: null,
         media_mime_type: null,
         media_preview_mime_type: null,
-        reply_message: parseJson(row.reply_message_json),
-        message_raction: parseJson(row.reactions_json),
-        poll: parseJson(row.poll_json),
-        location: parseJson(row.location_json),
-        contact: parseJson(row.contact_json),
-        event: parseJson(row.event_json),
-        open_graph_data: parseJson(row.open_graph_json),
+        reply_message: parseJsonValue(row.reply_message_json),
+        message_raction: parseJsonValue(row.reactions_json),
+        poll: parseJsonValue(row.poll_json),
+        location: parseJsonValue(row.location_json),
+        contact: parseJsonValue(row.contact_json),
+        event: parseJsonValue(row.event_json),
+        open_graph_data: parseJsonValue(row.open_graph_json),
         is_forward_message: row.is_forward ?? false,
         deleted: row.is_deleted ?? false,
         user_id_delete_it: null,
@@ -110,10 +129,33 @@ function dbRowToMessage(row: DbMessage): Message {
         user_ids_pin_it: row.is_pinned ? [] : null,
         user_ids_star_it: row.is_starred ? [] : null,
         message_text_content: null, // decrypted at runtime, not stored plaintext
-        is_read_by_recipient: undefined,
-        read_by_user_ids: null,
+        is_read_by_recipient: row.is_read_by_recipient ?? false,
+        read_by_user_ids: parseJsonValue(row.read_by_user_ids_json) ?? [],
         created_at: new Date(row.created_at),
         updated_at: new Date(row.updated_at),
+    };
+}
+
+function mergeDbReadReceiptFields(
+    values: DbMessageInsert,
+    existing: Pick<
+        DbMessage,
+        "is_read_by_recipient" | "read_by_user_ids_json"
+    >
+): DbMessageInsert {
+    const mergedReadByUserIds = mergeReadByUserIds(
+        parseJsonValue(existing.read_by_user_ids_json),
+        parseJsonValue(values.read_by_user_ids_json)
+    );
+
+    return {
+        ...values,
+        is_read_by_recipient:
+            Boolean(existing.is_read_by_recipient) ||
+            Boolean(values.is_read_by_recipient),
+        read_by_user_ids_json: mergedReadByUserIds
+            ? JSON.stringify(mergedReadByUserIds)
+            : null,
     };
 }
 
@@ -180,7 +222,11 @@ export async function upsertDbMessages(
         const values = toDbMessageInsert(msg, currentUserId);
 
         const existing = await db
-            .select({ message_id: dbMessages.message_id })
+            .select({
+                message_id: dbMessages.message_id,
+                is_read_by_recipient: dbMessages.is_read_by_recipient,
+                read_by_user_ids_json: dbMessages.read_by_user_ids_json,
+            })
             .from(dbMessages)
             .where(eq(dbMessages.message_id, values.message_id))
             .limit(1);
@@ -188,7 +234,7 @@ export async function upsertDbMessages(
         if (existing.length > 0) {
             await db
                 .update(dbMessages)
-                .set(values)
+                .set(mergeDbReadReceiptFields(values, existing[0]))
                 .where(eq(dbMessages.message_id, values.message_id));
         } else {
             await db.insert(dbMessages).values(values);
@@ -196,6 +242,46 @@ export async function upsertDbMessages(
 
         await upsertEncryptedMediaMetadataForMessage(msg);
     }
+}
+
+export async function markDbMessagesReadByUser({
+    chatId,
+    userId,
+    readAt,
+    currentUserId,
+}: {
+    chatId: string;
+    userId: string;
+    readAt: Date;
+    currentUserId: string;
+}): Promise<void> {
+    const rows = await db
+        .select()
+        .from(dbMessages)
+        .where(eq(dbMessages.chat_room_id, chatId))
+        .orderBy(asc(dbMessages.created_at));
+
+    const messagesToPersist = rows
+        .map(dbRowToMessage)
+        .map((message) => applyMessageReadByUser(message, userId, readAt))
+        .filter((message, index) => {
+            const row = rows[index];
+            const wasRead = Boolean(row.is_read_by_recipient);
+            const existingReadByUserIds =
+                parseJsonValue<string[]>(row.read_by_user_ids_json) ?? [];
+
+            return (
+                Boolean(message.is_read_by_recipient) !== wasRead ||
+                (message.read_by_user_ids ?? []).length !==
+                    existingReadByUserIds.length
+            );
+        });
+
+    if (messagesToPersist.length === 0) {
+        return;
+    }
+
+    await upsertDbMessages(messagesToPersist, currentUserId);
 }
 
 // Delete all messages for a chat room (called when chat is deleted locally)

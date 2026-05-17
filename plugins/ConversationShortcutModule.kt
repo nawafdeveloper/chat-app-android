@@ -133,7 +133,7 @@ class ConversationShortcutModule(reactContext: ReactApplicationContext) :
         )
 
         val notification = NotificationCompat.Builder(context, channelId)
-          .setSmallIcon(context.applicationInfo.icon)
+          .setSmallIcon(notificationIcon(context))
           .setContentTitle(title)
           .setContentText(body)
           .setCategory(NotificationCompat.CATEGORY_MESSAGE)
@@ -245,6 +245,16 @@ class ConversationShortcutModule(reactContext: ReactApplicationContext) :
       context,
       Manifest.permission.POST_NOTIFICATIONS
     ) == PackageManager.PERMISSION_GRANTED
+  }
+
+  private fun notificationIcon(context: Context): Int {
+    val iconId = context.resources.getIdentifier(
+      "notification_icon",
+      "drawable",
+      context.packageName
+    )
+
+    return if (iconId != 0) iconId else context.applicationInfo.icon
   }
 
   private fun loadAvatarIcon(url: String?): IconCompat? {

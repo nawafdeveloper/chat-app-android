@@ -99,6 +99,8 @@ export const messages = sqliteTable(
         is_edited: integer("is_edited", { mode: "boolean" }).default(false),
         is_pinned: integer("is_pinned", { mode: "boolean" }).default(false),
         is_starred: integer("is_starred", { mode: "boolean" }).default(false),
+        is_read_by_recipient: integer("is_read_by_recipient", { mode: "boolean" }).default(false),
+        read_by_user_ids_json: text("read_by_user_ids_json"),
         send_status: text("send_status").default("sent"),
         created_at: text("created_at").notNull(),
         updated_at: text("updated_at").notNull(),

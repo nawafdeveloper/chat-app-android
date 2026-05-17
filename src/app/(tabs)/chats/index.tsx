@@ -285,14 +285,6 @@ const ChatsPage = () => {
             debugChatsPage('prime-cache-skip-no-user', { chatId });
             return;
         }
-        if ((useActiveChatStore.getState().messagesByChatId[chatId]?.length ?? 0) > 0) {
-            debugChatsPage('prime-cache-skip-already-loaded', {
-                chatId,
-                messagesCount: useActiveChatStore.getState().messagesByChatId[chatId]?.length ?? 0,
-            });
-            return;
-        }
-
         void getDecryptedDbMessagePage({
             chatId,
             currentUserId,
@@ -306,11 +298,11 @@ const ChatsPage = () => {
             if (cachedMessages.length === 0) return;
 
             const {
-                setMessages,
+                replaceMessages,
                 setHasOlderMessages,
             } = useActiveChatStore.getState();
 
-            setMessages(chatId, cachedMessages);
+            replaceMessages(chatId, cachedMessages);
             setHasOlderMessages(chatId, cachedMessages.length === MESSAGE_PAGE_SIZE);
         }).catch((error) => {
             debugChatsPage('prime-cache-error', { chatId, error });

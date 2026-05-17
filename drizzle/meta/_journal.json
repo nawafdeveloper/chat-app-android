@@ -36,6 +36,13 @@
       "when": 1778383200000,
       "tag": "0004_group_members_json",
       "breakpoints": true
+    },
+    {
+      "idx": 5,
+      "version": "6",
+      "when": 1778469600000,
+      "tag": "0005_message_read_receipts",
+      "breakpoints": true
     }
   ]
 }

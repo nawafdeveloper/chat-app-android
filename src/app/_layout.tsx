@@ -4,11 +4,18 @@ import { registerForPushNotificationsAsync } from '@/helper/request-for-push-not
 import { getToken } from '@/helper/user-session';
 import { useChatRealtime } from '@/hooks/use-chat-realtime';
 import { authClient } from '@/lib/auth-client';
-import { deleteMobilePushToken, hydrateLocalChatCache, registerMobilePushToken, syncMobileChatsAndMessages } from '@/lib/chat-sync';
+import {
+    getDecryptedDbMessagePage,
+    hydrateLocalChatCache,
+    MESSAGE_PAGE_SIZE,
+    registerMobilePushToken,
+    syncMobileChatsAndMessages,
+} from '@/lib/chat-sync';
 import { syncMobileContacts } from '@/lib/contact-sync';
 import { retrieveSessionKeys } from '@/lib/crypto-storage';
 import { displayRemoteMessageNotification } from '@/lib/display-notifee-notification';
 import { syncNotificationMessageToLocalDb } from '@/lib/background-notification-sync';
+import { getDbChat } from '@/lib/upsert-db-chats';
 import { useAuthStore } from '@/store/auth-store';
 import { useNotificationStore } from '@/store/notification-store';
 import { rightNavRef } from '@/store/right-nav-ref';
@@ -22,13 +29,13 @@ import { useFonts } from 'expo-font';
 import { router, Stack } from 'expo-router';
 import * as SplashScreen from 'expo-splash-screen';
 import React, { useCallback, useEffect, useRef, useState } from 'react';
-import { InteractionManager, Linking, StatusBar, useColorScheme, View } from 'react-native';
+import { AppState, InteractionManager, Linking, StatusBar, useColorScheme, View } from 'react-native';
 import { GestureHandlerRootView } from 'react-native-gesture-handler';
 import { PaperProvider } from 'react-native-paper';
 import { install } from 'react-native-quick-crypto';
 import migrations from '../../drizzle/migrations';
 import { ThemedText } from '../components/themed-text';
-import { db } from '../db/client';
+import { db, ensureLocalDbSchema } from '../db/client';
 
 install();
 const firebaseMessaging = getMessaging();
@@ -149,6 +156,8 @@ const AppLayout = () => {
     const hydratedLocalCacheRef = useRef<string | null>(null);
     const syncedContactsRef = useRef<string | null>(null);
     const handledNotificationResponseRef = useRef<string | null>(null);
+    const catchUpSyncInFlightRef = useRef(false);
+    const lastCatchUpSyncAtRef = useRef(0);
 
     const [fontsLoaded, fontError] = useFonts({
         'Noto-Light': require('../../assets/fonts/NotoSansArabic-Light.ttf'),
@@ -220,6 +229,7 @@ const AppLayout = () => {
 
         hydratedLocalCacheRef.current = session.user.id;
         setLocalCacheReady(false);
+        ensureLocalDbSchema();
 
         void hydrateLocalChatCache({
             currentUserId: session.user.id,
@@ -261,6 +271,53 @@ const AppLayout = () => {
         });
     }, []);
 
+    const hydrateNotificationConversation = useCallback(async (conversationId: string) => {
+        if (!session?.user.id || hasKeys !== true) {
+            return;
+        }
+
+        const [chat, messages] = await Promise.all([
+            getDbChat(conversationId),
+            getDecryptedDbMessagePage({
+                chatId: conversationId,
+                currentUserId: session.user.id,
+            }),
+        ]);
+
+        if (chat) {
+            useActiveChatStore.getState().upsertChat(chat);
+        }
+
+        if (messages.length > 0) {
+            useActiveChatStore.getState().replaceMessages(conversationId, messages);
+            useActiveChatStore
+                .getState()
+                .setHasOlderMessages(
+                    conversationId,
+                    messages.length === MESSAGE_PAGE_SIZE
+                );
+        }
+    }, [hasKeys, session?.user.id]);
+
+    const hydrateLocalCacheIntoStore = useCallback(async () => {
+        if (!session?.user.id || hasKeys !== true) {
+            return;
+        }
+
+        await hydrateLocalChatCache({
+            currentUserId: session.user.id,
+            onChatsLoaded: (chats) => {
+                useActiveChatStore.getState().setChats(chats);
+            },
+            onChatMessagesLoaded: (chatId, messages, hasOlderMessages) => {
+                useActiveChatStore.getState().replaceMessages(chatId, messages);
+                useActiveChatStore
+                    .getState()
+                    .setHasOlderMessages(chatId, Boolean(hasOlderMessages));
+            },
+        });
+    }, [hasKeys, session?.user.id]);
+
     const syncMobileCache = useCallback(async () => {
         if (!session?.user.id || hasKeys !== true) {
             return;
@@ -281,8 +338,70 @@ const AppLayout = () => {
         });
     }, [hasKeys, session?.user.id]);
 
-    // ─── Push token registration ──────────────────────────────────────────────
+    // Message catch-up
+    const runCatchUpSync = useCallback((reason: "startup" | "active") => {
+        if (
+            !hasSession ||
+            hasKeys !== true ||
+            !session?.user.id ||
+            !localCacheReady
+        ) {
+            return;
+        }
+
+        const now = Date.now();
+        if (
+            catchUpSyncInFlightRef.current ||
+            now - lastCatchUpSyncAtRef.current < 4_000
+        ) {
+            return;
+        }
+
+        catchUpSyncInFlightRef.current = true;
+        lastCatchUpSyncAtRef.current = now;
+
+        void (async () => {
+            await hydrateLocalCacheIntoStore();
+            await syncMobileCache();
+        })()
+            .catch((error) => {
+                console.log(`Failed to run ${reason} message catch-up:`, error);
+            })
+            .finally(() => {
+                catchUpSyncInFlightRef.current = false;
+            });
+    }, [
+        hasKeys,
+        hasSession,
+        hydrateLocalCacheIntoStore,
+        localCacheReady,
+        session?.user.id,
+        syncMobileCache,
+    ]);
+
+    // Startup/resume catch-up
     useEffect(() => {
+        runCatchUpSync("startup");
+    }, [runCatchUpSync]);
+
+    useEffect(() => {
+        const subscription = AppState.addEventListener("change", (nextAppState) => {
+            if (nextAppState === "active") {
+                runCatchUpSync("active");
+            }
+        });
+
+        return () => {
+            subscription.remove();
+        };
+    }, [runCatchUpSync]);
+
+    // Push token registration
+    useEffect(() => {
+        if (!hasSession) {
+            return;
+        }
+
         registerForPushNotificationsAsync()
             .then(token => {
                 if (token) {
@@ -291,17 +410,6 @@ const AppLayout = () => {
             })
             .catch((error) => {
                 console.log('Push registration failed:', error);
-                if (
-                    hasSession &&
-                    error instanceof Error &&
-                    error.message.includes('Permission not granted')
-                ) {
-                    void deleteMobilePushToken({
-                        cookies: authClient.getCookie(),
-                    }).catch((deleteError) => {
-                        console.log('Failed to clear push token:', deleteError);
-                    });
-                }
             });
     }, [hasSession, setExpoPushToken]);
 
@@ -413,11 +521,22 @@ const AppLayout = () => {
         // 2️⃣ Foreground FCM message → display via notifee
         const unsubscribeFCM = onMessage(firebaseMessaging, async (remoteMessage) => {
             console.log('[push] foreground FCM message received');
+            const data = remoteMessage.data ?? {};
+            const conversationId = getNotificationChatId(data);
             setNotification(remoteMessage); // keep store updated
-            await Promise.allSettled([
-                syncNotificationMessageToLocalDb(remoteMessage.data ?? {}),
+            const [syncResult] = await Promise.allSettled([
+                syncNotificationMessageToLocalDb(data),
                 displayRemoteMessageNotification(remoteMessage),
             ]);
+
+            if (
+                conversationId &&
+                syncResult.status === 'fulfilled' &&
+                syncResult.value
+            ) {
+                await hydrateNotificationConversation(conversationId);
+            }
+
             syncFromNotification();
         });
 
@@ -438,7 +557,7 @@ const AppLayout = () => {
             unsubscribeNotifee();
             linkingSubscription.remove();
         };
-    }, [openChatFromNotification, setNotification, syncMobileCache]);
+    }, [hydrateNotificationConversation, openChatFromNotification, setNotification, syncMobileCache]);
 
     if (error) {
         return (
