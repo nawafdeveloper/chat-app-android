@@ -3,6 +3,7 @@ import { MemoChatListItem } from '@/components/chat-list-item'
 import { ThemedText } from '@/components/themed-text'
 import { ThemedView } from '@/components/themed-view'
 import { Colors } from '@/constants/theme'
+import { useIsTablet } from '@/context/screen-checking-context'
 import { db } from '@/db/client'
 import { contacts, currentUser, chats as dbChats, encryptedMedia, messages, pendingRealtimeEvents } from '@/db/schema'
 import { deleteToken } from '@/helper/user-session'
@@ -12,6 +13,7 @@ import { clearAllSensitiveData } from '@/lib/crypto-storage'
 import { deleteCachedLocalMediaFiles } from '@/lib/message-media'
 import { upsertDbChats } from '@/lib/upsert-db-chats'
 import { useAuthStore } from '@/store/auth-store'
+import { useNotificationNavigationStore } from '@/store/notification-navigation-store'
 import { useNotificationStore } from '@/store/notification-store'
 import { rightNavRef } from '@/store/right-nav-ref'
 import { useActiveChatStore } from '@/store/use-active-chat-store'
@@ -150,6 +152,9 @@ const ChatsPage = () => {
     const upsertChat = useActiveChatStore((state) => state.upsertChat);
     const realtimeStatus = useRealtimeStore((state) => state.status);
     const { setHasSession } = useAuthStore();
+    const isTablet = useIsTablet();
+    const pendingNotificationChatId = useNotificationNavigationStore((state) => state.pendingChatId);
+    const clearPendingNotificationChatId = useNotificationNavigationStore((state) => state.clearPendingChatId);
 
     const scheme = useColorScheme()
     const resolvedScheme = scheme === 'unspecified' ? 'light' : scheme ?? 'light'
@@ -308,6 +313,69 @@ const ChatsPage = () => {
             debugChatsPage('prime-cache-error', { chatId, error });
         });
     }, [session?.user.id]);
+
+    useEffect(() => {
+        if (!pendingNotificationChatId) {
+            return;
+        }
+
+        let isCancelled = false;
+        let retryTimeout: ReturnType<typeof setTimeout> | null = null;
+        const chatId = pendingNotificationChatId;
+
+        const finishNavigation = () => {
+            clearPendingNotificationChatId(chatId);
+            primeMessagesFromCache(chatId);
+        };
+
+        const navigateToPendingChat = (attempt = 0) => {
+            if (isCancelled) {
+                return;
+            }
+
+            useActiveChatStore.getState().setSelectedChatId(chatId);
+
+            if (rightNavRef.isReady()) {
+                debugChatsPage('notification-open-chat-right-nav', { chatId, attempt });
+                rightNavRef.navigate('chatId', { chatId });
+                finishNavigation();
+                return;
+            }
+
+            if (isTablet && attempt < 10) {
+                retryTimeout = setTimeout(() => {
+                    navigateToPendingChat(attempt + 1);
+                }, 50);
+                return;
+            }
+
+            debugChatsPage('notification-open-chat-router', { chatId, attempt });
+            router.navigate({
+                pathname: '/chatId',
+                params: { chatId },
+            });
+            finishNavigation();
+        };
+
+        const interaction = InteractionManager.runAfterInteractions(() => {
+            requestAnimationFrame(() => {
+                navigateToPendingChat();
+            });
+        });
+
+        return () => {
+            isCancelled = true;
+            interaction.cancel?.();
+            if (retryTimeout) {
+                clearTimeout(retryTimeout);
+            }
+        };
+    }, [
+        clearPendingNotificationChatId,
+        isTablet,
+        pendingNotificationChatId,
+        primeMessagesFromCache,
+    ]);
 
     const handleChatPress = useCallback((chatId: string) => {
         debugChatsPage('handle-chat-press', {

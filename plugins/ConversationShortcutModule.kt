@@ -207,7 +207,7 @@ class ConversationShortcutModule(reactContext: ReactApplicationContext) :
 
     return Intent(Intent.ACTION_VIEW).apply {
       setPackage(context.packageName)
-      data = Uri.parse("chatappandroid://chatId?chatId=$encodedConversationId")
+      data = Uri.parse("chatappandroid://chats?notificationChatId=$encodedConversationId")
       putExtra("conversationId", conversationId)
       addFlags(Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_SINGLE_TOP)
     }

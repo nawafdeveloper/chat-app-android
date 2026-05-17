@@ -27,7 +27,8 @@ export default function AppTabs() {
       backgroundColor={colors.card}
       indicatorColor={colors.indicator}
       rippleColor={colors.indicator}
-      labelStyle={{ selected: { color: colors.text } }}
+      labelStyle={{ selected: { color: colors.text }, default: { color: colors.text + '60' } }}
+      iconColor={{ selected: colors.text, default: colors.text + '60' }}
       badgeBackgroundColor={'#25D366'}
       hidden={logoutLoading}
     >

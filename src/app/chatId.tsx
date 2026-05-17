@@ -478,8 +478,8 @@ const ChatId = () => {
     const realtimeStatus = useRealtimeStore((state) => state.status);
     const { isVisible, hide: hideImagePreview } = useImagePreviewBeforeSentStore();
     const { isVideoVisible, hide: hideVideoPreview } = useVideoPreviewBeforeSentStore();
-    const { isFileVisible } = useFilePreviewBeforeSentStore();
-    const { isContactVisible } = useContactPreviewBeforeSentStore();
+    const { isFileVisible, hide: hideFilePreview } = useFilePreviewBeforeSentStore();
+    const { isContactVisible, hide: hideContactPreview } = useContactPreviewBeforeSentStore();
     const { starMessage, pinMessage, reactToMessage } = useMessageActions();
     const { forwardMessages, isForwarding } = useForwardMessages();
 
@@ -1427,16 +1427,6 @@ const ChatId = () => {
         selectedMessageIds,
     ]);
 
-    if (isFileVisible) {
-        debugChatId('render-file-preview-before-send', { activeChatId });
-        return <FilePreviewBeforeSent />
-    }
-
-    if (isContactVisible) {
-        debugChatId('render-contact-preview-before-send', { activeChatId });
-        return <ContactPreviewBeforeSent />
-    }
-
     const handleOpenProfile = () => {
         debugChatId('open-profile', {
             activeChatId,
@@ -1977,6 +1967,26 @@ const ChatId = () => {
                 )}
             </TiledBackground>
             </KeyboardAvoidingView>
+            <Modal
+                visible={isFileVisible}
+                animationType="none"
+                presentationStyle="fullScreen"
+                hardwareAccelerated
+                onRequestClose={hideFilePreview}
+                onDismiss={hideFilePreview}
+            >
+                {isFileVisible ? <FilePreviewBeforeSent /> : null}
+            </Modal>
+            <Modal
+                visible={isContactVisible}
+                animationType="none"
+                presentationStyle="fullScreen"
+                hardwareAccelerated
+                onRequestClose={hideContactPreview}
+                onDismiss={hideContactPreview}
+            >
+                {isContactVisible ? <ContactPreviewBeforeSent /> : null}
+            </Modal>
             <Modal
                 visible={isVisible}
                 animationType="none"

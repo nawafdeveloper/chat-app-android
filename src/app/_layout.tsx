@@ -1,9 +1,11 @@
+import { Colors } from '@/constants/theme';
 import { CryptoProvider, useCryptoKeys } from '@/context/crypto';
 import { TabletProvider } from '@/context/screen-checking-context';
 import { registerForPushNotificationsAsync } from '@/helper/request-for-push-notification';
 import { getToken } from '@/helper/user-session';
 import { useChatRealtime } from '@/hooks/use-chat-realtime';
 import { authClient } from '@/lib/auth-client';
+import { syncNotificationMessageToLocalDb } from '@/lib/background-notification-sync';
 import {
     getDecryptedDbMessagePage,
     hydrateLocalChatCache,
@@ -14,11 +16,10 @@ import {
 import { syncMobileContacts } from '@/lib/contact-sync';
 import { retrieveSessionKeys } from '@/lib/crypto-storage';
 import { displayRemoteMessageNotification } from '@/lib/display-notifee-notification';
-import { syncNotificationMessageToLocalDb } from '@/lib/background-notification-sync';
 import { getDbChat } from '@/lib/upsert-db-chats';
+import { useNotificationNavigationStore } from '@/store/notification-navigation-store';
 import { useAuthStore } from '@/store/auth-store';
 import { useNotificationStore } from '@/store/notification-store';
-import { rightNavRef } from '@/store/right-nav-ref';
 import { useActiveChatStore } from '@/store/use-active-chat-store';
 import { setRefreshKeysHandler } from '@/types/keys.module';
 import notifee, { EventType } from '@notifee/react-native';
@@ -50,6 +51,7 @@ type AppStackProps = {
     hasPin: boolean
     hasNoPin: boolean
     hasName: boolean
+    onMainAppReadyChange: (ready: boolean) => void
 }
 
 function optionalString(value: unknown) {
@@ -70,6 +72,7 @@ function getChatIdFromUrl(url: string) {
     try {
         const parsed = new URL(url);
         const chatIdParam =
+            parsed.searchParams.get('notificationChatId') ??
             parsed.searchParams.get('chatId') ??
             parsed.searchParams.get('conversationId') ??
             parsed.searchParams.get('chat_room_id');
@@ -103,13 +106,38 @@ function getChatIdFromUrl(url: string) {
     return null;
 }
 
-const AppStack = ({ hasSession, hasSessionUser, isNewUser, hasPin, hasNoPin, hasName }: AppStackProps) => {
+const AppStack = ({
+    hasSession,
+    hasSessionUser,
+    isNewUser,
+    hasPin,
+    hasNoPin,
+    hasName,
+    onMainAppReadyChange,
+}: AppStackProps) => {
     const { isHydrated: cryptoHydrated } = useCryptoKeys();
+    const scheme = useColorScheme();
+    const colors = Colors[scheme === 'unspecified' ? 'light' : scheme ?? 'light'];
+    const mainAppReady =
+        cryptoHydrated &&
+        hasSession &&
+        hasSessionUser &&
+        !isNewUser &&
+        hasPin &&
+        hasName;
+
+    useEffect(() => {
+        onMainAppReadyChange(mainAppReady);
+
+        return () => {
+            onMainAppReadyChange(false);
+        };
+    }, [mainAppReady, onMainAppReadyChange]);
 
     if (!cryptoHydrated) return null;
 
     return (
-        <Stack screenOptions={{ headerShown: false }}>
+        <Stack screenOptions={{ headerShown: false, contentStyle: { backgroundColor: colors.background } }}>
             <Stack.Protected guard={!hasSession}>
                 <Stack.Screen name="(auth)" options={{ animation: 'none', gestureEnabled: false }} />
             </Stack.Protected>
@@ -149,13 +177,15 @@ const AppLayout = () => {
     const [isReady, setIsReady] = useState(false);
     const [hasKeys, setHasKeys] = useState<boolean | null>(null);
     const [localCacheReady, setLocalCacheReady] = useState(false);
+    const [mainAppStackReady, setMainAppStackReady] = useState(false);
     const { hasSession, setHasSession } = useAuthStore();
     const { data: session } = authClient.useSession();
     const { expoPushToken, setExpoPushToken, setNotification } = useNotificationStore();
+    const pendingNotificationChatId = useNotificationNavigationStore((state) => state.pendingChatId);
     const registeredPushTokenRef = useRef<string | null>(null);
     const hydratedLocalCacheRef = useRef<string | null>(null);
     const syncedContactsRef = useRef<string | null>(null);
-    const handledNotificationResponseRef = useRef<string | null>(null);
+    const handledNotificationResponseRef = useRef<Map<string, number>>(new Map());
     const catchUpSyncInFlightRef = useRef(false);
     const lastCatchUpSyncAtRef = useRef(0);
 
@@ -169,6 +199,10 @@ const AppLayout = () => {
         const keys = await retrieveSessionKeys();
         setHasKeys(!!keys);
     };
+
+    const handleMainAppReadyChange = useCallback((ready: boolean) => {
+        setMainAppStackReady(ready);
+    }, []);
 
     useEffect(() => {
         setRefreshKeysHandler(refreshKeys);
@@ -207,6 +241,8 @@ const AppLayout = () => {
             hydratedLocalCacheRef.current = null;
             registeredPushTokenRef.current = null;
             syncedContactsRef.current = null;
+            useNotificationNavigationStore.getState().clearPendingChatId();
+            setMainAppStackReady(false);
             setLocalCacheReady(false);
         }
     }, [hasSession]);
@@ -254,22 +290,30 @@ const AppLayout = () => {
 
     const openChatFromNotification = useCallback((conversationId: string) => {
         useActiveChatStore.getState().setSelectedChatId(conversationId);
-        router.replace(MAIN_CHATS_TAB_ROUTE);
+        useNotificationNavigationStore.getState().setPendingChatId(conversationId);
+    }, []);
 
-        InteractionManager.runAfterInteractions(() => {
+    useEffect(() => {
+        if (!pendingNotificationChatId || !mainAppStackReady) {
+            return;
+        }
+
+        let isCancelled = false;
+        const interaction = InteractionManager.runAfterInteractions(() => {
             requestAnimationFrame(() => {
-                if (rightNavRef.isReady()) {
-                    rightNavRef.navigate('chatId', { chatId: conversationId });
+                if (isCancelled) {
                     return;
                 }
 
-                router.push({
-                    pathname: '/chatId',
-                    params: { chatId: conversationId },
-                });
+                router.replace(MAIN_CHATS_TAB_ROUTE);
             });
         });
-    }, []);
+
+        return () => {
+            isCancelled = true;
+            interaction.cancel?.();
+        };
+    }, [mainAppStackReady, pendingNotificationChatId]);
 
     const hydrateNotificationConversation = useCallback(async (conversationId: string) => {
         if (!session?.user.id || hasKeys !== true) {
@@ -467,21 +511,38 @@ const AppLayout = () => {
             });
         };
 
-        const handleNotificationPress = (data: Record<string, any>) => {
-            const identifier =
-                optionalString(data?.messageId) ??
-                optionalString(data?.message_id) ??
-                getNotificationChatId(data);
+        const wasRecentlyHandled = (keys: string[]) => {
+            const now = Date.now();
+            const handled = handledNotificationResponseRef.current;
 
-            if (identifier && handledNotificationResponseRef.current === identifier) {
+            for (const [key, handledAt] of handled) {
+                if (now - handledAt > 5_000) {
+                    handled.delete(key);
+                }
+            }
+
+            if (keys.some((key) => handled.has(key))) {
+                return true;
+            }
+
+            keys.forEach((key) => handled.set(key, now));
+            return false;
+        };
+
+        const handleNotificationPress = (data: Record<string, any>) => {
+            const conversationId = getNotificationChatId(data);
+            const messageId =
+                optionalString(data?.messageId) ??
+                optionalString(data?.message_id);
+            const handledKeys = [
+                messageId ? `message:${messageId}` : null,
+                conversationId ? `conversation:${conversationId}` : null,
+            ].filter((key): key is string => Boolean(key));
+
+            if (handledKeys.length > 0 && wasRecentlyHandled(handledKeys)) {
                 return;
             }
 
-            if (identifier) {
-                handledNotificationResponseRef.current = identifier;
-            }
-
-            const conversationId = getNotificationChatId(data);
             if (conversationId) {
                 openChatFromNotification(conversationId);
             }
@@ -499,24 +560,36 @@ const AppLayout = () => {
                 return;
             }
 
-            if (handledNotificationResponseRef.current === url) {
+            const handledKeys = [
+                `url:${url}`,
+                `conversation:${conversationId}`,
+            ];
+
+            if (wasRecentlyHandled(handledKeys)) {
                 return;
             }
 
-            handledNotificationResponseRef.current = url;
             openChatFromNotification(conversationId);
             syncFromNotification();
         };
 
         // 1️⃣ App opened from a killed state via notification tap
-        notifee.getInitialNotification().then((initialNotification) => {
-            if (initialNotification) {
-                const data = initialNotification.notification.data ?? {};
-                handleNotificationPress(data);
-            }
-        });
+        notifee.getInitialNotification()
+            .then((initialNotification) => {
+                if (initialNotification) {
+                    const data = initialNotification.notification.data ?? {};
+                    handleNotificationPress(data);
+                }
+            })
+            .catch((error) => {
+                console.log('Failed to read initial notification:', error);
+            });
 
-        Linking.getInitialURL().then(handleNotificationUrl);
+        Linking.getInitialURL()
+            .then(handleNotificationUrl)
+            .catch((error) => {
+                console.log('Failed to read initial notification URL:', error);
+            });
 
         // 2️⃣ Foreground FCM message → display via notifee
         const unsubscribeFCM = onMessage(firebaseMessaging, async (remoteMessage) => {
@@ -591,6 +664,7 @@ const AppLayout = () => {
                                 hasPin={hasPin}
                                 hasNoPin={hasNoPin}
                                 hasName={hasName}
+                                onMainAppReadyChange={handleMainAppReadyChange}
                             />
                         </CryptoProvider>
                         <StatusBar
