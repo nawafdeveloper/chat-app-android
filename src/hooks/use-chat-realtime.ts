@@ -19,11 +19,11 @@ import {
     resolveDirectChatPartner,
 } from "@/lib/chat-utils";
 import { resolveDirectChatContact } from "@/lib/contact-display";
+import { clearChatNotificationFromSystem } from "@/lib/display-notifee-notification";
 import {
     isMessageMediaSafeForJsDecrypt,
     materializeMessageMedia,
 } from "@/lib/message-media";
-import { clearChatNotificationFromSystem } from "@/lib/display-notifee-notification";
 import { markChatReadOptimistically } from "@/lib/optimistic-read-receipts";
 import {
     completePendingRealtimeEvent,
@@ -94,7 +94,7 @@ function summarizeRealtimeChat(chat: ChatItemType) {
 }
 
 type ReactNativeWebSocketConstructor = typeof WebSocket & {
-    new (
+    new(
         url: string,
         protocols?: string | string[] | null,
         options?: { headers?: Record<string, string> }
@@ -130,6 +130,33 @@ function isUnreadableEncryptedMessage(message: Message) {
     return hasEncryptedTextPayload(message) && !hasRenderableMessageContent(message);
 }
 
+function isLocalMediaSource(source?: string | null) {
+    return Boolean(
+        source &&
+        (
+            source.startsWith("file:") ||
+            source.startsWith("content:") ||
+            source.startsWith("asset:") ||
+            source.startsWith("data:")
+        )
+    );
+}
+
+function mergeMediaSource(
+    realtimeSource?: string | null,
+    localSource?: string | null
+) {
+    if (
+        localSource &&
+        isLocalMediaSource(localSource) &&
+        !isLocalMediaSource(realtimeSource)
+    ) {
+        return localSource;
+    }
+
+    return realtimeSource ?? localSource ?? null;
+}
+
 function mergeRealtimeMessageWithLocalContent(
     realtimeMessage: Message,
     localMessage?: Message | null
@@ -153,6 +180,20 @@ function mergeRealtimeMessageWithLocalContent(
             realtimeMessage.reply_message ?? localMessage.reply_message ?? null,
         open_graph_data:
             realtimeMessage.open_graph_data ?? localMessage.open_graph_data ?? null,
+        media_url: mergeMediaSource(
+            realtimeMessage.media_url,
+            localMessage.media_url
+        ),
+        media_preview_url: mergeMediaSource(
+            realtimeMessage.media_preview_url,
+            localMessage.media_preview_url
+        ),
+        video_thumbnail: mergeMediaSource(
+            realtimeMessage.video_thumbnail,
+            localMessage.video_thumbnail
+        ),
+        encrypted_media:
+            realtimeMessage.encrypted_media ?? localMessage.encrypted_media ?? null,
         client_local_media_name:
             realtimeMessage.client_local_media_name ??
             localMessage.client_local_media_name ??
@@ -843,541 +884,541 @@ export function useChatRealtime() {
         });
 
         switch (event.type) {
-                case "GROUP_CREATED": {
-                    debugRealtime("event-group-created-start", {
-                        chat: summarizeRealtimeChat(normalizeChatItem(event.chat)),
-                    });
-                    const normalizedChat = normalizeChatItem(event.chat);
-                    const [decryptedChat] = await decryptChatPreviewBatch({
-                        chats: [normalizedChat],
-                        currentUserId,
-                    });
+            case "GROUP_CREATED": {
+                debugRealtime("event-group-created-start", {
+                    chat: summarizeRealtimeChat(normalizeChatItem(event.chat)),
+                });
+                const normalizedChat = normalizeChatItem(event.chat);
+                const [decryptedChat] = await decryptChatPreviewBatch({
+                    chats: [normalizedChat],
+                    currentUserId,
+                });
 
-                    await persistAndUpsertChat({
-                        ...decryptedChat,
-                        last_message_context:
-                            decryptedChat.last_message_context || "Group created",
-                    });
-                    debugRealtime("event-group-created-finish", {
-                        chat: summarizeRealtimeChat(decryptedChat),
-                    });
-                    break;
-                }
+                await persistAndUpsertChat({
+                    ...decryptedChat,
+                    last_message_context:
+                        decryptedChat.last_message_context || "Group created",
+                });
+                debugRealtime("event-group-created-finish", {
+                    chat: summarizeRealtimeChat(decryptedChat),
+                });
+                break;
+            }
 
-                case "MESSAGE_SENT": {
-                    const conversationId = resolveStoreChatId(event.conversationId);
-                    debugRealtime("event-message-sent-start", {
-                        rawConversationId: event.conversationId,
-                        conversationId,
-                        clientMessageId: event.clientMessageId,
-                    });
-                    const normalizedMessage = {
-                        ...normalizeMessage(event.message),
-                        chat_room_id: conversationId,
-                    };
-                    debugRealtime("event-message-sent-normalized", {
-                        message: summarizeRealtimeMessage(normalizedMessage),
-                    });
-                    const [nextMessage] = await decryptMessageBatch({
-                        currentUserId,
-                        messages: [normalizedMessage],
-                    });
-                    debugRealtime("event-message-sent-decrypted", {
-                        message: summarizeRealtimeMessage(nextMessage),
-                    });
+            case "MESSAGE_SENT": {
+                const conversationId = resolveStoreChatId(event.conversationId);
+                debugRealtime("event-message-sent-start", {
+                    rawConversationId: event.conversationId,
+                    conversationId,
+                    clientMessageId: event.clientMessageId,
+                });
+                const normalizedMessage = {
+                    ...normalizeMessage(event.message),
+                    chat_room_id: conversationId,
+                };
+                debugRealtime("event-message-sent-normalized", {
+                    message: summarizeRealtimeMessage(normalizedMessage),
+                });
+                const [nextMessage] = await decryptMessageBatch({
+                    currentUserId,
+                    messages: [normalizedMessage],
+                });
+                debugRealtime("event-message-sent-decrypted", {
+                    message: summarizeRealtimeMessage(nextMessage),
+                });
 
-                    const messageId =
-                        event.clientMessageId ?? nextMessage.message_id;
-                    const existingMessage = (
-                        useActiveChatStore
-                            .getState()
-                            .messagesByChatId[conversationId] ?? []
-                    ).find(
-                        (message) =>
-                            message.message_id === messageId ||
-                            message.message_id === nextMessage.message_id
-                    );
-                    const mergedMessage = mergeRealtimeMessageWithLocalContent(
-                        nextMessage,
-                        existingMessage
-                    );
-                    debugRealtime("event-message-sent-merged", {
-                        messageId,
-                        existingMessage: existingMessage ? summarizeRealtimeMessage(existingMessage) : null,
-                        mergedMessage: summarizeRealtimeMessage(mergedMessage),
-                    });
-
-                    if (isUnreadableEncryptedMessage(mergedMessage)) {
-                        debugRealtime("event-message-sent-skip-unreadable", {
-                            message: summarizeRealtimeMessage(mergedMessage),
-                        });
-                        break;
-                    }
-
-                    const confirmedMessage: Message = {
-                        ...mergedMessage,
-                        client_status: "sent",
-                        client_error: null,
-                        client_received_via_realtime: false,
-                    };
-
-                    const existingChat = useActiveChatStore
+                const messageId =
+                    event.clientMessageId ?? nextMessage.message_id;
+                const existingMessage = (
+                    useActiveChatStore
                         .getState()
-                        .chats.find((chat) => chat.chat_id === conversationId);
+                        .messagesByChatId[conversationId] ?? []
+                ).find(
+                    (message) =>
+                        message.message_id === messageId ||
+                        message.message_id === nextMessage.message_id
+                );
+                const mergedMessage = mergeRealtimeMessageWithLocalContent(
+                    nextMessage,
+                    existingMessage
+                );
+                debugRealtime("event-message-sent-merged", {
+                    messageId,
+                    existingMessage: existingMessage ? summarizeRealtimeMessage(existingMessage) : null,
+                    mergedMessage: summarizeRealtimeMessage(mergedMessage),
+                });
 
-                    const nextChat = applyKnownContactOverride(
-                        buildChatFromMessage({
-                            conversationId,
-                            conversationType: event.conversationType,
-                            message: confirmedMessage,
-                            currentUserId,
-                            unreadCount: 0,
-                            fallbackExistingChat: existingChat,
-                        })
-                    );
-
-                    const existingMessageId = existingMessage?.message_id;
-
-                    if (existingMessageId) {
-                        debugRealtime("event-message-sent-update-existing", {
-                            conversationId,
-                            existingMessageId,
-                            confirmedMessage: summarizeRealtimeMessage(confirmedMessage),
-                        });
-                        useActiveChatStore.getState().updateMessage(
-                            conversationId,
-                            existingMessageId,
-                            () => confirmedMessage
-                        );
-                    } else {
-                        debugRealtime("event-message-sent-append-new", {
-                            conversationId,
-                            confirmedMessage: summarizeRealtimeMessage(confirmedMessage),
-                        });
-                        appendMessage(conversationId, confirmedMessage);
-                    }
-                    void persistAndUpsertChat(nextChat);
-                    void upsertDbMessages([confirmedMessage], currentUserId).catch((error) => {
-                        debugRealtime("event-message-sent-db-error", {
-                            message: summarizeRealtimeMessage(confirmedMessage),
-                            error,
-                        });
-                        console.log("Failed to persist confirmed message:", error);
+                if (isUnreadableEncryptedMessage(mergedMessage)) {
+                    debugRealtime("event-message-sent-skip-unreadable", {
+                        message: summarizeRealtimeMessage(mergedMessage),
                     });
-                    scheduleRealtimeMediaMaterialization(
-                        confirmedMessage,
-                        currentUserId
-                    );
                     break;
                 }
 
-                case "NEW_MESSAGE": {
-                    const conversationId = resolveStoreChatId(event.conversationId);
-                    debugRealtime("event-new-message-start", {
-                        rawConversationId: event.conversationId,
+                const confirmedMessage: Message = {
+                    ...mergedMessage,
+                    client_status: "sent",
+                    client_error: null,
+                    client_received_via_realtime: false,
+                };
+
+                const existingChat = useActiveChatStore
+                    .getState()
+                    .chats.find((chat) => chat.chat_id === conversationId);
+
+                const nextChat = applyKnownContactOverride(
+                    buildChatFromMessage({
                         conversationId,
-                        selectedChatId: useActiveChatStore.getState().selectedChatId,
-                    });
-                    const normalizedMessage = {
-                        ...normalizeMessage(event.message),
-                        chat_room_id: conversationId,
-                    };
-                    debugRealtime("event-new-message-normalized", {
-                        message: summarizeRealtimeMessage(normalizedMessage),
-                    });
-                    const [nextMessage] = await decryptMessageBatch({
+                        conversationType: event.conversationType,
+                        message: confirmedMessage,
                         currentUserId,
-                        messages: [normalizedMessage],
-                    });
-                    debugRealtime("event-new-message-decrypted", {
-                        message: summarizeRealtimeMessage(nextMessage),
-                    });
-                    const existingMessage = (
-                        useActiveChatStore
-                            .getState()
-                            .messagesByChatId[conversationId] ?? []
-                    ).find((message) => message.message_id === nextMessage.message_id);
-                    const mergedMessage = mergeRealtimeMessageWithLocalContent(
-                        nextMessage,
-                        existingMessage
-                    );
-                    debugRealtime("event-new-message-merged", {
-                        existingMessage: existingMessage ? summarizeRealtimeMessage(existingMessage) : null,
-                        mergedMessage: summarizeRealtimeMessage(mergedMessage),
-                    });
+                        unreadCount: 0,
+                        fallbackExistingChat: existingChat,
+                    })
+                );
 
-                    if (isUnreadableEncryptedMessage(mergedMessage)) {
-                        debugRealtime("event-new-message-skip-unreadable", {
-                            message: summarizeRealtimeMessage(mergedMessage),
-                        });
-                        break;
-                    }
+                const existingMessageId = existingMessage?.message_id;
 
-                    const incomingMessage: Message = {
-                        ...mergedMessage,
-                        client_status: "sent",
-                        client_error: null,
-                        client_received_via_realtime:
-                            mergedMessage.sender_user_id !== currentUserId,
-                    };
-
-                    const existingChat = useActiveChatStore
-                        .getState()
-                        .chats.find((chat) => chat.chat_id === conversationId);
-                    const isSelected =
-                        useActiveChatStore.getState().selectedChatId ===
-                        conversationId;
-                    const unreadCount =
-                        incomingMessage.sender_user_id === currentUserId || isSelected
-                            ? 0
-                            : (existingChat?.unreaded_messages_length ?? 0) + 1;
-                    debugRealtime("event-new-message-chat-state", {
+                if (existingMessageId) {
+                    debugRealtime("event-message-sent-update-existing", {
                         conversationId,
-                        isSelected,
-                        unreadCount,
-                        existingChat: existingChat ? summarizeRealtimeChat(existingChat) : null,
-                        incomingMessage: summarizeRealtimeMessage(incomingMessage),
+                        existingMessageId,
+                        confirmedMessage: summarizeRealtimeMessage(confirmedMessage),
                     });
-
-                    const nextChat = applyKnownContactOverride(
-                        buildChatFromMessage({
-                            conversationId,
-                            conversationType: event.conversationType,
-                            message: incomingMessage,
-                            currentUserId,
-                            unreadCount,
-                            fallbackExistingChat: existingChat,
-                        })
-                    );
-                    debugRealtime("event-new-message-append", {
-                        conversationId,
-                        incomingMessage: summarizeRealtimeMessage(incomingMessage),
-                    });
-                    appendMessage(conversationId, incomingMessage);
-                    markSelectedIncomingMessageReadImmediately({
-                        conversationId,
-                        message: incomingMessage,
-                        currentUserId,
-                    });
-                    void persistAndUpsertChat(nextChat);
-                    void upsertDbMessages([incomingMessage], currentUserId).catch((error) => {
-                        debugRealtime("event-new-message-db-error", {
-                            message: summarizeRealtimeMessage(incomingMessage),
-                            error,
-                        });
-                        console.log("Failed to persist incoming message:", error);
-                    });
-                    scheduleRealtimeMediaMaterialization(
-                        incomingMessage,
-                        currentUserId
-                    );
-
-                    break;
-                }
-
-                case "CONVERSATION_UPDATED": {
-                    const conversationId = resolveStoreChatId(event.conversationId);
-                    debugRealtime("event-conversation-updated-start", {
-                        rawConversationId: event.conversationId,
-                        conversationId,
-                        unreadCount: event.unreadCount,
-                    });
-                    const normalizedMessage = {
-                        ...normalizeMessage(event.lastMessage),
-                        chat_room_id: conversationId,
-                    };
-                    debugRealtime("event-conversation-updated-normalized", {
-                        message: summarizeRealtimeMessage(normalizedMessage),
-                    });
-                    const [nextMessage] = await decryptMessageBatch({
-                        currentUserId,
-                        messages: [normalizedMessage],
-                    });
-                    debugRealtime("event-conversation-updated-decrypted", {
-                        message: summarizeRealtimeMessage(nextMessage),
-                    });
-                    const existingMessage = (
-                        useActiveChatStore
-                            .getState()
-                            .messagesByChatId[conversationId] ?? []
-                    ).find((message) => message.message_id === nextMessage.message_id);
-                    const mergedMessage = mergeRealtimeMessageWithLocalContent(
-                        nextMessage,
-                        existingMessage
-                    );
-                    debugRealtime("event-conversation-updated-merged", {
-                        existingMessage: existingMessage ? summarizeRealtimeMessage(existingMessage) : null,
-                        mergedMessage: summarizeRealtimeMessage(mergedMessage),
-                    });
-
-                    if (isUnreadableEncryptedMessage(mergedMessage)) {
-                        debugRealtime("event-conversation-updated-skip-unreadable", {
-                            message: summarizeRealtimeMessage(mergedMessage),
-                        });
-                        break;
-                    }
-
-                    const conversationMessage: Message = {
-                        ...mergedMessage,
-                        client_status: "sent",
-                        client_error: null,
-                        client_received_via_realtime:
-                            mergedMessage.sender_user_id !== currentUserId,
-                    };
-                    const existingChat = useActiveChatStore
-                        .getState()
-                        .chats.find((chat) => chat.chat_id === conversationId);
-                    const isSelected =
-                        useActiveChatStore.getState().selectedChatId ===
-                        conversationId;
-                    debugRealtime("event-conversation-updated-chat-state", {
-                        conversationId,
-                        isSelected,
-                        existingChat: existingChat ? summarizeRealtimeChat(existingChat) : null,
-                        conversationMessage: summarizeRealtimeMessage(conversationMessage),
-                    });
-
-                    const nextChat = applyKnownContactOverride(
-                        buildChatFromMessage({
-                            conversationId,
-                            conversationType: event.conversationType,
-                            message: conversationMessage,
-                            currentUserId,
-                            unreadCount: isSelected ? 0 : event.unreadCount,
-                            fallbackExistingChat: existingChat,
-                        })
-                    );
-                    debugRealtime("event-conversation-updated-append", {
-                        conversationId,
-                        isSelected,
-                        conversationMessage: summarizeRealtimeMessage(conversationMessage),
-                    });
-                    appendMessage(conversationId, conversationMessage);
-                    markSelectedIncomingMessageReadImmediately({
-                        conversationId,
-                        message: conversationMessage,
-                        currentUserId,
-                    });
-                    void persistAndUpsertChat(nextChat);
-                    void upsertDbMessages([conversationMessage], currentUserId).catch((error) => {
-                        debugRealtime("event-conversation-updated-db-error", {
-                            message: summarizeRealtimeMessage(conversationMessage),
-                            error,
-                        });
-                        console.log("Failed to persist conversation message:", error);
-                    });
-                    scheduleRealtimeMediaMaterialization(
-                        conversationMessage,
-                        currentUserId
-                    );
-                    break;
-                }
-
-                case "MESSAGE_REACTION_UPDATED": {
-                    const conversationId = resolveStoreChatId(event.conversationId);
-                    debugRealtime("event-reaction-updated-start", {
-                        rawConversationId: event.conversationId,
-                        conversationId,
-                        messageId: event.messageId,
-                        reaction: event.reaction,
-                        unreadCount: event.unreadCount,
-                    });
-                    const updatedAt = new Date(event.updatedAt);
-                    const safeUpdatedAt = Number.isNaN(updatedAt.getTime())
-                        ? new Date()
-                        : updatedAt;
-                    const messageToPersist = (
-                        useActiveChatStore
-                            .getState()
-                            .messagesByChatId[conversationId] ?? []
-                    ).find((message) => message.message_id === event.messageId)
-                        ?? await getDbMessage(event.messageId);
-
                     useActiveChatStore.getState().updateMessage(
                         conversationId,
-                        event.messageId,
-                        (message) => ({
-                            ...message,
-                            message_raction: event.reaction,
-                            updated_at: safeUpdatedAt,
-                        })
+                        existingMessageId,
+                        () => confirmedMessage
                     );
+                } else {
+                    debugRealtime("event-message-sent-append-new", {
+                        conversationId,
+                        confirmedMessage: summarizeRealtimeMessage(confirmedMessage),
+                    });
+                    appendMessage(conversationId, confirmedMessage);
+                }
+                void persistAndUpsertChat(nextChat);
+                void upsertDbMessages([confirmedMessage], currentUserId).catch((error) => {
+                    debugRealtime("event-message-sent-db-error", {
+                        message: summarizeRealtimeMessage(confirmedMessage),
+                        error,
+                    });
+                    console.log("Failed to persist confirmed message:", error);
+                });
+                scheduleRealtimeMediaMaterialization(
+                    confirmedMessage,
+                    currentUserId
+                );
+                break;
+            }
 
-                    if (messageToPersist) {
-                        void upsertDbMessages(
-                            [
-                                {
-                                    ...messageToPersist,
-                                    message_raction: event.reaction,
-                                    updated_at: safeUpdatedAt,
-                                },
-                            ],
-                            currentUserId
-                        ).catch((error) => {
-                            debugRealtime("event-reaction-updated-db-error", {
-                                conversationId,
-                                messageId: event.messageId,
-                                error,
-                            });
-                            console.log("Failed to persist message reaction:", error);
-                        });
-                    }
-
-                    const existingChat = useActiveChatStore
+            case "NEW_MESSAGE": {
+                const conversationId = resolveStoreChatId(event.conversationId);
+                debugRealtime("event-new-message-start", {
+                    rawConversationId: event.conversationId,
+                    conversationId,
+                    selectedChatId: useActiveChatStore.getState().selectedChatId,
+                });
+                const normalizedMessage = {
+                    ...normalizeMessage(event.message),
+                    chat_room_id: conversationId,
+                };
+                debugRealtime("event-new-message-normalized", {
+                    message: summarizeRealtimeMessage(normalizedMessage),
+                });
+                const [nextMessage] = await decryptMessageBatch({
+                    currentUserId,
+                    messages: [normalizedMessage],
+                });
+                debugRealtime("event-new-message-decrypted", {
+                    message: summarizeRealtimeMessage(nextMessage),
+                });
+                const existingMessage = (
+                    useActiveChatStore
                         .getState()
-                        .chats.find((chat) => chat.chat_id === conversationId);
-                    const isSelected =
-                        useActiveChatStore.getState().selectedChatId ===
-                        conversationId;
+                        .messagesByChatId[conversationId] ?? []
+                ).find((message) => message.message_id === nextMessage.message_id);
+                const mergedMessage = mergeRealtimeMessageWithLocalContent(
+                    nextMessage,
+                    existingMessage
+                );
+                debugRealtime("event-new-message-merged", {
+                    existingMessage: existingMessage ? summarizeRealtimeMessage(existingMessage) : null,
+                    mergedMessage: summarizeRealtimeMessage(mergedMessage),
+                });
 
-                    const nextChat = applyKnownContactOverride(
-                        buildChatFromReaction({
-                            conversationId,
-                            conversationType: event.conversationType,
-                            messageId: event.messageId,
-                            reaction: event.reaction,
-                            updatedAt: safeUpdatedAt,
-                            currentUserId,
-                            unreadCount: isSelected ? 0 : event.unreadCount,
-                            fallbackExistingChat: existingChat,
-                        })
-                    );
+                if (isUnreadableEncryptedMessage(mergedMessage)) {
+                    debugRealtime("event-new-message-skip-unreadable", {
+                        message: summarizeRealtimeMessage(mergedMessage),
+                    });
+                    break;
+                }
 
-                    await persistAndUpsertChat(nextChat);
-                    if (isSelected) {
-                        debugRealtime("event-reaction-updated-mark-read-selected", {
+                const incomingMessage: Message = {
+                    ...mergedMessage,
+                    client_status: "sent",
+                    client_error: null,
+                    client_received_via_realtime:
+                        mergedMessage.sender_user_id !== currentUserId,
+                };
+
+                const existingChat = useActiveChatStore
+                    .getState()
+                    .chats.find((chat) => chat.chat_id === conversationId);
+                const isSelected =
+                    useActiveChatStore.getState().selectedChatId ===
+                    conversationId;
+                const unreadCount =
+                    incomingMessage.sender_user_id === currentUserId || isSelected
+                        ? 0
+                        : (existingChat?.unreaded_messages_length ?? 0) + 1;
+                debugRealtime("event-new-message-chat-state", {
+                    conversationId,
+                    isSelected,
+                    unreadCount,
+                    existingChat: existingChat ? summarizeRealtimeChat(existingChat) : null,
+                    incomingMessage: summarizeRealtimeMessage(incomingMessage),
+                });
+
+                const nextChat = applyKnownContactOverride(
+                    buildChatFromMessage({
+                        conversationId,
+                        conversationType: event.conversationType,
+                        message: incomingMessage,
+                        currentUserId,
+                        unreadCount,
+                        fallbackExistingChat: existingChat,
+                    })
+                );
+                debugRealtime("event-new-message-append", {
+                    conversationId,
+                    incomingMessage: summarizeRealtimeMessage(incomingMessage),
+                });
+                appendMessage(conversationId, incomingMessage);
+                markSelectedIncomingMessageReadImmediately({
+                    conversationId,
+                    message: incomingMessage,
+                    currentUserId,
+                });
+                void persistAndUpsertChat(nextChat);
+                void upsertDbMessages([incomingMessage], currentUserId).catch((error) => {
+                    debugRealtime("event-new-message-db-error", {
+                        message: summarizeRealtimeMessage(incomingMessage),
+                        error,
+                    });
+                    console.log("Failed to persist incoming message:", error);
+                });
+                scheduleRealtimeMediaMaterialization(
+                    incomingMessage,
+                    currentUserId
+                );
+
+                break;
+            }
+
+            case "CONVERSATION_UPDATED": {
+                const conversationId = resolveStoreChatId(event.conversationId);
+                debugRealtime("event-conversation-updated-start", {
+                    rawConversationId: event.conversationId,
+                    conversationId,
+                    unreadCount: event.unreadCount,
+                });
+                const normalizedMessage = {
+                    ...normalizeMessage(event.lastMessage),
+                    chat_room_id: conversationId,
+                };
+                debugRealtime("event-conversation-updated-normalized", {
+                    message: summarizeRealtimeMessage(normalizedMessage),
+                });
+                const [nextMessage] = await decryptMessageBatch({
+                    currentUserId,
+                    messages: [normalizedMessage],
+                });
+                debugRealtime("event-conversation-updated-decrypted", {
+                    message: summarizeRealtimeMessage(nextMessage),
+                });
+                const existingMessage = (
+                    useActiveChatStore
+                        .getState()
+                        .messagesByChatId[conversationId] ?? []
+                ).find((message) => message.message_id === nextMessage.message_id);
+                const mergedMessage = mergeRealtimeMessageWithLocalContent(
+                    nextMessage,
+                    existingMessage
+                );
+                debugRealtime("event-conversation-updated-merged", {
+                    existingMessage: existingMessage ? summarizeRealtimeMessage(existingMessage) : null,
+                    mergedMessage: summarizeRealtimeMessage(mergedMessage),
+                });
+
+                if (isUnreadableEncryptedMessage(mergedMessage)) {
+                    debugRealtime("event-conversation-updated-skip-unreadable", {
+                        message: summarizeRealtimeMessage(mergedMessage),
+                    });
+                    break;
+                }
+
+                const conversationMessage: Message = {
+                    ...mergedMessage,
+                    client_status: "sent",
+                    client_error: null,
+                    client_received_via_realtime:
+                        mergedMessage.sender_user_id !== currentUserId,
+                };
+                const existingChat = useActiveChatStore
+                    .getState()
+                    .chats.find((chat) => chat.chat_id === conversationId);
+                const isSelected =
+                    useActiveChatStore.getState().selectedChatId ===
+                    conversationId;
+                debugRealtime("event-conversation-updated-chat-state", {
+                    conversationId,
+                    isSelected,
+                    existingChat: existingChat ? summarizeRealtimeChat(existingChat) : null,
+                    conversationMessage: summarizeRealtimeMessage(conversationMessage),
+                });
+
+                const nextChat = applyKnownContactOverride(
+                    buildChatFromMessage({
+                        conversationId,
+                        conversationType: event.conversationType,
+                        message: conversationMessage,
+                        currentUserId,
+                        unreadCount: isSelected ? 0 : event.unreadCount,
+                        fallbackExistingChat: existingChat,
+                    })
+                );
+                debugRealtime("event-conversation-updated-append", {
+                    conversationId,
+                    isSelected,
+                    conversationMessage: summarizeRealtimeMessage(conversationMessage),
+                });
+                appendMessage(conversationId, conversationMessage);
+                markSelectedIncomingMessageReadImmediately({
+                    conversationId,
+                    message: conversationMessage,
+                    currentUserId,
+                });
+                void persistAndUpsertChat(nextChat);
+                void upsertDbMessages([conversationMessage], currentUserId).catch((error) => {
+                    debugRealtime("event-conversation-updated-db-error", {
+                        message: summarizeRealtimeMessage(conversationMessage),
+                        error,
+                    });
+                    console.log("Failed to persist conversation message:", error);
+                });
+                scheduleRealtimeMediaMaterialization(
+                    conversationMessage,
+                    currentUserId
+                );
+                break;
+            }
+
+            case "MESSAGE_REACTION_UPDATED": {
+                const conversationId = resolveStoreChatId(event.conversationId);
+                debugRealtime("event-reaction-updated-start", {
+                    rawConversationId: event.conversationId,
+                    conversationId,
+                    messageId: event.messageId,
+                    reaction: event.reaction,
+                    unreadCount: event.unreadCount,
+                });
+                const updatedAt = new Date(event.updatedAt);
+                const safeUpdatedAt = Number.isNaN(updatedAt.getTime())
+                    ? new Date()
+                    : updatedAt;
+                const messageToPersist = (
+                    useActiveChatStore
+                        .getState()
+                        .messagesByChatId[conversationId] ?? []
+                ).find((message) => message.message_id === event.messageId)
+                    ?? await getDbMessage(event.messageId);
+
+                useActiveChatStore.getState().updateMessage(
+                    conversationId,
+                    event.messageId,
+                    (message) => ({
+                        ...message,
+                        message_raction: event.reaction,
+                        updated_at: safeUpdatedAt,
+                    })
+                );
+
+                if (messageToPersist) {
+                    void upsertDbMessages(
+                        [
+                            {
+                                ...messageToPersist,
+                                message_raction: event.reaction,
+                                updated_at: safeUpdatedAt,
+                            },
+                        ],
+                        currentUserId
+                    ).catch((error) => {
+                        debugRealtime("event-reaction-updated-db-error", {
                             conversationId,
                             messageId: event.messageId,
+                            error,
                         });
-                        markChatReadOptimistically({
-                            conversationId,
-                            messageId: event.messageId,
-                        });
-                    }
-                    break;
+                        console.log("Failed to persist message reaction:", error);
+                    });
                 }
 
-                case "CONVERSATION_PRESENCE": {
-                    const conversationId = resolveStoreChatId(event.conversationId);
-                    debugRealtime("event-presence", {
-                        rawConversationId: event.conversationId,
-                        conversationId,
-                        activeUsersCount: event.activeUsersCount,
-                        activeUsers: event.activeUsers,
-                    });
-                    setPresence(conversationId, {
-                        activeUsers: event.activeUsers,
-                        activeUsersCount: event.activeUsersCount,
-                    });
-                    break;
-                }
+                const existingChat = useActiveChatStore
+                    .getState()
+                    .chats.find((chat) => chat.chat_id === conversationId);
+                const isSelected =
+                    useActiveChatStore.getState().selectedChatId ===
+                    conversationId;
 
-                case "CONVERSATION_TYPING": {
-                    const conversationId = resolveStoreChatId(event.conversationId);
-                    debugRealtime("event-typing", {
-                        rawConversationId: event.conversationId,
+                const nextChat = applyKnownContactOverride(
+                    buildChatFromReaction({
                         conversationId,
-                        activeTypingUsers: event.activeTypingUsers,
-                    });
-                    setTypingUsers(
-                        conversationId,
-                        event.activeTypingUsers.filter(
-                            (userId) => userId !== currentUserId
-                        )
-                    );
-                    break;
-                }
+                        conversationType: event.conversationType,
+                        messageId: event.messageId,
+                        reaction: event.reaction,
+                        updatedAt: safeUpdatedAt,
+                        currentUserId,
+                        unreadCount: isSelected ? 0 : event.unreadCount,
+                        fallbackExistingChat: existingChat,
+                    })
+                );
 
-                case "MARK_READ": {
-                    const conversationId = resolveStoreChatId(event.conversationId);
-                    debugRealtime("event-mark-read", {
-                        rawConversationId: event.conversationId,
+                await persistAndUpsertChat(nextChat);
+                if (isSelected) {
+                    debugRealtime("event-reaction-updated-mark-read-selected", {
                         conversationId,
                         messageId: event.messageId,
-                        userId: event.userId,
-                        readAt: event.readAt,
                     });
-                    const readAt = new Date(event.readAt);
-                    if (!Number.isNaN(readAt.getTime())) {
-                        markMessagesReadByUser(
-                            conversationId,
-                            event.userId,
-                            readAt
-                        );
+                    markChatReadOptimistically({
+                        conversationId,
+                        messageId: event.messageId,
+                    });
+                }
+                break;
+            }
 
-                        const updatedChat = useActiveChatStore
-                            .getState()
-                            .chats.find((chat) => chat.chat_id === conversationId);
-                        if (updatedChat) {
-                            void upsertDbChats([updatedChat]).catch((error) => {
-                                debugRealtime("event-mark-read-persist-chat-error", {
-                                    conversationId,
-                                    messageId: event.messageId,
-                                    userId: event.userId,
-                                    error,
-                                });
-                                console.log(
-                                    "Failed to persist realtime read receipt:",
-                                    error
-                                );
-                            });
-                        }
+            case "CONVERSATION_PRESENCE": {
+                const conversationId = resolveStoreChatId(event.conversationId);
+                debugRealtime("event-presence", {
+                    rawConversationId: event.conversationId,
+                    conversationId,
+                    activeUsersCount: event.activeUsersCount,
+                    activeUsers: event.activeUsers,
+                });
+                setPresence(conversationId, {
+                    activeUsers: event.activeUsers,
+                    activeUsersCount: event.activeUsersCount,
+                });
+                break;
+            }
 
-                        void markDbMessagesReadByUser({
-                            chatId: conversationId,
-                            userId: event.userId,
-                            readAt,
-                            currentUserId,
-                        }).catch((error) => {
-                            debugRealtime("event-mark-read-persist-messages-error", {
+            case "CONVERSATION_TYPING": {
+                const conversationId = resolveStoreChatId(event.conversationId);
+                debugRealtime("event-typing", {
+                    rawConversationId: event.conversationId,
+                    conversationId,
+                    activeTypingUsers: event.activeTypingUsers,
+                });
+                setTypingUsers(
+                    conversationId,
+                    event.activeTypingUsers.filter(
+                        (userId) => userId !== currentUserId
+                    )
+                );
+                break;
+            }
+
+            case "MARK_READ": {
+                const conversationId = resolveStoreChatId(event.conversationId);
+                debugRealtime("event-mark-read", {
+                    rawConversationId: event.conversationId,
+                    conversationId,
+                    messageId: event.messageId,
+                    userId: event.userId,
+                    readAt: event.readAt,
+                });
+                const readAt = new Date(event.readAt);
+                if (!Number.isNaN(readAt.getTime())) {
+                    markMessagesReadByUser(
+                        conversationId,
+                        event.userId,
+                        readAt
+                    );
+
+                    const updatedChat = useActiveChatStore
+                        .getState()
+                        .chats.find((chat) => chat.chat_id === conversationId);
+                    if (updatedChat) {
+                        void upsertDbChats([updatedChat]).catch((error) => {
+                            debugRealtime("event-mark-read-persist-chat-error", {
                                 conversationId,
                                 messageId: event.messageId,
                                 userId: event.userId,
                                 error,
                             });
                             console.log(
-                                "Failed to persist realtime message read receipts:",
+                                "Failed to persist realtime read receipt:",
                                 error
                             );
                         });
                     }
 
-                    if (event.userId === currentUserId) {
-                        useActiveChatStore
-                            .getState()
-                            .markChatRead(conversationId, event.messageId);
-                        void clearChatNotificationFromSystem(conversationId);
-
-                        void completePendingRealtimeEvent({
-                            type: "MARK_READ",
+                    void markDbMessagesReadByUser({
+                        chatId: conversationId,
+                        userId: event.userId,
+                        readAt,
+                        currentUserId,
+                    }).catch((error) => {
+                        debugRealtime("event-mark-read-persist-messages-error", {
                             conversationId,
-                            messageId: event.messageId ?? undefined,
-                        }).catch((error) => {
-                            debugRealtime("event-mark-read-complete-pending-error", {
-                                conversationId,
-                                messageId: event.messageId,
-                                error,
-                            });
+                            messageId: event.messageId,
+                            userId: event.userId,
+                            error,
                         });
-                    }
-                    break;
+                        console.log(
+                            "Failed to persist realtime message read receipts:",
+                            error
+                        );
+                    });
                 }
 
-                case "ERROR": {
-                    debugRealtime("event-error", { message: event.message });
-                    setChatsError(event.message);
-                    break;
-                }
+                if (event.userId === currentUserId) {
+                    useActiveChatStore
+                        .getState()
+                        .markChatRead(conversationId, event.messageId);
+                    void clearChatNotificationFromSystem(conversationId);
 
-                default:
-                    debugRealtime("server-event-unhandled", { eventType: event.type });
-                    break;
+                    void completePendingRealtimeEvent({
+                        type: "MARK_READ",
+                        conversationId,
+                        messageId: event.messageId ?? undefined,
+                    }).catch((error) => {
+                        debugRealtime("event-mark-read-complete-pending-error", {
+                            conversationId,
+                            messageId: event.messageId,
+                            error,
+                        });
+                    });
+                }
+                break;
             }
-            debugRealtime("server-event-finish", {
-                eventType: event.type,
-                rawConversationId: "conversationId" in event ? event.conversationId : null,
-            });
-        },
+
+            case "ERROR": {
+                debugRealtime("event-error", { message: event.message });
+                setChatsError(event.message);
+                break;
+            }
+
+            default:
+                debugRealtime("server-event-unhandled", { eventType: event.type });
+                break;
+        }
+        debugRealtime("server-event-finish", {
+            eventType: event.type,
+            rawConversationId: "conversationId" in event ? event.conversationId : null,
+        });
+    },
         [
             appendMessage,
             applyKnownContactOverride,

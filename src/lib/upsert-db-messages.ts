@@ -1,13 +1,19 @@
 import { db } from "@/db/client";
-import { encryptedMedia, messages as dbMessages } from "@/db/schema";
+import { messages as dbMessages, encryptedMedia } from "@/db/schema";
+import {
+    isLocalMediaUri,
+    upsertEncryptedMediaMetadataForMessage,
+} from "@/lib/message-media";
 import { applyMessageReadByUser } from "@/lib/message-read-receipts";
-import { upsertEncryptedMediaMetadataForMessage } from "@/lib/message-media";
 import type { Message } from "@/types/messages";
 import type { InferInsertModel, InferSelectModel } from "drizzle-orm";
 import { and, asc, desc, eq, inArray, lt } from "drizzle-orm";
+import { getInfoAsync } from "expo-file-system/legacy";
 
 type DbMessage = InferSelectModel<typeof dbMessages>;
 type DbMessageInsert = InferInsertModel<typeof dbMessages>;
+type DbEncryptedMedia = InferSelectModel<typeof encryptedMedia>;
+const MEDIA_HYDRATION_BATCH_SIZE = 500;
 
 function parseJsonValue<T>(json: string | null | undefined): T | null {
     if (!json) return null;
@@ -136,6 +142,125 @@ function dbRowToMessage(row: DbMessage): Message {
     };
 }
 
+async function getExistingLocalUri(uri?: string | null) {
+    if (!uri || !isLocalMediaUri(uri)) {
+        return null;
+    }
+
+    if (!uri.startsWith("file:")) {
+        return uri;
+    }
+
+    try {
+        const info = await getInfoAsync(uri);
+        return info.exists ? uri : null;
+    } catch {
+        return null;
+    }
+}
+
+async function shouldKeepExistingLocalUri(
+    incomingUri?: string | null,
+    existingUri?: string | null
+) {
+    if (incomingUri && isLocalMediaUri(incomingUri)) {
+        return false;
+    }
+
+    return Boolean(await getExistingLocalUri(existingUri));
+}
+
+function encryptedMediaRowToMessageMedia(row: DbEncryptedMedia) {
+    return {
+        id: row.id,
+        message_id: row.message_id,
+        object_key: row.object_key,
+        preview_object_key: row.preview_object_key,
+        encrypted_aes_key: row.encrypted_aes_key,
+        iv: row.iv,
+        mime_type: row.mime_type,
+        preview_mime_type: row.preview_mime_type,
+        original_size_bytes: row.original_size_bytes,
+        local_path: row.local_path,
+        preview_local_path: row.preview_local_path,
+    };
+}
+
+async function hydrateMessagesWithStoredMedia(messages: Message[]) {
+    if (messages.length === 0) {
+        return messages;
+    }
+
+    const messageIds = messages.map((message) => message.message_id);
+    const mediaRows: DbEncryptedMedia[] = [];
+    for (let index = 0; index < messageIds.length; index += MEDIA_HYDRATION_BATCH_SIZE) {
+        const batchIds = messageIds.slice(index, index + MEDIA_HYDRATION_BATCH_SIZE);
+        mediaRows.push(
+            ...(await db
+                .select()
+                .from(encryptedMedia)
+                .where(inArray(encryptedMedia.message_id, batchIds)))
+        );
+    }
+
+    const mediaByMessageId = new Map(
+        mediaRows
+            .filter((row) => row.message_id)
+            .map((row) => [row.message_id as string, row])
+    );
+
+    return Promise.all(
+        messages.map(async (message) => {
+            const mediaRow = mediaByMessageId.get(message.message_id);
+            if (!mediaRow) {
+                return message;
+            }
+
+            const localPath = await getExistingLocalUri(mediaRow.local_path);
+            const previewLocalPath = await getExistingLocalUri(
+                mediaRow.preview_local_path
+            );
+            const messageMedia = {
+                ...encryptedMediaRowToMessageMedia(mediaRow),
+                local_path: localPath,
+                preview_local_path: previewLocalPath,
+            };
+
+            return {
+                ...message,
+                encrypted_media: messageMedia,
+                media_object_key:
+                    message.media_object_key ?? mediaRow.object_key,
+                media_preview_object_key:
+                    message.media_preview_object_key ??
+                    mediaRow.preview_object_key,
+                media_encrypted_aes_key:
+                    message.media_encrypted_aes_key ??
+                    mediaRow.encrypted_aes_key,
+                media_iv: message.media_iv ?? mediaRow.iv,
+                media_mime_type:
+                    message.media_mime_type ?? mediaRow.mime_type,
+                media_preview_mime_type:
+                    message.media_preview_mime_type ??
+                    mediaRow.preview_mime_type,
+                media_size_bytes:
+                    message.media_size_bytes ??
+                    mediaRow.original_size_bytes ??
+                    null,
+                media_url: localPath ?? message.media_url,
+                media_preview_url:
+                    message.attached_media === "photo" && previewLocalPath
+                        ? previewLocalPath
+                        : message.media_preview_url,
+                video_thumbnail:
+                    message.attached_media === "video" && previewLocalPath
+                        ? previewLocalPath
+                        : message.video_thumbnail,
+            };
+        })
+    );
+}
+
 function mergeDbReadReceiptFields(
     values: DbMessageInsert,
     existing: Pick<
@@ -159,6 +284,80 @@ function mergeDbReadReceiptFields(
     };
 }
 
+async function mergeDbMessageFields(
+    values: DbMessageInsert,
+    existing: Pick<
+        DbMessage,
+        | "is_read_by_recipient"
+        | "read_by_user_ids_json"
+        | "media_url"
+        | "media_preview_url"
+        | "video_thumbnail"
+    >
+): Promise<DbMessageInsert> {
+    const merged = mergeDbReadReceiptFields(values, existing);
+
+    if (await shouldKeepExistingLocalUri(merged.media_url, existing.media_url)) {
+        merged.media_url = existing.media_url;
+    }
+
+    if (
+        await shouldKeepExistingLocalUri(
+            merged.media_preview_url,
+            existing.media_preview_url
+        )
+    ) {
+        merged.media_preview_url = existing.media_preview_url;
+    }
+
+    if (
+        await shouldKeepExistingLocalUri(
+            merged.video_thumbnail,
+            existing.video_thumbnail
+        )
+    ) {
+        merged.video_thumbnail = existing.video_thumbnail;
+    }
+
+    return merged;
+}
+
+function applyDbMediaFieldsToMessage(
+    message: Message,
+    values: DbMessageInsert
+): Message {
+    const fullLocalPath =
+        values.media_url && isLocalMediaUri(values.media_url)
+            ? values.media_url
+            : null;
+    const previewCandidate =
+        message.attached_media === "video"
+            ? values.video_thumbnail
+            : values.media_preview_url;
+    const previewLocalPath =
+        previewCandidate && isLocalMediaUri(previewCandidate)
+            ? previewCandidate
+            : null;
+
+    return {
+        ...message,
+        media_url: values.media_url ?? null,
+        media_preview_url: values.media_preview_url ?? null,
+        video_thumbnail: values.video_thumbnail ?? null,
+        encrypted_media: message.encrypted_media
+            ? {
+                ...message.encrypted_media,
+                local_path:
+                    fullLocalPath ?? message.encrypted_media.local_path ?? null,
+                preview_local_path:
+                    previewLocalPath ??
+                    message.encrypted_media.preview_local_path ??
+                    null,
+            }
+            : message.encrypted_media,
+    };
+}
+
 // Get the newest message page, or the next older page before a timestamp.
 // The DB query is newest-first for paging, but the UI/store expects chronological order.
 export async function getDbMessages(
@@ -178,9 +377,11 @@ export async function getDbMessages(
         .orderBy(desc(dbMessages.created_at))
         .limit(limit);
 
-    return rows
+    const messages = rows
         .map(dbRowToMessage)
         .sort((left, right) => left.created_at.getTime() - right.created_at.getTime());
+
+    return hydrateMessagesWithStoredMedia(messages);
 }
 
 export async function getAllDbMessages(chatRoomId: string): Promise<Message[]> {
@@ -190,7 +391,7 @@ export async function getAllDbMessages(chatRoomId: string): Promise<Message[]> {
         .where(eq(dbMessages.chat_room_id, chatRoomId))
         .orderBy(asc(dbMessages.created_at));
 
-    return rows.map(dbRowToMessage);
+    return hydrateMessagesWithStoredMedia(rows.map(dbRowToMessage));
 }
 
 export async function getEveryDbMessage(): Promise<Message[]> {
@@ -199,7 +400,7 @@ export async function getEveryDbMessage(): Promise<Message[]> {
         .from(dbMessages)
         .orderBy(asc(dbMessages.chat_room_id), asc(dbMessages.created_at));
 
-    return rows.map(dbRowToMessage);
+    return hydrateMessagesWithStoredMedia(rows.map(dbRowToMessage));
 }
 
 // Get a single message by ID
@@ -210,7 +411,14 @@ export async function getDbMessage(messageId: string): Promise<Message | null> {
         .where(eq(dbMessages.message_id, messageId))
         .limit(1);
 
-    return rows.length > 0 ? dbRowToMessage(rows[0]) : null;
+    if (rows.length === 0) {
+        return null;
+    }
+
+    const [message] = await hydrateMessagesWithStoredMedia([
+        dbRowToMessage(rows[0]),
+    ]);
+    return message ?? null;
 }
 
 // Upsert one or more messages
@@ -220,27 +428,41 @@ export async function upsertDbMessages(
 ): Promise<void> {
     for (const msg of msgs) {
         const values = toDbMessageInsert(msg, currentUserId);
+        let messageForMediaMetadata = msg;
 
         const existing = await db
             .select({
                 message_id: dbMessages.message_id,
                 is_read_by_recipient: dbMessages.is_read_by_recipient,
                 read_by_user_ids_json: dbMessages.read_by_user_ids_json,
+                media_url: dbMessages.media_url,
+                media_preview_url: dbMessages.media_preview_url,
+                video_thumbnail: dbMessages.video_thumbnail,
             })
             .from(dbMessages)
             .where(eq(dbMessages.message_id, values.message_id))
             .limit(1);
 
         if (existing.length > 0) {
+            const mergedValues = await mergeDbMessageFields(
+                values,
+                existing[0]
+            );
+            messageForMediaMetadata = applyDbMediaFieldsToMessage(
+                msg,
+                mergedValues
+            );
+
             await db
                 .update(dbMessages)
-                .set(mergeDbReadReceiptFields(values, existing[0]))
+                .set(mergedValues)
                 .where(eq(dbMessages.message_id, values.message_id));
         } else {
+            messageForMediaMetadata = applyDbMediaFieldsToMessage(msg, values);
             await db.insert(dbMessages).values(values);
         }
 
-        await upsertEncryptedMediaMetadataForMessage(msg);
+        await upsertEncryptedMediaMetadataForMessage(messageForMediaMetadata);
     }
 }
 
@@ -273,7 +495,7 @@ export async function markDbMessagesReadByUser({
             return (
                 Boolean(message.is_read_by_recipient) !== wasRead ||
                 (message.read_by_user_ids ?? []).length !==
-                    existingReadByUserIds.length
+                existingReadByUserIds.length
             );
         });
 

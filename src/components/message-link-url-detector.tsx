@@ -46,6 +46,6 @@ export const detectAndRenderLinks = (
 const styles = StyleSheet.create({
     linkText: {
         textDecorationLine: 'underline',
-        fontWeight: '600'
+        fontWeight: '600',
     },
 });

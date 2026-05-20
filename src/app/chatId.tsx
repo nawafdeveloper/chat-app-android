@@ -1929,7 +1929,7 @@ const ChatId = () => {
                                 <Icon
                                     source="lock-check-outline"
                                     color="#25D366"
-                                    size={20}
+                                    size={16}
                                 />
                                 <ThemedText style={[styles.centerBadgeText, { color: colors.textSecondary }]}>
                                     All of your messages are end-to-end encrypted.
@@ -2028,8 +2028,7 @@ const styles = StyleSheet.create({
     },
     centerBadge: {
         flexDirection: 'row',
-        alignItems: 'center',
-        alignSelf: 'center',
+        alignItems: 'flex-start',
         gap: 8,
         paddingHorizontal: 10,
         paddingVertical: 6,
@@ -2037,10 +2036,9 @@ const styles = StyleSheet.create({
         maxWidth: '88%',
     },
     centerBadgeText: {
-        fontSize: 14,
-        fontWeight: '400',
+        fontSize: 12,
         lineHeight: 18,
-        textAlign: 'center',
+        textAlign: 'left',
     },
     appbarContent: {
         flex: 1,

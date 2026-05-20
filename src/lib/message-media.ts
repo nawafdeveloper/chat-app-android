@@ -286,8 +286,17 @@ function getMessageMediaMetadata(message: Message) {
             message.media_size_bytes ??
             message.client_local_media_size ??
             0,
-        localPath: encrypted?.local_path ?? null,
-        previewLocalPath: encrypted?.preview_local_path ?? null,
+        localPath:
+            encrypted?.local_path ??
+            (isLocalMediaUri(message.media_url) ? message.media_url : null),
+        previewLocalPath:
+            encrypted?.preview_local_path ??
+            (isLocalMediaUri(message.video_thumbnail)
+                ? message.video_thumbnail
+                : null) ??
+            (isLocalMediaUri(message.media_preview_url)
+                ? message.media_preview_url
+                : null),
     };
 }
 
@@ -359,6 +368,96 @@ async function findStoredMedia(objectKey: string) {
             .limit(1);
 
         return rows[0] ?? null;
+    } catch {
+        return null;
+    }
+}
+
+async function getExistingStoredLocalPath(
+    managedSource: ManagedMediaSource,
+    isPreview: boolean
+) {
+    const storedMedia = await findStoredMedia(managedSource.objectKey);
+    const storedLocalPath = isPreview
+        ? storedMedia?.preview_local_path
+        : storedMedia?.local_path;
+
+    if (!storedLocalPath) {
+        return null;
+    }
+
+    try {
+        const info = await getInfoAsync(storedLocalPath);
+        if (!info.exists) {
+            return null;
+        }
+    } catch {
+        return null;
+    }
+
+    mediaFileCache.set(managedSource.objectKey, storedLocalPath);
+    return storedLocalPath;
+}
+
+async function getCachedMessageMediaLocalPath({
+    source,
+    isPreview,
+    fallbackExtension,
+}: {
+    source?: string | null;
+    isPreview: boolean;
+    fallbackExtension: string;
+}) {
+    if (!source || isLocalMediaUri(source)) {
+        return source ?? null;
+    }
+
+    const absoluteSource = source.startsWith("/")
+        ? `${API_BASE}${source}`
+        : source;
+    const managedSource = parseManagedMessageMediaUrl(absoluteSource);
+    if (!managedSource) {
+        return null;
+    }
+
+    const memoryCached = mediaFileCache.get(managedSource.objectKey);
+    if (memoryCached) {
+        try {
+            const info = await getInfoAsync(memoryCached);
+            if (info.exists) {
+                return memoryCached;
+            }
+        } catch {
+            mediaFileCache.delete(managedSource.objectKey);
+        }
+    }
+
+    const storedLocalPath = await getExistingStoredLocalPath(
+        managedSource,
+        isPreview
+    );
+    if (storedLocalPath) {
+        return storedLocalPath;
+    }
+
+    const cachePath = getCachePath({
+        objectKey: managedSource.objectKey,
+        source,
+        fallbackExtension,
+    });
+    try {
+        const diskInfo = await getInfoAsync(cachePath);
+        if (!diskInfo.exists) {
+            return null;
+        }
+
+        mediaFileCache.set(managedSource.objectKey, cachePath);
+        await rememberLocalPath({
+            objectKey: managedSource.objectKey,
+            localPath: cachePath,
+            isPreview,
+        });
+        return cachePath;
     } catch {
         return null;
     }
@@ -497,16 +596,13 @@ async function getDecryptionPayload(
     isPreview: boolean
 ) {
     const storedMedia = await findStoredMedia(managedSource.objectKey);
-    const storedLocalPath = isPreview
-        ? storedMedia?.preview_local_path
-        : storedMedia?.local_path;
+    const storedLocalPath = await getExistingStoredLocalPath(
+        managedSource,
+        isPreview
+    );
 
     if (storedLocalPath) {
-        const info = await getInfoAsync(storedLocalPath);
-        if (info.exists) {
-            mediaFileCache.set(managedSource.objectKey, storedLocalPath);
-            return { localPath: storedLocalPath };
-        }
+        return { localPath: storedLocalPath };
     }
 
     const cachedAesKey = aesKeyCache.get(managedSource.objectKey);
@@ -692,6 +788,19 @@ export type MaterializeMessageMediaOptions = {
     ignoreSizeLimit?: boolean;
 };
 
+function withLocalFullMedia(message: Message, localFullUri: string): Message {
+    return {
+        ...message,
+        media_url: localFullUri,
+        encrypted_media: message.encrypted_media
+            ? {
+                ...message.encrypted_media,
+                local_path: localFullUri,
+            }
+            : message.encrypted_media,
+    };
+}
+
 export async function materializeMessageMedia(
     message: Message,
     options: MaterializeMessageMediaOptions = {}
@@ -742,21 +851,35 @@ export async function materializeMessageMedia(
         }
     }
 
-    const fullSource = getMessageFullMediaSource(message);
+    const fullSource = getMessageFullMediaSource(nextMessage);
     const shouldDownloadFull =
         options.downloadFull === true ||
         message.attached_media === "voice" ||
         message.attached_media === "file";
 
-    if (!supportsFullDownload || !shouldDownloadFull || !fullSource) {
-        return nextMessage;
-    }
-
-    if (!options.ignoreSizeLimit && !isMessageMediaSafeForJsDecrypt(message)) {
+    if (!supportsFullDownload || !fullSource) {
         return nextMessage;
     }
 
     if (isLocalMediaUri(fullSource)) {
+        return nextMessage;
+    }
+
+    const cachedFullUri = await getCachedMessageMediaLocalPath({
+        source: fullSource,
+        isPreview: false,
+        fallbackExtension: getFallbackExtensionForMessage(message, false),
+    });
+
+    if (cachedFullUri && isLocalMediaUri(cachedFullUri)) {
+        return withLocalFullMedia(nextMessage, cachedFullUri);
+    }
+
+    if (!shouldDownloadFull) {
+        return nextMessage;
+    }
+
+    if (!options.ignoreSizeLimit && !isMessageMediaSafeForJsDecrypt(message)) {
         return nextMessage;
     }
 

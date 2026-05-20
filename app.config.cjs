@@ -3,7 +3,7 @@ module.exports = {
     name: "YaHla",
     slug: "chat-app-android",
     version: "1.0.0",
-    orientation: "portrait",
+    orientation: "default",
     icon: "./assets/images/icon.png",
     scheme: "chatappandroid",
     "owner": "yahla",
@@ -48,7 +48,7 @@ module.exports = {
       [
         "expo-splash-screen",
         {
-          backgroundColor: "#0C1013",
+          backgroundColor: "#000",
           android: {
             image: "./assets/images/splash-icon.png",
             imageWidth: 76,

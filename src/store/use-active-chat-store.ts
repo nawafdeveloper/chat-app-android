@@ -40,6 +40,37 @@ function isTransientMessage(message: Message) {
     );
 }
 
+function isLocalMediaSource(source?: string | null) {
+    return Boolean(
+        source &&
+        (
+            source.startsWith("file:") ||
+            source.startsWith("content:") ||
+            source.startsWith("asset:") ||
+            source.startsWith("data:")
+        )
+    );
+}
+
+function mergeMediaSource(
+    existingSource?: string | null,
+    incomingSource?: string | null
+) {
+    if (!incomingSource) {
+        return existingSource ?? null;
+    }
+
+    if (
+        existingSource &&
+        isLocalMediaSource(existingSource) &&
+        !isLocalMediaSource(incomingSource)
+    ) {
+        return existingSource;
+    }
+
+    return incomingSource;
+}
+
 function mergeMessageForStableUi(
     existingMessage: Message | undefined,
     incomingMessage: Message
@@ -62,16 +93,25 @@ function mergeMessageForStableUi(
             incomingMessage.reply_message ?? existingMessage.reply_message,
         open_graph_data:
             incomingMessage.open_graph_data ?? existingMessage.open_graph_data,
-        media_url: incomingMessage.media_url ?? existingMessage.media_url,
+        media_url: mergeMediaSource(
+            existingMessage.media_url,
+            incomingMessage.media_url
+        ),
         media_preview_url:
-            incomingMessage.media_preview_url ?? existingMessage.media_preview_url,
+            mergeMediaSource(
+                existingMessage.media_preview_url,
+                incomingMessage.media_preview_url
+            ),
         media_preview_object_key:
             incomingMessage.media_preview_object_key ??
             existingMessage.media_preview_object_key,
         encrypted_media:
             incomingMessage.encrypted_media ?? existingMessage.encrypted_media,
         video_thumbnail:
-            incomingMessage.video_thumbnail ?? existingMessage.video_thumbnail,
+            mergeMediaSource(
+                existingMessage.video_thumbnail,
+                incomingMessage.video_thumbnail
+            ),
         client_local_media_name:
             incomingMessage.client_local_media_name ??
             existingMessage.client_local_media_name,
@@ -310,64 +350,64 @@ export const useActiveChatStore = create<ActiveChatState>((set) => ({
             );
             const mergedChat =
                 chat.chat_type === "group" &&
-                (!chat.group_members || chat.group_members.length === 0) &&
-                existingChat?.group_members?.length
+                    (!chat.group_members || chat.group_members.length === 0) &&
+                    existingChat?.group_members?.length
                     ? { ...chat, group_members: existingChat.group_members }
                     : existingChat && chat.chat_type === "single"
-                      ? {
-                          ...chat,
-                          avatar: chat.avatar || existingChat.avatar,
-                          display_name: chat.display_name ?? existingChat.display_name,
-                          recipient_user_id:
-                              chat.recipient_user_id ?? existingChat.recipient_user_id,
-                          recipient_public_key:
-                              chat.recipient_public_key ??
-                              existingChat.recipient_public_key ??
-                              null,
-                          contact_phone: chat.contact_phone ?? existingChat.contact_phone,
-                          recipient_last_seen:
-                              chat.recipient_last_seen ?? existingChat.recipient_last_seen,
-                          recipient_who_can_see_last_seen:
-                              chat.recipient_who_can_see_last_seen ??
-                              existingChat.recipient_who_can_see_last_seen,
-                          recipient_last_seen_visible:
-                              chat.recipient_last_seen_visible ??
-                              existingChat.recipient_last_seen_visible,
-                          recipient_who_can_see_status:
-                              chat.recipient_who_can_see_status ??
-                              existingChat.recipient_who_can_see_status,
-                          recipient_who_can_see_profile_picture:
-                              chat.recipient_who_can_see_profile_picture ??
-                              existingChat.recipient_who_can_see_profile_picture,
-                          recipient_profile_picture_visible:
-                              chat.recipient_profile_picture_visible ??
-                              existingChat.recipient_profile_picture_visible,
-                          recipient_about_ciphertext:
-                              chat.recipient_about_ciphertext ??
-                              existingChat.recipient_about_ciphertext,
-                          recipient_about_encrypted_aes_key:
-                              chat.recipient_about_encrypted_aes_key ??
-                              existingChat.recipient_about_encrypted_aes_key,
-                          recipient_about_iv:
-                              chat.recipient_about_iv ?? existingChat.recipient_about_iv,
-                          recipient_who_can_see_about:
-                              chat.recipient_who_can_see_about ??
-                              existingChat.recipient_who_can_see_about,
-                          recipient_about_visible:
-                              chat.recipient_about_visible ??
-                              existingChat.recipient_about_visible,
-                          stored_contact: chat.stored_contact ?? existingChat.stored_contact,
-                      }
-                      : chat;
+                        ? {
+                            ...chat,
+                            avatar: chat.avatar || existingChat.avatar,
+                            display_name: chat.display_name ?? existingChat.display_name,
+                            recipient_user_id:
+                                chat.recipient_user_id ?? existingChat.recipient_user_id,
+                            recipient_public_key:
+                                chat.recipient_public_key ??
+                                existingChat.recipient_public_key ??
+                                null,
+                            contact_phone: chat.contact_phone ?? existingChat.contact_phone,
+                            recipient_last_seen:
+                                chat.recipient_last_seen ?? existingChat.recipient_last_seen,
+                            recipient_who_can_see_last_seen:
+                                chat.recipient_who_can_see_last_seen ??
+                                existingChat.recipient_who_can_see_last_seen,
+                            recipient_last_seen_visible:
+                                chat.recipient_last_seen_visible ??
+                                existingChat.recipient_last_seen_visible,
+                            recipient_who_can_see_status:
+                                chat.recipient_who_can_see_status ??
+                                existingChat.recipient_who_can_see_status,
+                            recipient_who_can_see_profile_picture:
+                                chat.recipient_who_can_see_profile_picture ??
+                                existingChat.recipient_who_can_see_profile_picture,
+                            recipient_profile_picture_visible:
+                                chat.recipient_profile_picture_visible ??
+                                existingChat.recipient_profile_picture_visible,
+                            recipient_about_ciphertext:
+                                chat.recipient_about_ciphertext ??
+                                existingChat.recipient_about_ciphertext,
+                            recipient_about_encrypted_aes_key:
+                                chat.recipient_about_encrypted_aes_key ??
+                                existingChat.recipient_about_encrypted_aes_key,
+                            recipient_about_iv:
+                                chat.recipient_about_iv ?? existingChat.recipient_about_iv,
+                            recipient_who_can_see_about:
+                                chat.recipient_who_can_see_about ??
+                                existingChat.recipient_who_can_see_about,
+                            recipient_about_visible:
+                                chat.recipient_about_visible ??
+                                existingChat.recipient_about_visible,
+                            stored_contact: chat.stored_contact ?? existingChat.stored_contact,
+                        }
+                        : chat;
             const localRead = state.localReadByChatId[chat.chat_id];
             const nextChat = applyLocalReadStateToChat(mergedChat, localRead);
             const nextLocalReadByChatId =
                 localRead && !shouldKeepChatLocallyRead(mergedChat, localRead)
                     ? Object.fromEntries(
-                          Object.entries(state.localReadByChatId).filter(
-                              ([chatId]) => chatId !== chat.chat_id
-                          )
-                      )
+                        Object.entries(state.localReadByChatId).filter(
+                            ([chatId]) => chatId !== chat.chat_id
+                        )
+                    )
                     : state.localReadByChatId;
 
             return {

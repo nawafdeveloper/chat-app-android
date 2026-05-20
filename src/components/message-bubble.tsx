@@ -1231,7 +1231,7 @@ function Bubble({ message, currentUserId, currentPhone, isDark, showTail = true,
                             )}
                             <View style={[
                                 styles.bubble,
-                                { backgroundColor: bubbleColor, paddingHorizontal: attached_media ? 4 : 10, paddingVertical: attached_media === 'voice' ? 8 : 4 },
+                                { backgroundColor: bubbleColor, paddingHorizontal: attached_media ? 4 : 8, paddingVertical: attached_media === 'voice' ? 8 : 4 },
                                 !sent && showTail && styles.receivedBubbleWithTail,
                                 sent && showTail && styles.sentBubbleWithTail,
                             ]}>
@@ -1286,7 +1286,7 @@ function Bubble({ message, currentUserId, currentPhone, isDark, showTail = true,
                                     >
                                         <>
                                             <ThemedView style={[styles.replyContainer, { borderLeftColor: '#25D366', backgroundColor: 'transparent' }]}>
-                                                <ThemedText style={{ fontSize: 14 }}>{replySenderDisplayName}</ThemedText>
+                                                <ThemedText style={{ fontSize: 12, lineHeight: 16 }}>{replySenderDisplayName}</ThemedText>
                                                 <ThemedText numberOfLines={2} ellipsizeMode='tail' style={{ fontSize: 12, color: colors.textSecondary, minWidth: 0, lineHeight: 16 }}>
                                                     {reply_message.original_message_text ? reply_message.original_message_text : (reply_message.original_attached_media === 'contact' ? '👤 Contact' : reply_message.original_attached_media === 'file' ? '📂 File' : reply_message.original_attached_media === 'photo' ? '🖼️ Photo' : reply_message.original_attached_media === 'video' ? '📽️ Video' : '🎤 Voice')}
                                                 </ThemedText>
@@ -1474,7 +1474,7 @@ function Bubble({ message, currentUserId, currentPhone, isDark, showTail = true,
                                     ]}>
                                         {detectAndRenderLinks(
                                             message_text_content,
-                                            { color: sent ? theme.sentText : theme.receivedText },
+                                            { color: sent ? theme.sentText : theme.receivedText, fontSize: 14, lineHeight: 20 },
                                             '#25D366'
                                         )}
                                     </ThemedText>
@@ -1799,16 +1799,16 @@ const styles = StyleSheet.create({
         transform: [{ scale: 1.04 }],
     },
     messageText: {
-        fontSize: 15,
-        lineHeight: 20,
-        paddingHorizontal: 4
+        fontSize: 14,
+        lineHeight: 18,
+        width: '100%'
     },
     metaRow: {
         flexDirection: 'row',
         alignItems: 'center',
         justifyContent: 'flex-end',
         gap: 2,
-        marginTop: 3,
+        marginTop: 2,
         paddingRight: 4
     },
     timeText: {
