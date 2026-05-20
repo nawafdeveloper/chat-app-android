@@ -21,6 +21,7 @@ import { getDbChats, upsertDbChats } from "@/lib/upsert-db-chats";
 import {
     getAllDbMessages,
     getDbMessages,
+    getDbVisualMediaMessages,
     upsertDbMessages,
 } from "@/lib/upsert-db-messages";
 import { getPendingMarkReadEvents } from "@/lib/realtime-outbox";
@@ -318,6 +319,25 @@ export async function getDecryptedDbMessagesForChat({
     currentUserId: string;
 }) {
     const cachedMessages = await getAllDbMessages(chatId);
+
+    if (cachedMessages.length === 0) {
+        return [];
+    }
+
+    return decryptMessageBatch({
+        currentUserId,
+        messages: cachedMessages,
+    });
+}
+
+export async function getDecryptedDbVisualMediaMessagesForChat({
+    chatId,
+    currentUserId,
+}: {
+    chatId: string;
+    currentUserId: string;
+}) {
+    const cachedMessages = await getDbVisualMediaMessages(chatId);
 
     if (cachedMessages.length === 0) {
         return [];

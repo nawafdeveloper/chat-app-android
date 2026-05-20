@@ -723,6 +723,51 @@ function Bubble({ message, currentUserId, currentPhone, isDark, showTail = true,
         client_local_media_mime_type ??
         encrypted_media?.mime_type ??
         undefined;
+
+    useEffect(() => {
+        if (
+            !currentUserId ||
+            hasLocalFullMedia ||
+            !media_url ||
+            (attached_media !== "photo" && attached_media !== "video")
+        ) {
+            return;
+        }
+
+        let cancelled = false;
+
+        void materializeMessageMedia(message, { downloadFull: false })
+            .then((localMessage) => {
+                if (
+                    cancelled ||
+                    localMessage.media_url === message.media_url ||
+                    !isLocalMediaUri(localMessage.media_url)
+                ) {
+                    return;
+                }
+
+                debugBubble("cached-media-found", {
+                    message: summarizeBubbleMessage(localMessage),
+                });
+                useActiveChatStore.getState().updateMessage(
+                    localMessage.chat_room_id,
+                    localMessage.message_id,
+                    () => localMessage
+                );
+                return upsertDbMessages([localMessage], currentUserId);
+            })
+            .catch((error) => {
+                debugBubble("cached-media-check-error", {
+                    message: summarizeBubbleMessage(message),
+                    error,
+                });
+            });
+
+        return () => {
+            cancelled = true;
+        };
+    }, [attached_media, currentUserId, hasLocalFullMedia, media_url, message]);
+
     const replySenderUserId =
         message.reply_message?.original_sender_user_id ?? null;
     const senderGroupMember =
@@ -1392,6 +1437,10 @@ function Bubble({ message, currentUserId, currentPhone, isDark, showTail = true,
                                         message_id={message_id}
                                         senderName={senderDisplayName}
                                         timeStamp={formattedTime}
+                                        chatId={message.chat_room_id}
+                                        senderUserId={message.sender_user_id}
+                                        messageText={message_text_content}
+                                        mediaPreviewUrl={media_preview_url}
                                     />
                                 )}
                                 {attached_media === 'video' && (
@@ -1412,6 +1461,10 @@ function Bubble({ message, currentUserId, currentPhone, isDark, showTail = true,
                                         message_id={message_id}
                                         senderName={senderDisplayName}
                                         timeStamp={formattedTime}
+                                        chatId={message.chat_room_id}
+                                        senderUserId={message.sender_user_id}
+                                        messageText={message_text_content}
+                                        mediaPreviewUrl={media_preview_url}
                                         formatAudioTime={formatAudioTime}
                                     />
                                 )}

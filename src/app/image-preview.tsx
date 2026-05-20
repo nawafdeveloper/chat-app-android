@@ -2,16 +2,18 @@ import { ThemedText } from '@/components/themed-text'
 import { ThemedView } from '@/components/themed-view'
 import { Colors } from '@/constants/theme'
 import { saveMediaToGallery } from '@/helper/download-media'
+import { useActiveChatStore } from '@/store/use-active-chat-store'
+import type { ReplyMessage } from '@/types/messages'
 import { Image } from 'expo-image'
 import { router, useLocalSearchParams } from 'expo-router'
-import React, { useState } from 'react'
+import React, { useCallback, useMemo, useState } from 'react'
 import { StyleSheet, useColorScheme, useWindowDimensions } from 'react-native'
 import {
     Gesture,
     GestureDetector,
     GestureHandlerRootView,
 } from 'react-native-gesture-handler'
-import { Appbar, Button, IconButton } from 'react-native-paper'
+import { Appbar, Button } from 'react-native-paper'
 import Animated, {
     runOnJS,
     SlideInDown,
@@ -30,24 +32,79 @@ const MIN_SCALE = 1
 const MAX_SCALE = 5
 const DOUBLE_TAP_SCALE = 2.5
 const getParamValue = (value?: string | string[]) => Array.isArray(value) ? value[0] : value ?? ''
-const getMediaSharedTransitionTag = (mediaType: 'image' | 'video', messageId: string) =>
-    `${mediaType}-preview-${messageId}`
 
 const ImagePreview = () => {
-    const { imageUrl, messageId, senderName, timeStamp } = useLocalSearchParams<{
+    const { imageUrl, messageId, senderName, timeStamp, chatId, senderUserId, messageText, mediaPreviewUrl } = useLocalSearchParams<{
         imageUrl?: string | string[]
         messageId?: string | string[]
         senderName?: string | string[]
         timeStamp?: string | string[]
+        chatId?: string | string[]
+        senderUserId?: string | string[]
+        messageText?: string | string[]
+        mediaPreviewUrl?: string | string[]
     }>()
     const previewImageUrl = getParamValue(imageUrl)
     const previewMessageId = getParamValue(messageId)
     const previewSenderName = getParamValue(senderName)
     const previewTimeStamp = getParamValue(timeStamp)
+    const previewChatId = getParamValue(chatId)
+    const previewSenderUserId = getParamValue(senderUserId)
+    const previewMessageText = getParamValue(messageText)
+    const previewMediaPreviewUrl = getParamValue(mediaPreviewUrl)
     const scheme = useColorScheme()
     const insets = useSafeAreaInsets()
     const colors = Colors[scheme === 'unspecified' ? 'light' : scheme ?? 'light']
     const { width: screenWidth, height: screenHeight } = useWindowDimensions()
+    const previewMessage = useActiveChatStore((state) => {
+        if (!previewMessageId) {
+            return null
+        }
+
+        for (const chatMessages of Object.values(state.messagesByChatId)) {
+            const message = chatMessages.find((item) => item.message_id === previewMessageId)
+            if (message) {
+                return message
+            }
+        }
+
+        return null
+    })
+
+    const replyChatId = previewMessage?.chat_room_id ?? previewChatId
+    const replyDraft = useMemo<ReplyMessage | null>(() => {
+        const originalSenderUserId = previewMessage?.sender_user_id ?? previewSenderUserId
+
+        if (!previewMessageId || !replyChatId || !originalSenderUserId) {
+            return null
+        }
+
+        return {
+            original_message_id: previewMessageId,
+            original_sender_user_id: originalSenderUserId,
+            original_message_text:
+                previewMessage?.message_text_content ??
+                (previewMessageText.trim() ? previewMessageText : null),
+            original_attached_media: 'photo',
+            original_attached_media_url:
+                previewMessage?.media_preview_url ||
+                previewMessage?.media_url ||
+                previewMediaPreviewUrl ||
+                previewImageUrl ||
+                null,
+        }
+    }, [previewImageUrl, previewMediaPreviewUrl, previewMessage, previewMessageId, previewMessageText, previewSenderUserId, replyChatId])
+
+    const handleReplyPress = useCallback(() => {
+        if (!replyChatId || !replyDraft) {
+            return
+        }
+
+        router.back()
+        setTimeout(() => {
+            useActiveChatStore.getState().setReplyDraft(replyChatId, replyDraft)
+        }, 0)
+    }, [replyChatId, replyDraft])
 
     const [isHeaderAndFooterVisible, setIsHeaderAndFooterVisible] = useState(true)
 
@@ -251,18 +308,11 @@ const ImagePreview = () => {
                             textColor={colors.text}
                             icon="arrow-left-top"
                             mode="contained"
-                            onPress={() => console.log('Pressed')}
+                            disabled={!replyDraft}
+                            onPress={handleReplyPress}
                         >
                             Reply
                         </Button>
-                        <IconButton
-                            icon="emoticon-happy-outline"
-                            iconColor={colors.text}
-                            mode="contained"
-                            containerColor={colors.indicator + '33'}
-                            size={20}
-                            onPress={() => console.log('Pressed')}
-                        />
                     </Animated.View>
                 )}
             </ThemedView>

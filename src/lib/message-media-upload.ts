@@ -21,6 +21,15 @@ export type MessageMediaUploadFile = {
     arrayBuffer: () => Promise<ArrayBuffer>;
 };
 
+type MessageMediaPreviewUploadInput = Blob | MessageMediaUploadFile | null;
+type MessageMediaPreviewUploadFile = MessageMediaUploadFile & { uri: string };
+type UploadFormFile = {
+    uri: string;
+    name: string;
+    type: string;
+    cleanup?: () => Promise<void>;
+};
+
 async function encryptAesKeyWithPublicKey(
     aesKeyBase64: string,
     publicKey: CryptoKey
@@ -77,6 +86,21 @@ async function blobToTempUploadFile(blob: Blob, name: string) {
     });
 }
 
+function isLocalUploadPreview(
+    preview: MessageMediaPreviewUploadInput
+): preview is MessageMediaPreviewUploadFile {
+    return Boolean(
+        preview &&
+        "uri" in preview &&
+        typeof preview.uri === "string" &&
+        preview.uri.length > 0
+    );
+}
+
+function isBlobPreview(preview: MessageMediaPreviewUploadInput): preview is Blob {
+    return typeof Blob !== "undefined" && preview instanceof Blob;
+}
+
 function appendUploadPart(
     formData: FormData,
     fieldName: string,
@@ -108,7 +132,7 @@ export async function persistDecryptedMessageMedia(
 export async function uploadEncryptedMessageMedia(
     file: MessageMediaUploadFile,
     recipientPublicKeys: MessageMediaRecipientPublicKeyInput[],
-    previewBlobOverride?: Blob | null,
+    previewBlobOverride?: MessageMediaPreviewUploadInput,
     debugTraceId?: string
 ): Promise<MessageMediaUploadResult> {
     if (recipientPublicKeys.length === 0) {
@@ -145,24 +169,32 @@ export async function uploadEncryptedMessageMedia(
         }))
     );
 
-    const previewBlob = previewBlobOverride;
+    const previewInput = previewBlobOverride ?? null;
     const encryptedUploadFile = await writeTempUploadFile({
         bytes: encryptedData,
         name: file.name,
         type: file.type || "application/octet-stream",
     });
-    const previewUploadFile = previewBlob
-        ? await blobToTempUploadFile(
-            previewBlob,
+    let previewUploadFile: UploadFormFile | null = null;
+    if (isLocalUploadPreview(previewInput)) {
+        previewUploadFile = previewInput;
+    } else if (isBlobPreview(previewInput)) {
+        previewUploadFile = await blobToTempUploadFile(
+            previewInput,
             `${file.name.replace(/\.[^/.]+$/, "") || file.name}-preview.jpg`
-        )
-        : null;
+        );
+    }
 
     logMediaDebug("client.upload.prepared", {
         debugTraceId: debugTraceId ?? null,
         encryptedSize: encryptedData.byteLength,
-        previewSize: previewBlob?.size ?? null,
-        previewType: previewBlob?.type ?? null,
+        previewSize: previewInput?.size ?? null,
+        previewType: previewInput?.type ?? null,
+        previewSource: previewUploadFile
+            ? isLocalUploadPreview(previewInput)
+                ? "local-file"
+                : "blob"
+            : null,
         recipientKeyCount: recipientKeys.length,
     });
     const formData = new FormData();
@@ -189,7 +221,9 @@ export async function uploadEncryptedMessageMedia(
         });
     } finally {
         await encryptedUploadFile.cleanup();
-        await previewUploadFile?.cleanup();
+        if (previewUploadFile && "cleanup" in previewUploadFile) {
+            await previewUploadFile.cleanup?.();
+        }
     }
 
     if (!response.ok) {

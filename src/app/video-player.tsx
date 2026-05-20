@@ -2,6 +2,8 @@ import { ThemedText } from '@/components/themed-text'
 import { ThemedView } from '@/components/themed-view'
 import { Colors } from '@/constants/theme'
 import { saveMediaToGallery } from '@/helper/download-media'
+import { useActiveChatStore } from '@/store/use-active-chat-store'
+import type { ReplyMessage } from '@/types/messages'
 import Slider from '@react-native-community/slider'
 import { router, useLocalSearchParams } from 'expo-router'
 import { useVideoPlayer, VideoView } from 'expo-video'
@@ -12,7 +14,7 @@ import {
     GestureDetector,
     GestureHandlerRootView,
 } from 'react-native-gesture-handler'
-import { Appbar, Button, Icon, IconButton } from 'react-native-paper'
+import { Appbar, Button, Icon } from 'react-native-paper'
 import Animated, {
     runOnJS,
     SlideInDown,
@@ -39,20 +41,77 @@ const formatTime = (seconds: number) => {
 }
 
 const VideoPlayer = () => {
-    const { videoUrl, messageId, senderName, timeStamp } = useLocalSearchParams<{
+    const { videoUrl, messageId, senderName, timeStamp, chatId, senderUserId, messageText, mediaPreviewUrl } = useLocalSearchParams<{
         videoUrl?: string | string[]
         messageId?: string | string[]
         senderName?: string | string[]
         timeStamp?: string | string[]
+        chatId?: string | string[]
+        senderUserId?: string | string[]
+        messageText?: string | string[]
+        mediaPreviewUrl?: string | string[]
     }>()
     const playerVideoUrl = getParamValue(videoUrl)
     const previewMessageId = getParamValue(messageId)
     const previewSenderName = getParamValue(senderName)
     const previewTimeStamp = getParamValue(timeStamp)
+    const previewChatId = getParamValue(chatId)
+    const previewSenderUserId = getParamValue(senderUserId)
+    const previewMessageText = getParamValue(messageText)
+    const previewMediaPreviewUrl = getParamValue(mediaPreviewUrl)
     const scheme = useColorScheme()
     const insets = useSafeAreaInsets()
     const colors = Colors[scheme === 'unspecified' ? 'light' : scheme ?? 'light']
     const { width: screenWidth, height: screenHeight } = useWindowDimensions()
+    const previewMessage = useActiveChatStore((state) => {
+        if (!previewMessageId) {
+            return null
+        }
+
+        for (const chatMessages of Object.values(state.messagesByChatId)) {
+            const message = chatMessages.find((item) => item.message_id === previewMessageId)
+            if (message) {
+                return message
+            }
+        }
+
+        return null
+    })
+    const replyChatId = previewMessage?.chat_room_id ?? previewChatId
+    const replyDraft = React.useMemo<ReplyMessage | null>(() => {
+        const originalSenderUserId = previewMessage?.sender_user_id ?? previewSenderUserId
+
+        if (!previewMessageId || !replyChatId || !originalSenderUserId) {
+            return null
+        }
+
+        return {
+            original_message_id: previewMessageId,
+            original_sender_user_id: originalSenderUserId,
+            original_message_text:
+                previewMessage?.message_text_content ??
+                (previewMessageText.trim() ? previewMessageText : null),
+            original_attached_media: 'video',
+            original_attached_media_url:
+                previewMessage?.media_preview_url ||
+                previewMessage?.video_thumbnail ||
+                previewMessage?.media_url ||
+                previewMediaPreviewUrl ||
+                playerVideoUrl ||
+                null,
+        }
+    }, [playerVideoUrl, previewMediaPreviewUrl, previewMessage, previewMessageId, previewMessageText, previewSenderUserId, replyChatId])
+
+    const handleReplyPress = useCallback(() => {
+        if (!replyChatId || !replyDraft) {
+            return
+        }
+
+        router.back()
+        setTimeout(() => {
+            useActiveChatStore.getState().setReplyDraft(replyChatId, replyDraft)
+        }, 0)
+    }, [replyChatId, replyDraft])
 
     const player = useVideoPlayer(playerVideoUrl, (p) => {
         p.loop = false
@@ -375,18 +434,11 @@ const VideoPlayer = () => {
                                 textColor={colors.text}
                                 icon="arrow-left-top"
                                 mode="contained"
-                                onPress={() => console.log('Pressed')}
+                                disabled={!replyDraft}
+                                onPress={handleReplyPress}
                             >
                                 Reply
                             </Button>
-                            <IconButton
-                                icon="emoticon-happy-outline"
-                                iconColor={colors.text}
-                                mode="contained"
-                                containerColor={colors.indicator + '33'}
-                                size={20}
-                                onPress={() => console.log('Pressed')}
-                            />
                         </ThemedView>
                     </Animated.View>
                 )}

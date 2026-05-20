@@ -821,6 +821,24 @@ export async function materializeMessageMedia(
     await upsertEncryptedMediaMetadataForMessage(message);
 
     let nextMessage = message;
+    const initialFullSource = getMessageFullMediaSource(nextMessage);
+
+    if (
+        supportsFullDownload &&
+        initialFullSource &&
+        !isLocalMediaUri(initialFullSource)
+    ) {
+        const cachedFullUri = await getCachedMessageMediaLocalPath({
+            source: initialFullSource,
+            isPreview: false,
+            fallbackExtension: getFallbackExtensionForMessage(message, false),
+        });
+
+        if (cachedFullUri && isLocalMediaUri(cachedFullUri)) {
+            return withLocalFullMedia(nextMessage, cachedFullUri);
+        }
+    }
+
     const previewSource = getMessagePreviewMediaSource(message);
 
     if (supportsPreview && previewSource && !isLocalMediaUri(previewSource)) {
@@ -863,16 +881,6 @@ export async function materializeMessageMedia(
 
     if (isLocalMediaUri(fullSource)) {
         return nextMessage;
-    }
-
-    const cachedFullUri = await getCachedMessageMediaLocalPath({
-        source: fullSource,
-        isPreview: false,
-        fallbackExtension: getFallbackExtensionForMessage(message, false),
-    });
-
-    if (cachedFullUri && isLocalMediaUri(cachedFullUri)) {
-        return withLocalFullMedia(nextMessage, cachedFullUri);
     }
 
     if (!shouldDownloadFull) {

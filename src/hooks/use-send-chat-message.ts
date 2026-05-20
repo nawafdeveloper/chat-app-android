@@ -72,6 +72,8 @@ function summarizeOutgoingMessage(message: Message) {
         hasText: Boolean(message.message_text_content?.trim()),
         textLength: message.message_text_content?.length ?? 0,
         hasMediaUrl: Boolean(message.media_url),
+        hasMediaPreviewUrl: Boolean(message.media_preview_url),
+        hasVideoThumbnail: Boolean(message.video_thumbnail),
         hasRecipientKeys: Boolean(message.message_recipient_keys?.length),
         recipientKeyCount: message.message_recipient_keys?.length ?? 0,
         status: message.client_status,
@@ -1057,6 +1059,7 @@ export function useSendChatMessage() {
 
     const sendAttachment = async ({
         file,
+        previewFile = null,
         attachedMedia,
         chatId = selectedChatId,
         text = null,
@@ -1065,6 +1068,7 @@ export function useSendChatMessage() {
         isForwardMessage = false,
     }: {
         file: AttachmentUploadInput;
+        previewFile?: MessageMediaUploadFile | null;
         attachedMedia: Extract<
             Message["attached_media"],
             "photo" | "video" | "voice" | "file"
@@ -1088,6 +1092,9 @@ export function useSendChatMessage() {
             fileName: "name" in file ? file.name : null,
             fileType: "type" in file ? file.type : null,
             fileSize: "size" in file ? file.size : null,
+            previewFileName: previewFile?.name ?? null,
+            previewFileType: previewFile?.type ?? null,
+            previewFileSize: previewFile?.size ?? null,
             hasText: Boolean(text?.trim()),
             hasCurrentUserId: Boolean(currentUserId),
             hasCurrentPhone: Boolean(currentPhone),
@@ -1175,10 +1182,12 @@ export function useSendChatMessage() {
         const localPreviewBlob = isDomFile(uploadFile)
             ? await createMessageMediaPreview(uploadFile)
             : null;
+        const localPreviewFile = !isDomFile(uploadFile) ? previewFile : null;
         const localPreviewUrl =
-            localPreviewBlob && typeof URL.createObjectURL === "function"
+            localPreviewFile?.uri ??
+            (localPreviewBlob && typeof URL.createObjectURL === "function"
                 ? URL.createObjectURL(localPreviewBlob)
-                : localMediaUrl;
+                : localMediaUrl);
         const trimmedText = text?.trim() ?? "";
         const encryptedMessage =
             trimmedText.length > 0
@@ -1209,7 +1218,13 @@ export function useSendChatMessage() {
             didCompress: preparedMedia.didCompress,
             targetMaxBytes: MESSAGE_MEDIA_TARGET_MAX_BYTES,
             inputMaxBytes: MESSAGE_MEDIA_INPUT_MAX_BYTES,
-            previewSize: localPreviewBlob?.size ?? null,
+            previewSize: localPreviewBlob?.size ?? localPreviewFile?.size ?? null,
+            previewType: localPreviewBlob?.type ?? localPreviewFile?.type ?? null,
+            previewSource: localPreviewBlob
+                ? "blob"
+                : localPreviewFile
+                    ? "local-file"
+                    : null,
             recipientIds: conversation.recipients.map((recipient) => recipient.userId),
         });
         const optimisticMessage = createOptimisticMessage({
@@ -1223,6 +1238,7 @@ export function useSendChatMessage() {
             mediaWidth: mediaDimensions?.width ?? null,
             mediaHeight: mediaDimensions?.height ?? null,
             mediaFileName: uploadFile.name,
+            videoThumbnail: attachedMedia === "video" ? localPreviewUrl : null,
             plaintext: trimmedText.length > 0 ? trimmedText : null,
             replyMessage,
             clientLocalMediaName: uploadFile.name,
@@ -1271,7 +1287,7 @@ export function useSendChatMessage() {
                     recipientUserId: recipient.userId,
                     publicKey: recipient.publicKey,
                 })),
-                localPreviewBlob,
+                localPreviewBlob ?? localPreviewFile,
                 debugTraceId
             );
             debugSendMessage("send-attachment-upload-success", {
@@ -1359,7 +1375,10 @@ export function useSendChatMessage() {
                     encryptedPreview?.recipientEncryptionKeys ?? null,
                 isForwardMessage,
                 transportMediaPreviewUrl: upload.previewUrl,
-                transportVideoThumbnail: attachedMedia === "video" ? upload.previewUrl : optimisticMessage.video_thumbnail,
+                transportVideoThumbnail:
+                    attachedMedia === "video"
+                        ? upload.previewUrl
+                        : optimisticMessage.video_thumbnail,
             });
             debugSendMessage("send-attachment-dispatch-success", {
                 chatId,

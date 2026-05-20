@@ -26,6 +26,10 @@ export function DecryptedMediaImage({
     message_id,
     senderName,
     timeStamp,
+    chatId,
+    senderUserId,
+    messageText,
+    mediaPreviewUrl,
     onPreviewPress,
     sharedTransitionTag,
     isLarge = true
@@ -45,6 +49,10 @@ export function DecryptedMediaImage({
     message_id: string;
     senderName: string;
     timeStamp: string;
+    chatId?: string | null;
+    senderUserId?: string | null;
+    messageText?: string | null;
+    mediaPreviewUrl?: string | null;
     onPreviewPress?: (() => void) | null;
     sharedTransitionTag?: string;
     isLarge?: boolean;
@@ -134,6 +142,10 @@ export function DecryptedMediaImage({
                 messageId: message_id,
                 senderName,
                 timeStamp,
+                ...(chatId ? { chatId } : {}),
+                ...(senderUserId ? { senderUserId } : {}),
+                ...(messageText ? { messageText } : {}),
+                ...(mediaPreviewUrl ? { mediaPreviewUrl } : {}),
             },
         });
     }) : onPreviewPress;

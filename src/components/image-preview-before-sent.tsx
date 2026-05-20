@@ -41,7 +41,7 @@ import {
 import { Appbar, IconButton } from 'react-native-paper';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { G, Path, Svg } from 'react-native-svg';
-import ViewShot from 'react-native-view-shot';
+import ViewShot, { captureRef } from 'react-native-view-shot';
 import { ThemedText } from './themed-text';
 import { ThemedView } from './themed-view';
 
@@ -71,6 +71,7 @@ const COLORS = ['#FFFFFF', '#000000', '#EF4444', '#25D366', '#22C55E', '#FACC15'
 const STROKE_WIDTHS = [3, 6, 10];
 const { width: SCREEN_WIDTH, height: SCREEN_HEIGHT } = Dimensions.get('window');
 const TEXT_HIT_PADDING = 30;
+const PREVIEW_MAX_DIMENSION = 128;
 
 // ─── helpers ──────────────────────────────────────────────────────────────────
 
@@ -81,6 +82,19 @@ const distance = (x1: number, y1: number, x2: number, y2: number) =>
 
 const angle = (x1: number, y1: number, x2: number, y2: number) =>
     (Math.atan2(y2 - y1, x2 - x1) * 180) / Math.PI;
+
+const getPreviewCaptureSize = (width: number, height: number) => {
+    if (width <= 0 || height <= 0) {
+        return {};
+    }
+
+    const scale = PREVIEW_MAX_DIMENSION / Math.max(width, height);
+
+    return {
+        width: Math.max(1, Math.round(width * scale)),
+        height: Math.max(1, Math.round(height * scale)),
+    };
+};
 
 // ─── component ────────────────────────────────────────────────────────────────
 
@@ -202,8 +216,27 @@ const ImagePreviewBeforeSent = () => {
                 fallbackName: `photo-${Date.now()}.jpg`,
                 mimeType: 'image/jpeg',
             });
+            let previewFile = null;
+            try {
+                const previewUri = await captureRef(viewShotRef, {
+                    format: 'jpg',
+                    quality: 0.35,
+                    result: 'tmpfile',
+                    ...getPreviewCaptureSize(layoutSize.width, layoutSize.height),
+                });
+
+                previewFile = await createUploadFileFromLocalUri({
+                    uri: previewUri,
+                    fallbackName: `photo-${Date.now()}-preview.jpg`,
+                    mimeType: 'image/jpeg',
+                });
+            } catch (error) {
+                console.log('Failed to capture outgoing image preview:', error);
+            }
+
             const sent = await sendAttachment({
                 file: uploadFile,
+                previewFile,
                 attachedMedia: 'photo',
                 text: messageInput,
             });

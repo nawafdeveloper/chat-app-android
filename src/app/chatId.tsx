@@ -518,6 +518,11 @@ const ChatId = () => {
             ? state.messagesByChatId[activeChatId] ?? EMPTY_MESSAGES
             : EMPTY_MESSAGES
     );
+    const activeReplyDraft = useActiveChatStore((state) =>
+        activeChatId
+            ? state.replyDraftByChatId[activeChatId] ?? null
+            : null
+    );
     const visibleMessages = useMemo(() => [...messages].reverse(), [messages]);
     const messageListItems = useMemo(
         () => buildMessageListItems(messages),
@@ -655,6 +660,7 @@ const ChatId = () => {
     const activePinnedMessageIdRef = useRef<string | null>(null);
     const pendingMessageScrollRequestRef = useRef<MessageScrollRequest | null>(null);
     const isLoadingPinnedScrollTargetRef = useRef(false);
+    const lastSyncedReplyDraftKeyRef = useRef<string | null>(null);
     const pinnedViewabilityConfigRef = useRef({
         itemVisiblePercentThreshold: 55,
     });
@@ -714,6 +720,53 @@ const ChatId = () => {
             ),
         [contacts]
     );
+
+    useEffect(() => {
+        if (!activeReplyDraft) {
+            lastSyncedReplyDraftKeyRef.current = null;
+            setIsReply(false);
+            setReplyToUser('');
+            setReplyMessage('');
+            setReplyMediaType(null);
+            setReplyMediaUrl('');
+            return;
+        }
+
+        const isGroupChat = activeChat?.chat_type === "group";
+        const senderGroupMember =
+            isGroupChat
+                ? activeChat?.group_members?.find(
+                    (member) => member.user_id === activeReplyDraft.original_sender_user_id
+                ) ?? null
+                : null;
+        const senderContact =
+            findContactByUserId(contacts, activeReplyDraft.original_sender_user_id) ??
+            findContactByPhone(contacts, senderGroupMember?.phone_number);
+        const senderDisplayName =
+            activeReplyDraft.original_sender_user_id === currentUserId
+                ? "You"
+                : senderContact
+                    ? getContactDisplayName(senderContact)
+                    : senderGroupMember?.name?.trim() ||
+                    senderGroupMember?.phone_number ||
+                    activeReplyDraft.original_sender_user_id;
+
+        setIsReply(true);
+        setReplyToUser(senderDisplayName);
+        setReplyMessage(activeReplyDraft.original_message_text ?? '');
+        setReplyMediaType(activeReplyDraft.original_attached_media);
+        setReplyMediaUrl(activeReplyDraft.original_attached_media_url ?? '');
+
+        const replyDraftKey = [
+            activeChatId,
+            activeReplyDraft.original_message_id,
+            activeReplyDraft.original_sender_user_id,
+        ].join(':');
+        if (lastSyncedReplyDraftKeyRef.current !== replyDraftKey) {
+            lastSyncedReplyDraftKeyRef.current = replyDraftKey;
+            inputRef.current?.focus();
+        }
+    }, [activeChat?.chat_type, activeChat?.group_members, activeChatId, activeReplyDraft, contacts, currentUserId]);
 
     useEffect(() => {
         pinnedMessagesRef.current = pinnedMessages;

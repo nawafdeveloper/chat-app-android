@@ -25,6 +25,10 @@ export function VideoMessagePreview({
     message_id,
     senderName,
     timeStamp,
+    chatId,
+    senderUserId,
+    messageText,
+    mediaPreviewUrl,
     formatAudioTime
 }: {
     localVideoUri?: string | null;
@@ -39,6 +43,10 @@ export function VideoMessagePreview({
     message_id: string;
     senderName: string;
     timeStamp: string;
+    chatId?: string | null;
+    senderUserId?: string | null;
+    messageText?: string | null;
+    mediaPreviewUrl?: string | null;
     formatAudioTime: (seconds?: number | null | undefined) => string
 }) {
     const player = useVideoPlayer(
@@ -59,6 +67,16 @@ export function VideoMessagePreview({
     const videoDuration = formatAudioTime(
         (hasFullMedia ? player.duration : thumbnailPlayer.duration) ?? 0
     )
+    const videoPreviewRouteParams = {
+        videoUrl: localVideoUri ?? "",
+        messageId: message_id,
+        senderName,
+        timeStamp,
+        ...(chatId ? { chatId } : {}),
+        ...(senderUserId ? { senderUserId } : {}),
+        ...(messageText ? { messageText } : {}),
+        ...(mediaPreviewUrl ? { mediaPreviewUrl } : {}),
+    };
 
     useEffect(() => {
         let mounted = true;
@@ -88,7 +106,7 @@ export function VideoMessagePreview({
     if (thumbnail) {
         return (
             <Pressable
-                onPress={hasFullMedia ? () => router.push({ pathname: '/video-player', params: { videoUrl: localVideoUri, messageId: message_id, senderName: senderName, timeStamp: timeStamp } }) : undefined}
+                onPress={hasFullMedia ? () => router.push({ pathname: '/video-player', params: videoPreviewRouteParams }) : undefined}
                 disabled={!hasFullMedia}
             >
                 <Animated.View
@@ -161,15 +179,14 @@ export function VideoMessagePreview({
             message_id={message_id}
             senderName={senderName}
             timeStamp={timeStamp}
+            chatId={chatId}
+            senderUserId={senderUserId}
+            messageText={messageText}
+            mediaPreviewUrl={mediaPreviewUrl}
             sharedTransitionTag={getMediaSharedTransitionTag("video", message_id)}
             onPreviewPress={localVideoUri ? () => router.push({
                 pathname: '/video-player',
-                params: {
-                    videoUrl: localVideoUri,
-                    messageId: message_id,
-                    senderName,
-                    timeStamp,
-                },
+                params: videoPreviewRouteParams,
             }) : null}
             isLarge={aspectRatio < 1.4}
         />

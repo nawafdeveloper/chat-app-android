@@ -394,6 +394,19 @@ export async function getAllDbMessages(chatRoomId: string): Promise<Message[]> {
     return hydrateMessagesWithStoredMedia(rows.map(dbRowToMessage));
 }
 
+export async function getDbVisualMediaMessages(chatRoomId: string): Promise<Message[]> {
+    const rows = await db
+        .select()
+        .from(dbMessages)
+        .where(and(
+            eq(dbMessages.chat_room_id, chatRoomId),
+            inArray(dbMessages.attached_media, ["photo", "video"])
+        ))
+        .orderBy(asc(dbMessages.created_at));
+
+    return hydrateMessagesWithStoredMedia(rows.map(dbRowToMessage));
+}
+
 export async function getEveryDbMessage(): Promise<Message[]> {
     const rows = await db
         .select()

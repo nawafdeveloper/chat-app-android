@@ -10,6 +10,8 @@ import { formatPhoneNumber } from '@/helper/phone-formatter'
 import { useToggleChatNotifications } from '@/hooks/toggle-chat-notification'
 import { authClient } from '@/lib/auth-client'
 import type { AvatarSource } from '@/lib/avatar-source'
+import { encryptTextForRecipients } from '@/lib/chat-e2ee'
+import { getDecryptedDbVisualMediaMessagesForChat } from '@/lib/chat-sync'
 import { applyContactToSingleChat, normalizeChatItem } from '@/lib/chat-utils'
 import { encryptContactPayload } from '@/lib/contact-crypto'
 import { findContactByPhone, findContactByUserId, getContactDisplayName } from '@/lib/contact-display'
@@ -33,9 +35,9 @@ import { StackActions, useRoute } from '@react-navigation/native'
 import * as ImagePicker from 'expo-image-picker'
 import { router, useLocalSearchParams } from 'expo-router'
 import React, { useCallback, useEffect, useMemo, useState } from 'react'
-import { Alert, FlatList, Pressable, StyleSheet, useColorScheme, View } from 'react-native'
+import { Alert, FlatList, Modal, Pressable, StyleSheet, useColorScheme, View } from 'react-native'
 import { ScrollView } from 'react-native-gesture-handler'
-import { ActivityIndicator, Appbar, HelperText, Icon, IconButton, List, Switch, TextInput, TouchableRipple } from 'react-native-paper'
+import { ActivityIndicator, Appbar, Checkbox, HelperText, Icon, IconButton, List, Menu, Searchbar, Switch, TextInput, TouchableRipple } from 'react-native-paper'
 
 function isVisualMediaMessage(message: Message) {
     return (
@@ -73,6 +75,139 @@ const formatAudioTime = (seconds?: number | null) => {
 
     return `${minutes}:${remainingSeconds.toString().padStart(2, "0")}`;
 };
+
+function mergeProfileMediaSource(
+    existingSource?: string | null,
+    incomingSource?: string | null
+) {
+    if (incomingSource && isLocalMediaUri(incomingSource)) {
+        return incomingSource;
+    }
+
+    if (existingSource && isLocalMediaUri(existingSource)) {
+        return existingSource;
+    }
+
+    return incomingSource ?? existingSource ?? null;
+}
+
+function mergeProfileMediaMessage(
+    existingMessage: Message | undefined,
+    incomingMessage: Message
+) {
+    if (!existingMessage) {
+        return incomingMessage;
+    }
+
+    return {
+        ...existingMessage,
+        ...incomingMessage,
+        media_url: mergeProfileMediaSource(
+            existingMessage.media_url,
+            incomingMessage.media_url
+        ),
+        media_preview_url: mergeProfileMediaSource(
+            existingMessage.media_preview_url,
+            incomingMessage.media_preview_url
+        ),
+        video_thumbnail: mergeProfileMediaSource(
+            existingMessage.video_thumbnail,
+            incomingMessage.video_thumbnail
+        ),
+        media_object_key:
+            incomingMessage.media_object_key ?? existingMessage.media_object_key,
+        media_preview_object_key:
+            incomingMessage.media_preview_object_key ??
+            existingMessage.media_preview_object_key,
+        encrypted_media:
+            incomingMessage.encrypted_media ?? existingMessage.encrypted_media,
+    };
+}
+
+function mergeProfileMediaMessages(
+    cachedMediaMessages: Message[],
+    liveMessages: Message[]
+) {
+    const mergedById = new Map<string, Message>();
+
+    for (const message of cachedMediaMessages) {
+        mergedById.set(message.message_id, message);
+    }
+
+    for (const message of liveMessages) {
+        if (!isVisualMediaMessage(message)) {
+            continue;
+        }
+
+        mergedById.set(
+            message.message_id,
+            mergeProfileMediaMessage(mergedById.get(message.message_id), message)
+        );
+    }
+
+    return [...mergedById.values()];
+}
+
+function contactToGroupMember(contact: Contact): ChatGroupMember | null {
+    if (!contact.linked_user_id) {
+        return null;
+    }
+
+    return {
+        user_id: contact.linked_user_id,
+        phone_number: contact.contact_number,
+        public_key: contact.linked_user_public_key ?? null,
+        name: getContactDisplayName(contact),
+        avatar: contact.contact_avatar ?? null,
+        is_admin: false,
+    };
+}
+
+function mergeGroupMembers(
+    currentMembers: ChatGroupMember[],
+    addedMembers: ChatGroupMember[]
+) {
+    const membersById = new Map<string, ChatGroupMember>();
+
+    for (const member of currentMembers) {
+        membersById.set(member.user_id, member);
+    }
+
+    for (const member of addedMembers) {
+        membersById.set(member.user_id, {
+            ...membersById.get(member.user_id),
+            ...member,
+        });
+    }
+
+    return [...membersById.values()];
+}
+
+function groupMembersMatchIntent(
+    actualMembers?: ChatGroupMember[] | null,
+    expectedMembers?: ChatGroupMember[] | null
+) {
+    if (!actualMembers || !expectedMembers) {
+        return false;
+    }
+
+    if (actualMembers.length !== expectedMembers.length) {
+        return false;
+    }
+
+    const actualById = new Map(
+        actualMembers.map((member) => [member.user_id, member])
+    );
+
+    return expectedMembers.every((expectedMember) => {
+        const actualMember = actualById.get(expectedMember.user_id);
+
+        return (
+            Boolean(actualMember) &&
+            Boolean(actualMember?.is_admin) === Boolean(expectedMember.is_admin)
+        );
+    });
+}
 
 const EMPTY_MESSAGES: Message[] = [];
 const EMPTY_GROUP_MEMBERS: ChatGroupMember[] = [];
@@ -116,6 +251,7 @@ type MediaItemProps = {
     currentUserId: string | null;
     formatBytes: (bytes?: number | null) => string | null;
     isGroupChat: boolean;
+    onMessageUpdated?: (message: Message) => void;
 };
 
 function MediaItem({
@@ -126,6 +262,7 @@ function MediaItem({
     currentUserId,
     formatBytes,
     isGroupChat,
+    onMessageUpdated,
 }: MediaItemProps) {
     const hasLocalFullMedia = isLocalMediaUri(message.media_url);
     const photoSource = message.media_url ?? null;
@@ -174,6 +311,45 @@ function MediaItem({
 
     const [isDownloading, setIsDownloading] = useState(false);
 
+    useEffect(() => {
+        if (
+            !currentUserId ||
+            hasLocalFullMedia ||
+            !message.media_url ||
+            (message.attached_media !== "photo" && message.attached_media !== "video")
+        ) {
+            return;
+        }
+
+        let cancelled = false;
+
+        void materializeMessageMedia(message, { downloadFull: false })
+            .then((localMessage) => {
+                if (
+                    cancelled ||
+                    localMessage.media_url === message.media_url ||
+                    !isLocalMediaUri(localMessage.media_url)
+                ) {
+                    return;
+                }
+
+                useActiveChatStore.getState().updateMessage(
+                    localMessage.chat_room_id,
+                    localMessage.message_id,
+                    () => localMessage
+                );
+                onMessageUpdated?.(localMessage);
+                return upsertDbMessages([localMessage], currentUserId);
+            })
+            .catch((error) => {
+                console.log("Failed to restore cached media:", error);
+            });
+
+        return () => {
+            cancelled = true;
+        };
+    }, [currentUserId, hasLocalFullMedia, message, onMessageUpdated]);
+
     const handleDownloadMedia = useCallback(async () => {
         if (!currentUserId || isDownloading) {
             return;
@@ -190,13 +366,14 @@ function MediaItem({
                 localMessage.message_id,
                 () => localMessage
             );
+            onMessageUpdated?.(localMessage);
             await upsertDbMessages([localMessage], currentUserId);
         } catch (error) {
             console.log("Failed to download message media:", error);
         } finally {
             setIsDownloading(false);
         }
-    }, [currentUserId, isDownloading, message]);
+    }, [currentUserId, isDownloading, message, onMessageUpdated]);
 
     if (message.attached_media === 'video') {
         return (
@@ -216,6 +393,10 @@ function MediaItem({
                 message_id={message.message_id}
                 senderName={senderDisplayName}
                 timeStamp={formattedTime}
+                chatId={message.chat_room_id}
+                senderUserId={message.sender_user_id}
+                messageText={message.message_text_content}
+                mediaPreviewUrl={message.media_preview_url}
                 formatAudioTime={formatAudioTime}
             />
         )
@@ -237,7 +418,72 @@ function MediaItem({
             message_id={message.message_id}
             senderName={senderDisplayName}
             timeStamp={formattedTime}
+            chatId={message.chat_room_id}
+            senderUserId={message.sender_user_id}
+            messageText={message.message_text_content}
+            mediaPreviewUrl={message.media_preview_url}
         />
+    );
+}
+
+type InviteContactRowProps = {
+    contact: Contact;
+    selected: boolean;
+    colors: typeof Colors.light | typeof Colors.dark;
+    disabled: boolean;
+    onToggle: (contact: Contact) => void;
+};
+
+function InviteContactRow({
+    contact,
+    selected,
+    colors,
+    disabled,
+    onToggle,
+}: InviteContactRowProps) {
+    const displayName = getContactDisplayName(contact);
+
+    return (
+        <Pressable
+            disabled={disabled}
+            style={({ pressed }) => [
+                styles.inviteContactItem,
+                {
+                    backgroundColor: selected
+                        ? colors.card
+                        : pressed
+                            ? colors.indicator + "22"
+                            : "transparent",
+                    opacity: disabled ? 0.55 : 1,
+                },
+            ]}
+            onPress={() => onToggle(contact)}
+        >
+            <ChatAvatar
+                userId={contact.linked_user_id ?? contact.contact_id}
+                imageUrl={contact.contact_avatar}
+                displayName={displayName}
+                contactPhone={contact.contact_number}
+                style={styles.inviteContactAvatar}
+                chatType="single"
+            />
+            <ThemedView style={styles.inviteContactText}>
+                <ThemedText numberOfLines={1} style={styles.inviteContactName}>
+                    {displayName}
+                </ThemedText>
+                <ThemedText
+                    numberOfLines={1}
+                    style={{ color: colors.textSecondary, fontSize: 13 }}
+                >
+                    {contact.contact_number}
+                </ThemedText>
+            </ThemedView>
+            <Checkbox.Android
+                status={selected ? "checked" : "unchecked"}
+                color="#25D366"
+                uncheckedColor={colors.textSecondary}
+            />
+        </Pressable>
     );
 }
 
@@ -320,8 +566,22 @@ const TargetUserProfile = () => {
     );
     const removeChat = useActiveChatStore((state) => state.removeChat);
     const upsertChat = useActiveChatStore((state) => state.upsertChat);
-    const messages = activeChatId ? messagesByChatId[activeChatId] : EMPTY_MESSAGES;
-    const mediaContent = messages.filter(isVisualMediaMessage).sort((left, right) => right.created_at.getTime() - left.created_at.getTime());
+    const messages = activeChatId ? messagesByChatId[activeChatId] ?? EMPTY_MESSAGES : EMPTY_MESSAGES;
+    const [profileMediaMessages, setProfileMediaMessages] = useState<Message[]>(EMPTY_MESSAGES);
+    const [profileMediaChatId, setProfileMediaChatId] = useState<string | null>(null);
+    const [isProfileMediaLoading, setIsProfileMediaLoading] = useState(false);
+    const mediaContent = useMemo(
+        () =>
+            mergeProfileMediaMessages(
+                profileMediaChatId === activeChatId
+                    ? profileMediaMessages
+                    : EMPTY_MESSAGES,
+                messages
+            )
+                .filter(isVisualMediaMessage)
+                .sort((left, right) => right.created_at.getTime() - left.created_at.getTime()),
+        [activeChatId, messages, profileMediaChatId, profileMediaMessages]
+    );
     const profileContact = useMemo(
         () =>
             hasRouteProfileTarget
@@ -399,6 +659,45 @@ const TargetUserProfile = () => {
     const [isEditingName, setIsEditingName] = useState(false);
     const [nameDraft, setNameDraft] = useState(chatTitle);
     const [profileError, setProfileError] = useState<string | null>(null);
+    const [isInviteModalVisible, setIsInviteModalVisible] = useState(false);
+    const [isInviteSearchFocus, setIsInviteSearchFocus] = useState(false);
+    const [inviteSearchQuery, setInviteSearchQuery] = useState("");
+    const [selectedInviteContactIds, setSelectedInviteContactIds] = useState<string[]>([]);
+    const [inviteError, setInviteError] = useState<string | null>(null);
+    const [memberMenuUserId, setMemberMenuUserId] = useState<string | null>(null);
+    const groupMemberUserIds = useMemo(
+        () => new Set(groupMembers.map((member) => member.user_id).filter(Boolean)),
+        [groupMembers]
+    );
+    const invitableContacts = useMemo(
+        () =>
+            contacts.filter(
+                (contact) =>
+                    Boolean(contact.linked_user_id) &&
+                    !groupMemberUserIds.has(contact.linked_user_id as string)
+            ),
+        [contacts, groupMemberUserIds]
+    );
+    const filteredInviteContacts = useMemo(() => {
+        const query = inviteSearchQuery.trim().toLowerCase();
+
+        if (!query) {
+            return invitableContacts;
+        }
+
+        return invitableContacts.filter(
+            (contact) =>
+                getContactDisplayName(contact).toLowerCase().includes(query) ||
+                contact.contact_number.includes(inviteSearchQuery)
+        );
+    }, [inviteSearchQuery, invitableContacts]);
+    const selectedInviteContacts = useMemo(
+        () =>
+            invitableContacts.filter((contact) =>
+                selectedInviteContactIds.includes(contact.contact_id)
+            ),
+        [invitableContacts, selectedInviteContactIds]
+    );
 
     useEffect(() => {
         if (!isEditingName) {
@@ -409,6 +708,82 @@ const TargetUserProfile = () => {
     useEffect(() => {
         setIsEditingName(false);
         setProfileError(null);
+        setIsInviteModalVisible(false);
+        setIsInviteSearchFocus(false);
+        setInviteSearchQuery("");
+        setSelectedInviteContactIds([]);
+        setInviteError(null);
+        setMemberMenuUserId(null);
+    }, [activeChatId]);
+
+    useEffect(() => {
+        if (!activeChatId || !currentUserId || !areCryptoKeysReady) {
+            setProfileMediaMessages(EMPTY_MESSAGES);
+            setProfileMediaChatId(null);
+            setIsProfileMediaLoading(false);
+            return;
+        }
+
+        let isCancelled = false;
+        setProfileMediaChatId(activeChatId);
+        setProfileMediaMessages(EMPTY_MESSAGES);
+        setIsProfileMediaLoading(true);
+
+        void getDecryptedDbVisualMediaMessagesForChat({
+            chatId: activeChatId,
+            currentUserId,
+        })
+            .then((cachedMediaMessages) => {
+                if (!isCancelled) {
+                    setProfileMediaChatId(activeChatId);
+                    setProfileMediaMessages(cachedMediaMessages);
+                }
+            })
+            .catch((error) => {
+                if (isCancelled) {
+                    return;
+                }
+
+                console.log("Failed to load profile media:", error);
+                setProfileMediaChatId(activeChatId);
+                setProfileMediaMessages(EMPTY_MESSAGES);
+            })
+            .finally(() => {
+                if (!isCancelled) {
+                    setIsProfileMediaLoading(false);
+                }
+            });
+
+        return () => {
+            isCancelled = true;
+        };
+    }, [activeChatId, areCryptoKeysReady, currentUserId]);
+
+    const handleProfileMediaMessageUpdated = useCallback((updatedMessage: Message) => {
+        if (updatedMessage.chat_room_id !== activeChatId) {
+            return;
+        }
+
+        setProfileMediaChatId(updatedMessage.chat_room_id);
+        setProfileMediaMessages((currentMessages) => {
+            const existingMessage = currentMessages.find(
+                (message) => message.message_id === updatedMessage.message_id
+            );
+
+            if (existingMessage) {
+                return currentMessages.map((message) =>
+                    message.message_id === updatedMessage.message_id
+                        ? mergeProfileMediaMessage(message, updatedMessage)
+                        : message
+                );
+            }
+
+            if (!isVisualMediaMessage(updatedMessage)) {
+                return currentMessages;
+            }
+
+            return [...currentMessages, updatedMessage];
+        });
     }, [activeChatId]);
 
     const resetAfterChatRemoval = () => {
@@ -460,6 +835,318 @@ const TargetUserProfile = () => {
         upsertChat(nextChat);
         await upsertDbChats([nextChat]);
     }, [activeChat, upsertChat]);
+
+    const requestGroupMembers = useCallback(async (
+        chatId: string,
+        method: "POST" | "PATCH" | "DELETE",
+        body: Record<string, unknown>
+    ) => {
+        const response = await fetch(
+            `${API_BASE_URL}/api/chats/${encodeURIComponent(chatId)}/members`,
+            {
+                method,
+                headers: {
+                    Cookie: authClient.getCookie() ?? "",
+                    "Content-Type": "application/json",
+                },
+                credentials: "omit",
+                body: JSON.stringify(body),
+            }
+        );
+        const payload = (await response.json().catch(() => null)) as ChatPatchResponse | null;
+
+        if (!response.ok) {
+            throw new Error(payload?.error ?? "Failed to update group members.");
+        }
+
+        return payload;
+    }, []);
+
+    const buildEncryptedGroupPreviewPayload = useCallback(async (
+        nextMembers: ChatGroupMember[],
+        previewText = activeChat?.last_message_context?.trim()
+    ) => {
+        if (!previewText || !currentUserId || !currentPublicKey) {
+            return {};
+        }
+
+        const recipientsById = new Map<string, string>();
+        recipientsById.set(currentUserId, currentPublicKey);
+
+        for (const member of nextMembers) {
+            if (member.user_id && member.public_key) {
+                recipientsById.set(member.user_id, member.public_key);
+            }
+        }
+
+        try {
+            const encryptedPreview = await encryptTextForRecipients(
+                previewText,
+                [...recipientsById.entries()].map(([userId, publicKey]) => ({
+                    userId,
+                    publicKey,
+                }))
+            );
+
+            return {
+                encryptedChatPreview: encryptedPreview.encryptedContent,
+                chatPreviewRecipientKeys: encryptedPreview.recipientEncryptionKeys,
+            };
+        } catch (error) {
+            console.log("Failed to encrypt group preview for member update:", error);
+            return {};
+        }
+    }, [activeChat?.last_message_context, currentPublicKey, currentUserId]);
+
+    const applyGroupMemberUpdate = useCallback(async ({
+        body,
+        fallbackChat,
+        method,
+    }: {
+        body: Record<string, unknown>;
+        fallbackChat: ChatItemType;
+        method: "POST" | "PATCH" | "DELETE";
+    }) => {
+        if (!activeChat?.chat_id) {
+            return;
+        }
+
+        const payload = await requestGroupMembers(activeChat.chat_id, method, body);
+        const responseChat = payload?.chat ? normalizeChatItem(payload.chat) : null;
+        const shouldUseResponseChat =
+            responseChat &&
+            groupMembersMatchIntent(
+                responseChat.group_members,
+                fallbackChat.group_members
+            );
+        const nextChat = shouldUseResponseChat
+            ? responseChat
+            : {
+                ...(responseChat ?? fallbackChat),
+                group_members: fallbackChat.group_members,
+                updated_at: responseChat?.updated_at ?? fallbackChat.updated_at,
+            };
+
+        await mergeUpdatedChat(nextChat);
+    }, [activeChat?.chat_id, mergeUpdatedChat, requestGroupMembers]);
+
+    const handleOpenInviteModal = useCallback(() => {
+        if (!isCurrentUserAdmin || pendingAction !== null) {
+            return;
+        }
+
+        setInviteError(null);
+        setInviteSearchQuery("");
+        setIsInviteSearchFocus(false);
+        setSelectedInviteContactIds([]);
+        setIsInviteModalVisible(true);
+    }, [isCurrentUserAdmin, pendingAction]);
+
+    const handleCloseInviteModal = useCallback(() => {
+        if (pendingAction === "invite") {
+            return;
+        }
+
+        setIsInviteModalVisible(false);
+        setIsInviteSearchFocus(false);
+        setInviteSearchQuery("");
+        setSelectedInviteContactIds([]);
+        setInviteError(null);
+    }, [pendingAction]);
+
+    const toggleInviteContact = useCallback((contact: Contact) => {
+        if (pendingAction === "invite") {
+            return;
+        }
+
+        setInviteError(null);
+        setSelectedInviteContactIds((currentIds) =>
+            currentIds.includes(contact.contact_id)
+                ? currentIds.filter((contactId) => contactId !== contact.contact_id)
+                : [...currentIds, contact.contact_id]
+        );
+    }, [pendingAction]);
+
+    const handleInviteSelectedContacts = useCallback(async () => {
+        if (!activeChat || !isCurrentUserAdmin || pendingAction !== null) {
+            return;
+        }
+
+        if (selectedInviteContacts.length === 0) {
+            setInviteError("Select at least one contact.");
+            return;
+        }
+
+        const missingEncryptionContact = selectedInviteContacts.find(
+            (contact) => !contact.linked_user_id || !contact.linked_user_public_key
+        );
+
+        if (missingEncryptionContact) {
+            setInviteError(`${getContactDisplayName(missingEncryptionContact)} has not set up encryption yet.`);
+            return;
+        }
+
+        const nextMembersToAdd = selectedInviteContacts
+            .map(contactToGroupMember)
+            .filter((member): member is ChatGroupMember => Boolean(member));
+        const nextGroupMembers = mergeGroupMembers(groupMembers, nextMembersToAdd);
+        const memberUserIds = nextMembersToAdd.map((member) => member.user_id);
+
+        setPendingAction("invite");
+        setInviteError(null);
+        setProfileError(null);
+
+        try {
+            const encryptedPreviewPayload =
+                await buildEncryptedGroupPreviewPayload(nextGroupMembers, "Added to group");
+            const fallbackChat: ChatItemType = {
+                ...activeChat,
+                group_members: nextGroupMembers,
+                updated_at: new Date(),
+            };
+
+            await applyGroupMemberUpdate({
+                method: "POST",
+                body: {
+                    memberUserIds,
+                    ...encryptedPreviewPayload,
+                },
+                fallbackChat,
+            });
+            setIsInviteModalVisible(false);
+            setIsInviteSearchFocus(false);
+            setInviteSearchQuery("");
+            setSelectedInviteContactIds([]);
+        } catch (error) {
+            setInviteError(error instanceof Error ? error.message : "Failed to invite contacts.");
+        } finally {
+            setPendingAction(null);
+        }
+    }, [
+        activeChat,
+        applyGroupMemberUpdate,
+        buildEncryptedGroupPreviewPayload,
+        groupMembers,
+        isCurrentUserAdmin,
+        pendingAction,
+        selectedInviteContacts,
+    ]);
+
+    const handleMakeGroupMemberAdmin = useCallback(async (member: ChatGroupMember) => {
+        if (!activeChat || !isCurrentUserAdmin || pendingAction !== null || member.is_admin) {
+            return;
+        }
+
+        setMemberMenuUserId(null);
+        setPendingAction(`admin:${member.user_id}`);
+        setProfileError(null);
+
+        try {
+            const nextGroupMembers = groupMembers.map((groupMember) =>
+                groupMember.user_id === member.user_id
+                    ? { ...groupMember, is_admin: true }
+                    : groupMember
+            );
+            const fallbackChat: ChatItemType = {
+                ...activeChat,
+                group_members: nextGroupMembers,
+                updated_at: new Date(),
+            };
+
+            await applyGroupMemberUpdate({
+                method: "PATCH",
+                body: {
+                    memberUserId: member.user_id,
+                    isAdmin: true,
+                },
+                fallbackChat,
+            });
+        } catch (error) {
+            const message = error instanceof Error ? error.message : "Failed to make member an admin.";
+            setProfileError(message);
+            Alert.alert("Could not update member", message);
+        } finally {
+            setPendingAction(null);
+        }
+    }, [
+        activeChat,
+        applyGroupMemberUpdate,
+        groupMembers,
+        isCurrentUserAdmin,
+        pendingAction,
+    ]);
+
+    const handleRemoveGroupMember = useCallback(async (member: ChatGroupMember) => {
+        if (
+            !activeChat ||
+            !isCurrentUserAdmin ||
+            pendingAction !== null ||
+            member.user_id === currentUserId
+        ) {
+            return;
+        }
+
+        setMemberMenuUserId(null);
+        setPendingAction(`remove:${member.user_id}`);
+        setProfileError(null);
+
+        try {
+            const nextGroupMembers = groupMembers.filter(
+                (groupMember) => groupMember.user_id !== member.user_id
+            );
+            const fallbackChat: ChatItemType = {
+                ...activeChat,
+                group_members: nextGroupMembers,
+                updated_at: new Date(),
+            };
+
+            await applyGroupMemberUpdate({
+                method: "DELETE",
+                body: {
+                    memberUserId: member.user_id,
+                },
+                fallbackChat,
+            });
+        } catch (error) {
+            const message = error instanceof Error ? error.message : "Failed to remove member.";
+            setProfileError(message);
+            Alert.alert("Could not remove member", message);
+        } finally {
+            setPendingAction(null);
+        }
+    }, [
+        activeChat,
+        applyGroupMemberUpdate,
+        currentUserId,
+        groupMembers,
+        isCurrentUserAdmin,
+        pendingAction,
+    ]);
+
+    const confirmRemoveGroupMember = useCallback((
+        member: ChatGroupMember,
+        displayName: string
+    ) => {
+        if (member.user_id === currentUserId) {
+            return;
+        }
+
+        setMemberMenuUserId(null);
+        Alert.alert(
+            "Remove member?",
+            `Remove ${displayName} from this group?`,
+            [
+                { text: "Cancel", style: "cancel" },
+                {
+                    text: "Remove",
+                    style: "destructive",
+                    onPress: () => {
+                        void handleRemoveGroupMember(member);
+                    },
+                },
+            ]
+        );
+    }, [currentUserId, handleRemoveGroupMember]);
 
     const handleEditNamePress = () => {
         if (!canEditProfileName || pendingAction !== null) {
@@ -930,6 +1617,20 @@ const TargetUserProfile = () => {
         }
     };
 
+    const isInviteSubmitting = pendingAction === "invite";
+    const renderInviteContact = useCallback(
+        ({ item }: { item: Contact }) => (
+            <InviteContactRow
+                contact={item}
+                selected={selectedInviteContactIds.includes(item.contact_id)}
+                colors={colors}
+                disabled={isInviteSubmitting}
+                onToggle={toggleInviteContact}
+            />
+        ),
+        [colors, isInviteSubmitting, selectedInviteContactIds, toggleInviteContact]
+    );
+
     const formatBytes = useCallback((bytes?: number | null) => {
         if (!bytes || bytes <= 0) {
             return null;
@@ -1033,6 +1734,97 @@ const TargetUserProfile = () => {
                     />
                 ) : null}
             </Appbar.Header>
+            <Modal
+                animationType="slide"
+                visible={isInviteModalVisible}
+                onRequestClose={handleCloseInviteModal}
+            >
+                <ThemedView style={[styles.inviteModal, { backgroundColor: colors.background }]}>
+                    <Appbar.Header
+                        style={[
+                            styles.inviteModalHeader,
+                            {
+                                backgroundColor: colors.background,
+                                borderBottomColor: colors.indicator + "33",
+                            },
+                        ]}
+                    >
+                        {isInviteSearchFocus ? (
+                            <Searchbar
+                                placeholder="Search"
+                                onChangeText={setInviteSearchQuery}
+                                value={inviteSearchQuery}
+                                onIconPress={() => {
+                                    setIsInviteSearchFocus(false);
+                                    setInviteSearchQuery("");
+                                }}
+                                icon="arrow-left"
+                                autoFocus
+                                style={{ backgroundColor: colors.card, flex: 1 }}
+                                cursorColor="#25D366"
+                            />
+                        ) : (
+                            <>
+                                <Appbar.BackAction
+                                    disabled={isInviteSubmitting}
+                                    onPress={handleCloseInviteModal}
+                                />
+                                <Appbar.Content
+                                    title="Invite contacts"
+                                    subtitle={`${selectedInviteContactIds.length || invitableContacts.length} ${selectedInviteContactIds.length ? "selected" : "contacts"}`}
+                                />
+                                <Appbar.Action
+                                    icon="magnify"
+                                    disabled={isInviteSubmitting}
+                                    onPress={() => setIsInviteSearchFocus(true)}
+                                />
+                            </>
+                        )}
+                    </Appbar.Header>
+                    {inviteError ? (
+                        <HelperText type="error" visible style={styles.inviteHelperText}>
+                            {inviteError}
+                        </HelperText>
+                    ) : null}
+                    <FlatList
+                        data={filteredInviteContacts}
+                        keyExtractor={(contact) => contact.contact_id}
+                        renderItem={renderInviteContact}
+                        keyboardShouldPersistTaps="handled"
+                        ListHeaderComponent={
+                            <ThemedText style={[styles.inviteSectionHeader, { color: colors.textSecondary }]}>
+                                CONTACTS
+                            </ThemedText>
+                        }
+                        ListEmptyComponent={
+                            <ThemedView style={styles.inviteEmptyContainer}>
+                                <ThemedText style={{ color: colors.textSecondary }}>
+                                    No contacts available
+                                </ThemedText>
+                            </ThemedView>
+                        }
+                        contentContainerStyle={styles.inviteListContent}
+                    />
+                    {selectedInviteContactIds.length > 0 ? (
+                        <Pressable
+                            disabled={isInviteSubmitting}
+                            style={({ pressed }) => [
+                                styles.inviteFab,
+                                { opacity: pressed || isInviteSubmitting ? 0.82 : 1 },
+                            ]}
+                            onPress={handleInviteSelectedContacts}
+                        >
+                            {isInviteSubmitting ? (
+                                <ActivityIndicator size="small" color="#1C1E21" />
+                            ) : (
+                                <ThemedText style={styles.inviteFabText}>
+                                    Invite
+                                </ThemedText>
+                            )}
+                        </Pressable>
+                    ) : null}
+                </ThemedView>
+            </Modal>
             <ScrollView style={{ flex: 1 }}>
                 <ThemedView style={styles.topContentContainer}>
                     <Pressable
@@ -1133,13 +1925,19 @@ const TargetUserProfile = () => {
                     <List.Item
                         title="Media Videos, Photos and Docs"
                         titleStyle={{ color: colors.textSecondary, fontFamily: Fonts.regular, lineHeight: 20 }}
-                        right={props => <ThemedText style={{ color: colors.textSecondary }}>{mediaContent.length}</ThemedText>}
+                        right={() =>
+                            isProfileMediaLoading ? (
+                                <ActivityIndicator color={colors.textSecondary} size="small" />
+                            ) : (
+                                <ThemedText style={{ color: colors.textSecondary }}>{mediaContent.length}</ThemedText>
+                            )
+                        }
                         onPress={() => console.log('pressed')}
                         containerStyle={{ paddingHorizontal: 8 }}
                     />
                     <ThemedView style={{ flex: 1, flexDirection: 'row', justifyContent: 'flex-start', paddingHorizontal: 16 }}>
                         <FlatList
-                            data={mediaContent.slice(0, 12)}
+                            data={mediaContent}
                             keyExtractor={(m) => m.message_id}
                             renderItem={({ item }) => (
                                 <MediaItem
@@ -1150,6 +1948,7 @@ const TargetUserProfile = () => {
                                     currentUserId={currentUserId}
                                     formatBytes={formatBytes}
                                     isGroupChat={isGroupChat}
+                                    onMessageUpdated={handleProfileMediaMessageUpdated}
                                 />
                             )}
                             horizontal
@@ -1163,7 +1962,7 @@ const TargetUserProfile = () => {
                             rippleColor={colors.textSecondary + '33'}
                             underlayColor={colors.textSecondary + '22'}
                             background={{ type: 'ripple', color: colors.textSecondary + '33', foreground: true }}
-                            onPress={() => console.log('invite user')}
+                            onPress={handleOpenInviteModal}
                             style={{ width: '100%' }}
                         >
                             <List.Item
@@ -1225,12 +2024,50 @@ const TargetUserProfile = () => {
                                                     </ThemedText>
                                                 </ThemedView>
                                             ) : null}
-                                            <IconButton
-                                                icon="dots-vertical"
-                                                size={20}
-                                                iconColor={colors.textSecondary}
-                                                onPress={() => console.log('group member more', member.user_id)}
-                                            />
+                                            {pendingAction === `admin:${member.user_id}` ||
+                                                pendingAction === `remove:${member.user_id}` ? (
+                                                <ActivityIndicator color="#25D366" size="small" />
+                                            ) : (
+                                                <Menu
+                                                    visible={memberMenuUserId === member.user_id}
+                                                    onDismiss={() => setMemberMenuUserId(null)}
+                                                    anchorPosition="bottom"
+                                                    contentStyle={{ backgroundColor: colors.background }}
+                                                    anchor={
+                                                        <IconButton
+                                                            icon="dots-vertical"
+                                                            size={20}
+                                                            disabled={!isCurrentUserAdmin || pendingAction !== null}
+                                                            iconColor={colors.textSecondary}
+                                                            onPress={() => setMemberMenuUserId(member.user_id)}
+                                                        />
+                                                    }
+                                                >
+                                                    <Menu.Item
+                                                        title="Make admin"
+                                                        leadingIcon="shield-account-outline"
+                                                        disabled={
+                                                            !isCurrentUserAdmin ||
+                                                            Boolean(member.is_admin) ||
+                                                            pendingAction !== null
+                                                        }
+                                                        onPress={() => {
+                                                            void handleMakeGroupMemberAdmin(member);
+                                                        }}
+                                                    />
+                                                    <Menu.Item
+                                                        title="Remove from group"
+                                                        leadingIcon="account-remove-outline"
+                                                        disabled={
+                                                            !isCurrentUserAdmin ||
+                                                            member.user_id === currentUserId ||
+                                                            pendingAction !== null
+                                                        }
+                                                        titleStyle={{ color: "red" }}
+                                                        onPress={() => confirmRemoveGroupMember(member, displayName)}
+                                                    />
+                                                </Menu>
+                                            )}
                                         </ThemedView>
                                     )}
                                     containerStyle={styles.groupMemberItem}
@@ -1378,6 +2215,71 @@ const styles = StyleSheet.create({
         alignItems: 'center',
         justifyContent: 'center',
         gap: 10,
+    },
+    inviteModal: {
+        flex: 1,
+    },
+    inviteModalHeader: {
+        borderBottomWidth: 1,
+    },
+    inviteHelperText: {
+        marginHorizontal: 16,
+    },
+    inviteListContent: {
+        paddingBottom: 96,
+        gap: 6,
+    },
+    inviteSectionHeader: {
+        fontSize: 12,
+        fontWeight: "600",
+        letterSpacing: 0.5,
+        paddingHorizontal: 24,
+        paddingVertical: 10,
+    },
+    inviteContactItem: {
+        flexDirection: "row",
+        alignItems: "center",
+        paddingHorizontal: 24,
+        paddingVertical: 8,
+    },
+    inviteContactAvatar: {
+        width: 50,
+        height: 50,
+        borderRadius: 25,
+        alignItems: "center",
+        justifyContent: "center",
+        marginRight: 12,
+    },
+    inviteContactText: {
+        flex: 1,
+        minWidth: 0,
+        backgroundColor: "transparent",
+    },
+    inviteContactName: {
+        fontSize: 16,
+        fontWeight: "500",
+        lineHeight: 19,
+    },
+    inviteEmptyContainer: {
+        paddingTop: 60,
+        alignItems: "center",
+    },
+    inviteFab: {
+        position: "absolute",
+        right: 16,
+        bottom: 16,
+        minWidth: 88,
+        height: 52,
+        borderRadius: 26,
+        alignItems: "center",
+        justifyContent: "center",
+        backgroundColor: "#25D366",
+        paddingHorizontal: 18,
+    },
+    inviteFabText: {
+        color: "#1C1E21",
+        fontSize: 16,
+        fontWeight: "700",
     },
     groupMembersSection: {
         width: '100%',

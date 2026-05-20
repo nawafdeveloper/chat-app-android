@@ -8,14 +8,30 @@ import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { ActivityIndicator, Keyboard, KeyboardAvoidingView, Pressable, StyleSheet, TextInput, useColorScheme, View } from 'react-native';
 import { Appbar, Icon, IconButton } from 'react-native-paper';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import ViewShot, { captureRef } from 'react-native-view-shot';
 import { ThemedText } from './themed-text';
 import { ThemedView } from './themed-view';
+
+const PREVIEW_MAX_DIMENSION = 128;
 
 const formatTime = (seconds: number) => {
     const m = Math.floor(seconds / 60)
     const s = Math.floor(seconds % 60)
     return `${m.toString().padStart(2, '0')}:${s.toString().padStart(2, '0')}`
 }
+
+const getPreviewCaptureSize = (width: number, height: number) => {
+    if (width <= 0 || height <= 0) {
+        return {};
+    }
+
+    const scale = PREVIEW_MAX_DIMENSION / Math.max(width, height);
+
+    return {
+        width: Math.max(1, Math.round(width * scale)),
+        height: Math.max(1, Math.round(height * scale)),
+    };
+};
 
 const VideoPreviewBeforeSent = () => {
     const videoUrl = useVideoPreviewBeforeSentStore((state) => state.videoUrl);
@@ -54,8 +70,10 @@ const VideoPreviewContent = ({ videoUrl }: { videoUrl: string }) => {
     const [isSeeking, setIsSeeking] = useState(false)
     const [sliderValue, setSliderValue] = useState(0)
     const [isSending, setIsSending] = useState(false)
+    const [videoLayoutSize, setVideoLayoutSize] = useState({ width: 0, height: 0 })
 
     const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null)
+    const videoShotRef = useRef<ViewShot>(null)
 
     useEffect(() => {
         const keyboardDidShowListener = Keyboard.addListener('keyboardDidShow', () => {
@@ -150,8 +168,28 @@ const VideoPreviewContent = ({ videoUrl }: { videoUrl: string }) => {
                 fallbackName: `video-${Date.now()}.mp4`,
                 mimeType: 'video/mp4',
             });
+            let previewFile = null;
+            try {
+                const previewUri = await captureRef(videoShotRef, {
+                    format: 'jpg',
+                    quality: 0.35,
+                    result: 'tmpfile',
+                    handleGLSurfaceViewOnAndroid: true,
+                    ...getPreviewCaptureSize(videoLayoutSize.width, videoLayoutSize.height),
+                });
+
+                previewFile = await createUploadFileFromLocalUri({
+                    uri: previewUri,
+                    fallbackName: `video-${Date.now()}-preview.jpg`,
+                    mimeType: 'image/jpeg',
+                });
+            } catch (error) {
+                console.log('Failed to capture outgoing video preview:', error);
+            }
+
             const sent = await sendAttachment({
                 file: uploadFile,
+                previewFile,
                 attachedMedia: 'video',
                 text: videoMessageContext,
             });
@@ -179,24 +217,36 @@ const VideoPreviewContent = ({ videoUrl }: { videoUrl: string }) => {
                 <Appbar.BackAction iconColor={colors.text} mode='contained' containerColor={colors.indicator} onPress={handleDiscardVideo} />
                 <Appbar.Content title="" />
             </Appbar.Header>
-            <VideoView
+            <ViewShot
+                ref={videoShotRef}
                 style={styles.video}
-                player={player}
-                surfaceType="textureView"
-                fullscreenOptions={{ enable: false }}
-                allowsPictureInPicture
-                buttonOptions={{
-                    showNext: false,
-                    showPrevious: false,
-                    showSeekBackward: false,
-                    showSettings: false,
-                    showSeekForward: false,
-                    showSubtitles: false,
-                    showBottomBar: false,
-                    showPlayPause: false,
+                options={{ format: 'jpg', quality: 0.35 }}
+                onLayout={(event) => {
+                    setVideoLayoutSize({
+                        width: event.nativeEvent.layout.width,
+                        height: event.nativeEvent.layout.height,
+                    })
                 }}
-                nativeControls={false}
-            />
+            >
+                <VideoView
+                    style={styles.videoContent}
+                    player={player}
+                    surfaceType="textureView"
+                    fullscreenOptions={{ enable: false }}
+                    allowsPictureInPicture
+                    buttonOptions={{
+                        showNext: false,
+                        showPrevious: false,
+                        showSeekBackward: false,
+                        showSettings: false,
+                        showSeekForward: false,
+                        showSubtitles: false,
+                        showBottomBar: false,
+                        showPlayPause: false,
+                    }}
+                    nativeControls={false}
+                />
+            </ViewShot>
             <View
                 pointerEvents="box-none"
                 style={styles.playOverlay}
@@ -288,6 +338,9 @@ const styles = StyleSheet.create({
         width: '100%',
         flex: 1,
         backgroundColor: 'black'
+    },
+    videoContent: {
+        ...StyleSheet.absoluteFillObject,
     },
     playOverlay: {
         ...StyleSheet.absoluteFillObject,

@@ -10,8 +10,31 @@ import { Checkbox, TouchableRipple } from 'react-native-paper'
 const APP_GREEN = '#25D366'
 
 type ThemeColors = typeof Colors.light | typeof Colors.dark
-type MediaType = 'image' | 'video' | 'audio' | 'document' | 'location' | 'contact' | null
 type MessageStatus = 'sending' | 'sent' | 'delivered' | 'read' | 'error'
+
+function getMediaPreview(mediaType?: string | null) {
+    switch (mediaType) {
+        case 'photo':
+        case 'image':
+            return { label: 'Photo', icon: 'image' as const }
+        case 'video':
+            return { label: 'Video', icon: 'videocam' as const }
+        case 'voice':
+        case 'audio':
+            return { label: 'Voice message', icon: 'mic' as const }
+        case 'file':
+        case 'document':
+            return { label: 'Document', icon: 'description' as const }
+        case 'location':
+            return { label: 'Location', icon: 'location-on' as const }
+        case 'contact':
+            return { label: 'Contact', icon: 'person' as const }
+        case 'reaction':
+            return { label: 'Reaction', icon: 'emoji-emotions' as const }
+        default:
+            return null
+    }
+}
 
 function summarizeChatForDebug(chat: ChatItemType) {
     return {
@@ -47,52 +70,19 @@ const MessageStatusIcon = ({ status }: { status: MessageStatus }) => {
     }
 }
 
-const MediaPreviewText = ({ mediaType }: { mediaType: string | null }) => {
-    if (!mediaType) return null
-
-    const getText = () => {
-        switch (mediaType) {
-            case 'image': return 'Photo'
-            case 'video': return 'Video'
-            case 'audio': return 'Voice message'
-            case 'document': return 'Document'
-            case 'location': return 'Location'
-            case 'contact': return 'Contact'
-            default: return null
-        }
-    }
-
-    const text = getText()
-    if (!text) return null
-
-    return <ThemedText style={styles.mediaPreviewText}>{text}</ThemedText>
-}
-
 const MediaTypeIcon = ({
     mediaType,
     size = 16,
     color = '#9ca3af',
 }: {
-    mediaType: MediaType | undefined
+    mediaType: string | null | undefined
     size?: number
     color?: string
 }) => {
-    switch (mediaType) {
-        case 'image':
-            return <MaterialIcons name="image" size={size} color={color} />
-        case 'video':
-            return <MaterialIcons name="videocam" size={size} color={color} />
-        case 'audio':
-            return <MaterialIcons name="mic" size={size} color={color} />
-        case 'document':
-            return <MaterialIcons name="description" size={size} color={color} />
-        case 'location':
-            return <MaterialIcons name="location-on" size={size} color={color} />
-        case 'contact':
-            return <MaterialIcons name="person" size={size} color={color} />
-        default:
-            return null
-    }
+    const preview = getMediaPreview(mediaType)
+    if (!preview) return null
+
+    return <MaterialIcons name={preview.icon} size={size} color={color} />
 }
 
 export type ChatListItemProps = {
@@ -116,7 +106,13 @@ const ChatListItem = ({
     const avatarText = colors.text
 
     const hasMedia = !!item.last_message_media
-    const hasText = !!item.last_message_context && !hasMedia
+    const hasContext = Boolean(item.last_message_context?.trim())
+    const mediaPreview = getMediaPreview(item.last_message_media)
+    const previewText = hasContext
+        ? item.last_message_context
+        : mediaPreview?.label ?? ''
+    const shouldShowStatusInPreview =
+        item.last_message_sender_is_me && Boolean(previewText)
 
     const messageStatus: MessageStatus = item.last_message_sender_is_me
         ? item.last_message_is_read_by_recipient
@@ -190,24 +186,21 @@ const ChatListItem = ({
                         <View style={styles.previewContainer}>
                             {hasMedia && (
                                 <MediaTypeIcon
-                                    mediaType={item.last_message_media as MediaType}
+                                    mediaType={item.last_message_media}
                                     size={16}
                                     color={colors.textSecondary}
                                 />
                             )}
-                            {hasText && item.last_message_sender_is_me && (
+                            {shouldShowStatusInPreview && (
                                 <MessageStatusIcon status={messageStatus} />
                             )}
                             <ThemedText style={[styles.chatPreview, { color: colors.textSecondary }]} numberOfLines={1}>
-                                {hasMedia
-                                    ? <MediaPreviewText mediaType={item.last_message_media} />
-                                    : item.last_message_context
-                                }
+                                {previewText}
                             </ThemedText>
                         </View>
 
                         <View style={styles.rightContainer}>
-                            {!hasText && !hasMedia && item.last_message_sender_is_me && (
+                            {!previewText && item.last_message_sender_is_me && (
                                 <MessageStatusIcon status={messageStatus} />
                             )}
                             {item.unreaded_messages_length > 0 && (
@@ -287,9 +280,6 @@ const styles = StyleSheet.create({
         alignItems: 'center',
         marginRight: 8,
         gap: 4,
-    },
-    mediaPreviewText: {
-        marginLeft: 4,
     },
     chatPreview: {
         fontSize: 14,
