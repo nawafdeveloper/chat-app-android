@@ -1966,7 +1966,7 @@ const TargetUserProfile = () => {
                             style={{ width: '100%' }}
                         >
                             <List.Item
-                                title="Invite new user"
+                                title="Invite new contact"
                                 titleStyle={{
                                     color: isCurrentUserAdmin ? colors.text : colors.textSecondary,
                                     fontFamily: Fonts.regular,
@@ -1981,7 +1981,6 @@ const TargetUserProfile = () => {
                                         color={isCurrentUserAdmin ? colors.text : colors.textSecondary}
                                     />
                                 )}
-                                containerStyle={{ paddingHorizontal: 24 }}
                             />
                         </TouchableRipple>
                     )}
@@ -2010,6 +2009,7 @@ const TargetUserProfile = () => {
                                             chatType="single"
                                         />
                                     )}
+                                    style={{ paddingRight: 0 }}
                                     right={() => (
                                         <ThemedView style={styles.memberRightContent}>
                                             {member.is_admin ? (
@@ -2057,7 +2057,13 @@ const TargetUserProfile = () => {
                                                     />
                                                     <Menu.Item
                                                         title="Remove from group"
-                                                        leadingIcon="account-remove-outline"
+                                                        leadingIcon={({ size }) => (
+                                                            <Icon
+                                                                source="account-remove-outline"
+                                                                size={size}
+                                                                color="red"
+                                                            />
+                                                        )}
                                                         disabled={
                                                             !isCurrentUserAdmin ||
                                                             member.user_id === currentUserId ||
@@ -2151,7 +2157,7 @@ const styles = StyleSheet.create({
         justifyContent: 'center',
         alignItems: 'center',
         gap: 20,
-        paddingBottom: 60
+        paddingBottom: 60,
     },
     avatar: {
         width: 145,
@@ -2292,7 +2298,9 @@ const styles = StyleSheet.create({
         paddingBottom: 4,
     },
     groupMemberItem: {
-        paddingHorizontal: 24,
+        paddingHorizontal: 16,
+        flex: 1,
+        marginRight: 0
     },
     memberAvatar: {
         width: 44,
@@ -2306,6 +2314,8 @@ const styles = StyleSheet.create({
         alignItems: 'center',
         justifyContent: 'flex-end',
         gap: 4,
+        flex: 1,
+        width: '100%'
     },
     adminBadge: {
         borderRadius: 999,
