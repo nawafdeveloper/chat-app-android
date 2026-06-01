@@ -1740,7 +1740,7 @@ const ChatId = () => {
         <>
             <KeyboardAvoidingView
                 behavior={'height'}
-                keyboardVerticalOffset={keyboardOffset}
+                keyboardVerticalOffset={isTablet ? 25 : keyboardOffset}
                 style={{ flex: 1 }}>
             <Appbar.Header
                 style={{
@@ -1749,6 +1749,7 @@ const ChatId = () => {
                     borderBottomWidth: 1,
                     borderBottomColor: colors.indicator + '33'
                 }}
+                statusBarHeight={isTablet ? 4 : undefined}
             >
                 {selectionMode ? (
                     <>
@@ -1892,11 +1893,11 @@ const ChatId = () => {
                     />
                 </ThemedView>
             </Modal>
-            {isReactionVisible && (
+            {isReactionVisible && selectionMode && (
                 <ThemedView style={{ paddingVertical: 10, paddingHorizontal: 16, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-evenly' }}>
                     {reactions.map((r) => (
                         <Pressable key={r.key} onPress={() => pressReaction(r.label)}>
-                            <ThemedText style={{ fontSize: 24 }}>{r.label}</ThemedText>
+                            <ThemedText style={{ fontSize: 24, lineHeight: 28 }}>{r.label}</ThemedText>
                         </Pressable>
                     ))}
                 </ThemedView>

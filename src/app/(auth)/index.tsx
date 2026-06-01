@@ -93,16 +93,20 @@ const PhoneLoginPage = () => {
                     </ThemedView>
                 </ThemedView>
                 <ThemedView style={styles.bottomContainer}>
-                    <Button
-                        mode="contained"
-                        disabled={!isNextEnabled || isLoading}
-                        onPress={handleNext}
-                        buttonColor='#25D366'
-                        textColor='#ffffff'
-                        style={{ height: 45, width: 90, borderRadius: 99 }}
-                    >
-                        {isLoading ? <ActivityIndicator color={scheme === 'dark' ? '#FFFFFF' : '#000000'} size={'small'} /> : <ThemedText>Next</ThemedText>}
-                    </Button>
+                    {isLoading ? (
+                        <ActivityIndicator color={scheme === 'dark' ? '#FFFFFF' : '#000000'} size={'small'} />
+                    ) : (
+                        <Button
+                            mode="contained"
+                            disabled={!isNextEnabled || isLoading}
+                            onPress={handleNext}
+                            buttonColor='#25D366'
+                            textColor='#ffffff'
+                            style={{ height: 45, width: 90, borderRadius: 99 }}
+                        >
+                            Next
+                        </Button>
+                    )}
                 </ThemedView>
             </ThemedView>
         </KeyboardAvoidingView>

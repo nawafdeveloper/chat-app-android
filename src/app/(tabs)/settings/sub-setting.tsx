@@ -6,6 +6,7 @@ import ProfileSettings from '@/components/profile-settings'
 import SubPrivacySettings from '@/components/sub-privacy-settings'
 import { ThemedView } from '@/components/themed-view'
 import { Colors } from '@/constants/theme'
+import { useIsTablet } from '@/context/screen-checking-context'
 import { db } from '@/db/client'
 import { currentUser } from '@/db/schema'
 import { authClient } from '@/lib/auth-client'
@@ -28,6 +29,7 @@ const SubSettingPage = ({ route }: SubSettingPageProps) => {
     const localParams = useLocalSearchParams<{ href?: string }>();
     const href = route?.params?.href ?? localParams.href;
     const scheme = useColorScheme()
+    const isTablet = useIsTablet();
     const resolvedScheme = scheme === 'unspecified' ? 'light' : scheme ?? 'light'
     const colors = Colors[resolvedScheme]
     const {
@@ -168,6 +170,7 @@ const SubSettingPage = ({ route }: SubSettingPageProps) => {
                     borderBottomWidth: 1,
                     borderBottomColor: colors.indicator + '33'
                 }}
+                statusBarHeight={isTablet ? 4 : undefined}
             >
                 <Appbar.BackAction onPress={handleBack} />
                 <Appbar.Content title={getTitle()} />

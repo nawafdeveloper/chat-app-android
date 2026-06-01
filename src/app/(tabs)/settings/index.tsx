@@ -179,6 +179,7 @@ const SettingsPage = () => {
                     borderBottomWidth: 1,
                     borderBottomColor: colors.indicator + '33'
                 }}
+                statusBarHeight={isTablet ? 4 : undefined}
             >
                 <Appbar.Content title={'Settings'} />
             </Appbar.Header>

@@ -28,6 +28,7 @@ import { DarkTheme, DefaultTheme, ThemeProvider } from '@react-navigation/native
 import { useMigrations } from 'drizzle-orm/expo-sqlite/migrator';
 import { useFonts } from 'expo-font';
 import { router, Stack } from 'expo-router';
+import * as ScreenOrientation from 'expo-screen-orientation';
 import * as SplashScreen from 'expo-splash-screen';
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { AppState, InteractionManager, Linking, StatusBar, useColorScheme, View } from 'react-native';
@@ -194,6 +195,12 @@ const AppLayout = () => {
         'Noto-Regular': require('../../assets/fonts/NotoSansArabic-Regular.ttf'),
         'Noto-Bold': require('../../assets/fonts/NotoSansArabic-Bold.ttf'),
     });
+
+    useEffect(() => {
+        void ScreenOrientation.unlockAsync().catch((error) => {
+            console.log('Failed to unlock screen orientation:', error);
+        });
+    }, []);
 
     const refreshKeys = async () => {
         const keys = await retrieveSessionKeys();

@@ -17,7 +17,8 @@ export const Colors = {
     card: '#F6F5F3',
     indicator: '#e3e1df',
     avatarBg: '#139443',
-    avatarIcon: '#C4FFDA'
+    avatarIcon: '#C4FFDA',
+    tabletBackground: '#F6F5F3'
   },
   dark: {
     text: '#ffffff',
@@ -25,10 +26,11 @@ export const Colors = {
     backgroundElement: '#212225',
     backgroundSelected: '#2E3135',
     textSecondary: '#B0B4BA',
-    card: '#22282C',
+    card: '#12171b',
     indicator: '#2f363a',
     avatarBg: '#C4FFDA',
-    avatarIcon: '#139443'
+    avatarIcon: '#139443',
+    tabletBackground: '#12171b'
   },
 } as const;
 

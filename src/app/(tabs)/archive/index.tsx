@@ -2,6 +2,7 @@ import { MemoChatListItem } from '@/components/chat-list-item'
 import { ThemedText } from '@/components/themed-text'
 import { ThemedView } from '@/components/themed-view'
 import { Colors } from '@/constants/theme'
+import { useIsTablet } from '@/context/screen-checking-context'
 import { rightNavRef } from '@/store/right-nav-ref'
 import { useActiveChatStore } from '@/store/use-active-chat-store'
 import type { ChatItemType } from '@/types/chats.type'
@@ -26,6 +27,7 @@ const openChat = (chatId: string) => {
 }
 
 const ArchivePage = () => {
+    const isTablet = useIsTablet();
     const chats = useActiveChatStore((state) => state.chats)
     const archivedChats = React.useMemo(
         () => chats.filter((chat) => chat.is_archived_chat),
@@ -45,7 +47,7 @@ const ArchivePage = () => {
 
     return (
         <ThemedView style={styles.main}>
-            <Appbar.Header style={{ backgroundColor: colors.background }}>
+            <Appbar.Header style={{ backgroundColor: colors.background }} statusBarHeight={isTablet ? 4 : undefined}>
                 <Appbar.Content
                     title="Archive"
                     subtitle="Archived chats stay hidden from your main chat list."

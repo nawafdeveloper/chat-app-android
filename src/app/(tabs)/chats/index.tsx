@@ -192,6 +192,10 @@ const ChatsPage = () => {
     })
 
     useEffect(() => {
+        setAppbarBg(colors.background)
+    }, [scheme]);
+
+    useEffect(() => {
         debugChatsPage('store-state-updated', {
             chatsCount: chats.length,
             chatsLoading,
@@ -623,7 +627,9 @@ const ChatsPage = () => {
                         backgroundColor: isSelectionMode ? colors.card : appbarBg,
                         paddingRight: isSearchFocus && !isSelectionMode ? 16 : 0,
                     },
-                ]}>
+                ]}
+                statusBarHeight={isTablet ? 4 : undefined}
+            >
                 {isSelectionMode ? (
                     <>
                         <Appbar.Action icon={CloseAppbarIcon} onPress={clearSelection} />
@@ -662,7 +668,7 @@ const ChatsPage = () => {
                     />
                 ) : (
                     <>
-                        <Appbar.Content title="YaaHalaa" titleStyle={styles.appbarTitle} />
+                        <Appbar.Content title="YaHla" titleStyle={styles.appbarTitle} />
                         <Appbar.Action icon="magnify" onPress={() => {
                             debugChatsPage('search-open', { chatsCount: chats.length })
                             setIsSearchFocus(true)

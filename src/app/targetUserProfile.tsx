@@ -1723,7 +1723,7 @@ const TargetUserProfile = () => {
                     </BasicAlertDialog>
                 )}
             </Host>
-            <Appbar.Header style={{ backgroundColor: colors.background }}>
+            <Appbar.Header style={{ backgroundColor: colors.background }} statusBarHeight={isTablet ? 4 : undefined}>
                 <Appbar.BackAction onPress={handleBack} />
                 <Appbar.Content title="" />
                 {canEditProfileName ? (

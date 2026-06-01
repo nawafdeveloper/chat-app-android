@@ -93,6 +93,10 @@ const TAIL_PATH = "M1.533,2.568L8,11.193V0L2.812,0C1.042,0,0.474,1.156,1.533,2.5
 const MAX_SWIPE_TRANSLATION = 56;
 const SWIPE_HARD_LIMIT = 72;
 const SWIPE_RESISTANCE = 0.18;
+const LIFTED_META_ROW_MARGIN_TOP = -12;
+const META_ROW_TIME_RESERVED_WIDTH = 54;
+const META_ROW_ICON_RESERVED_WIDTH = 18;
+const META_ROW_MIN_TEXT_ROOM = 58;
 const AnimatedIconButton = Animated.createAnimatedComponent(IconButton);
 const CHAT_DEBUG = true;
 
@@ -249,7 +253,7 @@ function ReplyPhotoThumbnail({ url, isDark }: { url?: string | null; isDark: boo
 
     if (!resolvedUri) {
         return (
-            <View style={{ width: 55, height: 55, backgroundColor: isDark ? '#182229' : '#edf2f7', justifyContent: 'center', alignItems: 'center' }}>
+            <View style={{ width: 45, height: 45, backgroundColor: isDark ? '#182229' : '#edf2f7', justifyContent: 'center', alignItems: 'center' }}>
                 <ActivityIndicator size="small" color="#25D366" />
             </View>
         );
@@ -675,6 +679,16 @@ function Bubble({ message, currentUserId, currentPhone, isDark, showTail = true,
             ? "#34B7F1"
             : theme.check;
     const bubbleColor = sent ? theme.sentBubble : theme.receivedBubble;
+    const shouldLiftMetaRow = Boolean(message_text_content && !attached_media);
+    const liftedMetaReservedWidth = shouldLiftMetaRow
+        ? META_ROW_TIME_RESERVED_WIDTH +
+        (sent && !isFailedOutgoing ? META_ROW_ICON_RESERVED_WIDTH : 0) +
+        (isStarredByCurrentUser ? META_ROW_ICON_RESERVED_WIDTH : 0)
+        : 0;
+    const plainTextOnlyBubbleMinWidth =
+        shouldLiftMetaRow && !reply_message && !is_forward_message && !open_graph_data && !poll
+            ? liftedMetaReservedWidth + META_ROW_MIN_TEXT_ROOM
+            : undefined;
     const swipeX = useSharedValue(0);
 
     const activeChat =
@@ -811,7 +825,7 @@ function Bubble({ message, currentUserId, currentPhone, isDark, showTail = true,
                 ? getContactDisplayName(replySenderContact)
                 : isGroupChat && replySenderGroupMember
                     ? (replySenderGroupMember.name?.trim() || replySenderGroupMember.phone_number) ?? ""
-            : replySenderUserId ?? "";
+                    : replySenderUserId ?? "";
 
     const handleOpenSenderProfile = useCallback(() => {
         if (!isGroupChat || sent) {
@@ -1276,7 +1290,7 @@ function Bubble({ message, currentUserId, currentPhone, isDark, showTail = true,
                             )}
                             <View style={[
                                 styles.bubble,
-                                { backgroundColor: bubbleColor, paddingHorizontal: attached_media ? 4 : 8, paddingVertical: attached_media === 'voice' ? 8 : 4 },
+                                { backgroundColor: bubbleColor, paddingHorizontal: attached_media ? 4 : 8, paddingVertical: attached_media === 'voice' ? 8 : 4, minWidth: plainTextOnlyBubbleMinWidth },
                                 !sent && showTail && styles.receivedBubbleWithTail,
                                 sent && showTail && styles.sentBubbleWithTail,
                             ]}>
@@ -1523,6 +1537,7 @@ function Bubble({ message, currentUserId, currentPhone, isDark, showTail = true,
                                 {message_text_content && attached_media !== 'contact' && (
                                     <ThemedText style={[
                                         styles.messageText,
+                                        shouldLiftMetaRow && { paddingRight: liftedMetaReservedWidth },
                                         { color: sent ? theme.sentText : theme.receivedText },
                                     ]}>
                                         {detectAndRenderLinks(
@@ -1532,7 +1547,7 @@ function Bubble({ message, currentUserId, currentPhone, isDark, showTail = true,
                                         )}
                                     </ThemedText>
                                 )}
-                                <View style={styles.metaRow}>
+                                <View style={[styles.metaRow, shouldLiftMetaRow && styles.liftedMetaRow]}>
                                     <ThemedText style={[
                                         styles.timeText,
                                         { color: sent ? theme.sentTime : theme.receivedTime },
@@ -1637,7 +1652,7 @@ const styles = StyleSheet.create({
     row: {
         position: 'relative',
         flexDirection: 'row',
-        marginVertical: 3,
+        marginVertical: 1.5,
         alignItems: 'flex-start',
         paddingHorizontal: 16,
         paddingVertical: 8,
@@ -1751,7 +1766,7 @@ const styles = StyleSheet.create({
         minWidth: 80,
         borderRadius: BORDER_RADIUS,
         position: 'relative',
-        overflow: 'visible'
+        overflow: 'visible',
     },
     receivedBubbleWithTail: {
         borderTopLeftRadius: 0,
@@ -1854,15 +1869,17 @@ const styles = StyleSheet.create({
     messageText: {
         fontSize: 14,
         lineHeight: 18,
-        width: '100%'
+        width: '100%',
     },
     metaRow: {
         flexDirection: 'row',
         alignItems: 'center',
         justifyContent: 'flex-end',
         gap: 2,
-        marginTop: 2,
         paddingRight: 4
+    },
+    liftedMetaRow: {
+        marginTop: LIFTED_META_ROW_MARGIN_TOP,
     },
     timeText: {
         fontSize: 11,

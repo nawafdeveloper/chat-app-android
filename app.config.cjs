@@ -14,7 +14,7 @@ module.exports = {
     android: {
       versionCode: 2,
       adaptiveIcon: {
-        backgroundColor: "#F9F5EC",
+        backgroundColor: "#25D366",
         foregroundImage: "./assets/images/android-icon-foreground.png",
         backgroundImage: "./assets/images/android-icon-background.png",
         monochromeImage: "./assets/images/android-icon-monochrome.png",
@@ -33,6 +33,12 @@ module.exports = {
     },
     plugins: [
       "expo-router",
+      [
+        "expo-screen-orientation",
+        {
+          initialOrientation: "DEFAULT",
+        },
+      ],
       [
         "expo-build-properties",
         {
