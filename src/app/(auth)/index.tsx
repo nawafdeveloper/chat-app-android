@@ -5,7 +5,7 @@ import { useLoginStore } from '@/store/use-login-store'
 import { router } from 'expo-router'
 import React, { useEffect, useState } from 'react'
 import { Keyboard, KeyboardAvoidingView, StyleSheet, useColorScheme } from 'react-native'
-import { ActivityIndicator, Button, Icon, TextInput, TouchableRipple } from 'react-native-paper'
+import { ActivityIndicator, Button, Icon, Snackbar, TextInput, TouchableRipple } from 'react-native-paper'
 import { useSafeAreaInsets } from 'react-native-safe-area-context'
 
 const PhoneLoginPage = () => {
@@ -18,10 +18,12 @@ const PhoneLoginPage = () => {
         setPhoneNumber,
         isNextEnabled,
         handleNext,
-        isLoading
+        isLoading,
+        error,
     } = useLoginStore();
 
     const [keyboardOffset, setKeyboardOffset] = useState(0);
+    const [snackVisible, setSnackVisible] = useState(false);
 
     useEffect(() => {
         const keyboardDidShowListener = Keyboard.addListener('keyboardDidShow', () => {
@@ -36,6 +38,14 @@ const PhoneLoginPage = () => {
             keyboardDidHideListener.remove();
         };
     }, []);
+
+    useEffect(() => {
+        if (error !== null) {
+            setSnackVisible(true);
+        }else {
+            setSnackVisible(false);
+        }
+    }, [error]);
 
     return (
         <KeyboardAvoidingView
@@ -109,6 +119,13 @@ const PhoneLoginPage = () => {
                     )}
                 </ThemedView>
             </ThemedView>
+            <Snackbar
+                visible={snackVisible}
+                onDismiss={() => setSnackVisible(false)}
+                style={{ borderRadius: 99, overflow: 'hidden' }}
+            >
+                {error}
+            </Snackbar>
         </KeyboardAvoidingView>
     )
 }

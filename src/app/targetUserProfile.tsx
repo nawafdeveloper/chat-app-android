@@ -3,6 +3,7 @@ import { SmallDecryptedMediaImage } from '@/components/small-decrypted-image-pre
 import { SmallVideoMessagePreview } from '@/components/small-decrypted-video-preview'
 import { ThemedText } from '@/components/themed-text'
 import { ThemedView } from '@/components/themed-view'
+import { ChatOutlineIcon } from '@/components/ui/chat-icon'
 import { Colors, Fonts } from '@/constants/theme'
 import { useCryptoKeys } from '@/context/crypto'
 import { useIsTablet } from '@/context/screen-checking-context'
@@ -1891,26 +1892,24 @@ const TargetUserProfile = () => {
                         {(canCreateProfileContact || canMessageProfileContact) ? (
                             <ThemedView style={styles.profileActionRow}>
                                 {canCreateProfileContact ? (
-                                    <IconButton
-                                        icon="account-plus"
-                                        mode="contained"
-                                        iconColor="#1C1E21"
-                                        containerColor="#25D366"
-                                        size={22}
-                                        onPress={handleCreateProfileContact}
-                                        disabled={pendingAction !== null}
-                                    />
+                                    <Pressable onPress={handleCreateProfileContact} style={styles.buttonContainer} disabled={pendingAction !== null}>
+                                        <ThemedView style={[styles.iconContainer, { backgroundColor: colors.card }]}>
+                                            <Icon source="account-plus-outline" color={colors.text} size={26} />
+                                        </ThemedView>
+                                        <ThemedText style={styles.buttonTitle}>
+                                            Add
+                                        </ThemedText>
+                                    </Pressable>
                                 ) : null}
                                 {canMessageProfileContact ? (
-                                    <IconButton
-                                        icon="message-text-outline"
-                                        mode="contained"
-                                        iconColor="#1C1E21"
-                                        containerColor="#25D366"
-                                        size={22}
-                                        onPress={handleMessageProfileContact}
-                                        disabled={pendingAction !== null}
-                                    />
+                                    <Pressable onPress={handleMessageProfileContact} style={styles.buttonContainer} disabled={pendingAction !== null}>
+                                        <ThemedView style={[styles.iconContainer, { backgroundColor: colors.card }]}>
+                                            <ChatOutlineIcon color={colors.text} size={26}/>
+                                        </ThemedView>
+                                        <ThemedText style={styles.buttonTitle}>
+                                            Message
+                                        </ThemedText>
+                                    </Pressable>
                                 ) : null}
                             </ThemedView>
                         ) : null}
@@ -2221,6 +2220,7 @@ const styles = StyleSheet.create({
         alignItems: 'center',
         justifyContent: 'center',
         gap: 10,
+        paddingTop: 24
     },
     inviteModal: {
         flex: 1,
@@ -2331,4 +2331,21 @@ const styles = StyleSheet.create({
         position: 'absolute',
         zIndex: 20,
     },
+    buttonContainer: {
+        flexDirection: 'column',
+        alignItems: 'center',
+        justifyContent: 'center',
+        gap: 2
+    },
+    iconContainer: {
+        paddingHorizontal: 20,
+        paddingVertical: 10,
+        borderRadius: 99,
+        alignItems: 'center',
+        justifyContent: 'center',
+    },
+    buttonTitle: {
+        fontSize: 14,
+        fontWeight: '800'
+    }
 })

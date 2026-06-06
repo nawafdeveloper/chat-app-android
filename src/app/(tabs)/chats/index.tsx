@@ -728,7 +728,7 @@ const ChatsPage = () => {
                     </ThemedView>
                 }
             />
-            {!isSelectionMode && (
+            {!isSelectionMode && !isTablet && (
                 <FAB
                     icon={() => <NewChatFilledIcon size={24} color={colors.background} />}
                     style={styles.fab}

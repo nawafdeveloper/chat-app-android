@@ -2,7 +2,7 @@ module.exports = {
   expo: {
     name: "YaHla",
     slug: "chat-app-android",
-    version: "1.0.1",
+    version: "1.0.2",
     orientation: "default",
     icon: "./assets/images/icon.png",
     scheme: "chatappandroid",
