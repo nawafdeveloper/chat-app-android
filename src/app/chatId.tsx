@@ -38,7 +38,7 @@ import { router, useLocalSearchParams } from 'expo-router';
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { FlatList, Keyboard, KeyboardAvoidingView, Modal, NativeScrollEvent, NativeSyntheticEvent, Platform, Pressable, StyleSheet, TextInput, useColorScheme, type FlatListProps } from 'react-native';
 import { ActivityIndicator, Appbar, Icon, IconButton, TouchableRipple } from 'react-native-paper';
-import Animated, { ZoomIn, ZoomOut } from 'react-native-reanimated';
+import Animated, { Extrapolation, interpolate, useAnimatedStyle, useSharedValue, ZoomIn, ZoomOut } from 'react-native-reanimated';
 
 const EMPTY_MESSAGES: Message[] = [];
 const EMPTY_USER_IDS: string[] = [];
@@ -650,6 +650,7 @@ const ChatId = () => {
     const [showGoDownButton, setShowGoDownButton] = useState(false);
     const [isForwardVisible, setIsForwardVisible] = useState(false);
     const [selectedForwardContactIds, setSelectedForwardContactIds] = useState<Set<string>>(new Set());
+    const [attachmentSheetHeight, setAttachmentSheetHeight] = useState(0);
 
     const selectedCount = selectedMessageIds.size;
     const selectionModeRef = useRef(selectionMode);
@@ -664,6 +665,25 @@ const ChatId = () => {
     const pinnedViewabilityConfigRef = useRef({
         itemVisiblePercentThreshold: 55,
     });
+    const attachmentSheetAnimatedIndex = useSharedValue(-1);
+
+    const attachmentSheetSpacerStyle = useAnimatedStyle(() => ({
+        height: interpolate(
+            attachmentSheetAnimatedIndex.value,
+            [-1, 0],
+            [0, attachmentSheetHeight],
+            Extrapolation.CLAMP
+        ),
+    }), [attachmentSheetHeight]);
+
+    const goDownButtonAnimatedStyle = useAnimatedStyle(() => ({
+        bottom: 110 + interpolate(
+            attachmentSheetAnimatedIndex.value,
+            [-1, 0],
+            [0, attachmentSheetHeight],
+            Extrapolation.CLAMP
+        ),
+    }), [attachmentSheetHeight]);
 
     const reactions = [
         { key: '1', label: '👍' },
@@ -1043,6 +1063,10 @@ const ChatId = () => {
         });
         setIsReactionVisible(prev => !prev);
     };
+
+    const handleAttachmentSheetHeightChange = useCallback((height: number) => {
+        setAttachmentSheetHeight(height);
+    }, []);
 
     const handleLongPress = useCallback((messageId: string) => {
         debugChatId('message-long-press', { activeChatId, messageId });
@@ -2001,9 +2025,15 @@ const ChatId = () => {
                     replyMediaUrl={replyMediaUrl}
                     replyMediaType={replyMediaType}
                     inputRef={inputRef}
+                    onAttachmentSheetHeightChange={handleAttachmentSheetHeightChange}
+                    attachmentSheetAnimatedIndex={attachmentSheetAnimatedIndex}
+                />
+                <Animated.View
+                    pointerEvents="none"
+                    style={[styles.attachmentSheetSpacer, attachmentSheetSpacerStyle]}
                 />
                 {showGoDownButton && (
-                    <ThemedView style={styles.goDownButtonContainer}>
+                    <Animated.View style={[styles.goDownButtonContainer, goDownButtonAnimatedStyle]}>
                         <Animated.View
                             key={'go-down-button'}
                             entering={ZoomIn.duration(150)}
@@ -2017,7 +2047,7 @@ const ChatId = () => {
                                 onPress={scrollToBottom}
                             />
                         </Animated.View>
-                    </ThemedView>
+                    </Animated.View>
                 )}
             </TiledBackground>
             </KeyboardAvoidingView>
@@ -2227,5 +2257,9 @@ const styles = StyleSheet.create({
         right: 16,
         zIndex: 99,
         backgroundColor: 'transparent'
+    },
+    attachmentSheetSpacer: {
+        height: 0,
+        backgroundColor: 'transparent',
     }
 })

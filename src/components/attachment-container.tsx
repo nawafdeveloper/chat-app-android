@@ -3,24 +3,37 @@ import { useContactPreviewBeforeSentStore } from '@/store/contact-preview-before
 import { useFilePreviewBeforeSentStore } from '@/store/file-preview-before-sent';
 import { useImagePreviewBeforeSentStore } from '@/store/image-preview-before-sent';
 import { useVideoPreviewBeforeSentStore } from '@/store/video-preview-before-sent';
+import {
+    BottomSheetModal,
+    TouchableOpacity as BottomSheetTouchableOpacity,
+    BottomSheetView,
+} from '@gorhom/bottom-sheet';
 import * as DocumentPicker from 'expo-document-picker';
 import * as ImagePicker from 'expo-image-picker';
-import React, { useEffect, useMemo } from 'react';
-import { Alert, StyleSheet, TouchableOpacity, useColorScheme, View } from 'react-native';
+import React, { useCallback, useEffect, useMemo, useRef } from 'react';
+import { Alert, StyleSheet, useColorScheme, View } from 'react-native';
 import { Icon } from 'react-native-paper';
 import { IconSource } from 'react-native-paper/lib/typescript/components/Icon';
 import Animated, {
-    Easing,
     useAnimatedStyle,
     useSharedValue,
+    type SharedValue,
     withDelay,
     withTiming
 } from 'react-native-reanimated';
 import { ThemedText } from './themed-text';
 
+export const ATTACHMENT_SHEET_BASE_HEIGHT = 120;
+const PRESENT_RETRY_LIMIT = 8;
+const PRESENT_RETRY_DELAY_MS = 120;
+
 type Props = {
     visible: boolean;
+    openRequestKey: number;
     onRequestClose?: () => void;
+    onSheetStateChange?: (isOpen: boolean) => void;
+    sheetHeight: number;
+    animatedIndex: SharedValue<number>;
 }
 
 type ItemButton = {
@@ -35,9 +48,13 @@ type ItemButton = {
 const AttachmentButton = ({
     item,
     scale,
+    background,
+    border
 }: {
     item: ItemButton;
     scale: any;
+    background: string;
+    border: string;
 }) => {
     const buttonStyle = useAnimatedStyle(() => ({
         transform: [
@@ -47,21 +64,28 @@ const AttachmentButton = ({
 
     return (
         <Animated.View style={buttonStyle}>
-            <TouchableOpacity style={styles.itemButtonContainer} onPress={item.onPress}>
-                <View style={[styles.iconContainer, { backgroundColor: item.backgroundColor }]}>
+            <BottomSheetTouchableOpacity style={styles.itemButtonContainer} onPress={item.onPress}>
+                <View style={[styles.iconContainer, { backgroundColor: background, borderColor: border }]}>
                     <Icon
                         source={item.icon}
                         color={item.iconColor}
-                        size={26}
+                        size={18}
                     />
                 </View>
                 <ThemedText style={styles.labelButton}>{item.label}</ThemedText>
-            </TouchableOpacity>
+            </BottomSheetTouchableOpacity>
         </Animated.View>
     );
 };
 
-const AttachmentContainer = ({ visible, onRequestClose }: Props) => {
+const AttachmentContainer = ({ visible, openRequestKey, onRequestClose, onSheetStateChange, sheetHeight, animatedIndex }: Props) => {
+    const bottomSheetModalRef = useRef<React.ComponentRef<typeof BottomSheetModal>>(null);
+    const presentFrameRef = useRef<number | null>(null);
+    const presentRetryTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+    const presentAttemptRef = useRef(0);
+    const hasPresentedRef = useRef(false);
+    const visibleRef = useRef(visible);
+    const sheetOpenRef = useRef(false);
     const scheme = useColorScheme();
     const colors = Colors[scheme === 'unspecified' ? 'light' : scheme ?? 'light']
     const isDark = scheme === 'dark';
@@ -70,9 +94,7 @@ const AttachmentContainer = ({ visible, onRequestClose }: Props) => {
     const showFilePreview = useFilePreviewBeforeSentStore((state) => state.show);
     const showContactPreview = useContactPreviewBeforeSentStore((state) => state.show);
 
-    const maskScale = useSharedValue(0);
     const contentOpacity = useSharedValue(0);
-    const borderRadiusValue = useSharedValue(500);
 
     const buttonScale0 = useSharedValue(0);
     const buttonScale1 = useSharedValue(0);
@@ -98,6 +120,70 @@ const AttachmentContainer = ({ visible, onRequestClose }: Props) => {
             buttonScale5,
         ]
     );
+
+    const snapPoints = useMemo(() => [sheetHeight], [sheetHeight]);
+
+    const handleDismiss = useCallback(() => {
+        hasPresentedRef.current = false;
+        onRequestClose?.();
+    }, [onRequestClose]);
+
+    const clearPendingPresent = useCallback(() => {
+        if (presentFrameRef.current !== null) {
+            cancelAnimationFrame(presentFrameRef.current);
+            presentFrameRef.current = null;
+        }
+
+        if (presentRetryTimeoutRef.current) {
+            clearTimeout(presentRetryTimeoutRef.current);
+            presentRetryTimeoutRef.current = null;
+        }
+    }, []);
+
+    const startPresentAttempts = useCallback(() => {
+        clearPendingPresent();
+        presentAttemptRef.current = 0;
+
+        const attemptPresent = () => {
+            if (!visibleRef.current || sheetOpenRef.current) {
+                return;
+            }
+
+            hasPresentedRef.current = true;
+            bottomSheetModalRef.current?.present();
+
+            presentFrameRef.current = requestAnimationFrame(() => {
+                presentFrameRef.current = null;
+
+                if (!visibleRef.current || sheetOpenRef.current) {
+                    return;
+                }
+
+                bottomSheetModalRef.current?.snapToIndex(0);
+            });
+
+            presentAttemptRef.current += 1;
+
+            if (presentAttemptRef.current < PRESENT_RETRY_LIMIT) {
+                presentRetryTimeoutRef.current = setTimeout(() => {
+                    presentRetryTimeoutRef.current = null;
+                    attemptPresent();
+                }, PRESENT_RETRY_DELAY_MS);
+            }
+        };
+
+        attemptPresent();
+    }, [clearPendingPresent]);
+
+    const handleSheetChange = useCallback((index: number) => {
+        const isOpen = index >= 0;
+        sheetOpenRef.current = isOpen;
+        onSheetStateChange?.(isOpen);
+
+        if (isOpen) {
+            clearPendingPresent();
+        }
+    }, [clearPendingPresent, onSheetStateChange]);
 
     const pickImage = async () => {
         const { status } = await ImagePicker.requestMediaLibraryPermissionsAsync()
@@ -175,16 +261,11 @@ const AttachmentContainer = ({ visible, onRequestClose }: Props) => {
     ];
 
     useEffect(() => {
-        if (visible) {
-            borderRadiusValue.value = withTiming(100, {
-                duration: 500,
-                easing: Easing.bezier(0.25, 0.1, 0.25, 1),
-            });
+        visibleRef.current = visible;
+        clearPendingPresent();
 
-            maskScale.value = withTiming(1, {
-                duration: 900,
-                easing: Easing.bezier(0.25, 0.1, 0.25, 1),
-            });
+        if (visible) {
+            startPresentAttempts();
 
             contentOpacity.value = withTiming(1, {
                 duration: 500,
@@ -199,15 +280,12 @@ const AttachmentContainer = ({ visible, onRequestClose }: Props) => {
                 );
             });
         } else {
-            borderRadiusValue.value = withTiming(500, {
-                duration: 400,
-                easing: Easing.bezier(0.4, 0, 0.2, 1),
-            });
+            sheetOpenRef.current = false;
+            onSheetStateChange?.(false);
 
-            maskScale.value = withTiming(0, {
-                duration: 400,
-                easing: Easing.bezier(0.4, 0, 0.2, 1),
-            });
+            if (hasPresentedRef.current) {
+                bottomSheetModalRef.current?.dismiss();
+            }
 
             contentOpacity.value = withTiming(0, {
                 duration: 200,
@@ -217,93 +295,92 @@ const AttachmentContainer = ({ visible, onRequestClose }: Props) => {
                 scale.value = withTiming(0, { duration: 200 });
             });
         }
+
+        return clearPendingPresent;
     }, [
-        borderRadiusValue,
         buttonScales,
+        clearPendingPresent,
         contentOpacity,
-        maskScale,
+        onSheetStateChange,
+        openRequestKey,
+        startPresentAttempts,
         visible,
     ]);
-
-    const circleMaskStyle = useAnimatedStyle(() => ({
-        transform: [{ scale: maskScale.value }],
-        borderTopLeftRadius: borderRadiusValue.value,
-        borderTopRightRadius: borderRadiusValue.value,
-        borderBottomLeftRadius: borderRadiusValue.value,
-        borderBottomRightRadius: 0,
-        bottom: 0,
-        right: 0,
-    }));
 
     const contentStyle = useAnimatedStyle(() => ({
         opacity: contentOpacity.value,
     }));
 
     return (
-        <Animated.View
-            pointerEvents={visible ? 'auto' : 'none'}
-            style={[
-                styles.attachmentContainer,
-                {
-                    backgroundColor: 'transparent',
-                    opacity: visible ? 1 : 0,
-                }
+        <BottomSheetModal
+            ref={bottomSheetModalRef}
+            snapPoints={snapPoints}
+            animatedIndex={animatedIndex}
+            enableDynamicSizing={false}
+            enablePanDownToClose
+            enableOverDrag={false}
+            keyboardBehavior="interactive"
+            android_keyboardInputMode="adjustResize"
+            backgroundStyle={[
+                styles.background,
+                { backgroundColor: colors.background }
             ]}
+            handleIndicatorStyle={{ backgroundColor: colors.textSecondary + '66' }}
+            handleStyle={styles.handle}
+            onChange={handleSheetChange}
+            onDismiss={handleDismiss}
         >
-            <Animated.View
-                style={[
-                    styles.circleMask,
-                    circleMaskStyle,
-                    { backgroundColor: colors.background }
-                ]}
-            />
-            <Animated.View style={[styles.content, contentStyle]}>
-                <View style={styles.rowContent}>
-                    {itemButtons.slice(0, 3).map((item, idx) => (
-                        <AttachmentButton
-                            key={item.key}
-                            item={item}
-                            scale={buttonScales[idx]}
-                        />
-                    ))}
-                </View>
-                <View style={styles.rowContent}>
-                    {itemButtons.slice(3, 6).map((item, idx) => (
-                        <AttachmentButton
-                            key={item.key}
-                            item={item}
-                            scale={buttonScales[idx + 3]}
-                        />
-                    ))}
-                </View>
-            </Animated.View>
-        </Animated.View>
+            <BottomSheetView style={styles.sheet}>
+                <Animated.View style={[styles.content, contentStyle]}>
+                    <View style={styles.rowContent}>
+                        {itemButtons.slice(0, 3).map((item, idx) => (
+                            <AttachmentButton
+                                key={item.key}
+                                item={item}
+                                scale={buttonScales[idx]}
+                                background={colors.background}
+                                border={colors.indicator}
+                            />
+                        ))}
+                    </View>
+                    {itemButtons.length > 3 ? (
+                        <View style={styles.rowContent}>
+                            {itemButtons.slice(3, 6).map((item, idx) => (
+                                <AttachmentButton
+                                    key={item.key}
+                                    item={item}
+                                    scale={buttonScales[idx + 3]}
+                                    background={colors.background}
+                                    border={colors.indicator}
+                                />
+                            ))}
+                        </View>
+                    ) : null}
+                </Animated.View>
+            </BottomSheetView>
+        </BottomSheetModal>
     );
 };
 
 const styles = StyleSheet.create({
-    attachmentContainer: {
-        position: 'absolute',
-        left: 10,
-        right: 10,
-        top: -130,
-        height: 120,
-        borderRadius: 12,
-        overflow: 'hidden',
-        backgroundColor: 'transparent',
+    background: {
+        borderRadius: 0,
+        borderTopLeftRadius: 0,
+        borderTopRightRadius: 0,
     },
-    circleMask: {
-        position: 'absolute',
-        width: 1000,
-        height: 1000,
-        bottom: 0,
-        right: 0,
-        transformOrigin: 'bottom right',
+    handle: {
+        paddingTop: 8,
+        paddingBottom: 4,
+    },
+    sheet: {
+        flex: 1,
     },
     content: {
         flex: 1,
         flexDirection: 'column',
-        padding: 20,
+        paddingHorizontal: 20,
+        paddingTop: 14,
+        paddingBottom: 18,
         gap: 16,
     },
     rowContent: {
@@ -318,9 +395,10 @@ const styles = StyleSheet.create({
         gap: 6
     },
     iconContainer: {
-        paddingVertical: 16,
-        paddingHorizontal: 28,
-        borderRadius: 99
+        paddingVertical: 8,
+        paddingHorizontal: 32,
+        borderRadius: 99,
+        borderWidth: 1
     },
     labelButton: {
         fontSize: 14,

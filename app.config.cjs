@@ -51,6 +51,13 @@ module.exports = {
           },
         },
       ],
+      [
+        "expo-navigation-bar",
+        {
+          enforceContrast: true,
+          hidden: false,
+        }
+      ],
       "@react-native-firebase/app",
       "@react-native-firebase/messaging",
       [

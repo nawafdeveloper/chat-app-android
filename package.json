@@ -21,6 +21,7 @@
   "dependencies": {
     "@better-auth/expo": "^1.6.9",
     "@expo/ui": "~55.0.12",
+    "@gorhom/bottom-sheet": "^5.2.14",
     "@notifee/react-native": "^9.1.8",
     "@react-native-community/slider": "5.1.2",
     "@react-native-firebase/app": "^24.0.0",
@@ -57,7 +58,7 @@
     "expo-location": "~55.1.9",
     "expo-maps": "~55.0.17",
     "expo-media-library": "~55.0.16",
-    "expo-navigation-bar": "~55.0.12",
+    "expo-navigation-bar": "~55.0.13",
     "expo-network": "~55.0.13",
     "expo-notifications": "~55.0.22",
     "expo-router": "~55.0.13",

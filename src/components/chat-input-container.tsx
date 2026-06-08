@@ -14,12 +14,17 @@ import {
     useAudioRecorderState,
 } from 'expo-audio'
 import { Image } from 'expo-image'
-import React, { useEffect, useMemo, useState } from 'react'
-import { ActivityIndicator, StyleSheet, TextInput, useColorScheme, View } from 'react-native'
-import { IconButton } from 'react-native-paper'
-import Animated, { ZoomIn, ZoomOut } from 'react-native-reanimated'
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { ActivityIndicator, Keyboard, Platform, StyleSheet, TextInput, useColorScheme, View } from 'react-native'
+import { Icon, IconButton } from 'react-native-paper'
+import Animated, {
+    Extrapolation,
+    interpolate,
+    useAnimatedStyle,
+    type SharedValue,
+} from 'react-native-reanimated'
 import { useSafeAreaInsets } from 'react-native-safe-area-context'
-import AttachmentContainer from './attachment-container'
+import AttachmentContainer, { ATTACHMENT_SHEET_BASE_HEIGHT } from './attachment-container'
 import VoiceWaveform from './audio-recorder-visualizer'
 import { ThemedText } from './themed-text'
 import { ThemedView } from './themed-view'
@@ -34,6 +39,8 @@ type Props = {
     replyMediaType: 'photo' | 'video' | 'voice' | 'file' | 'contact' | 'location' | null;
     inputRef: React.RefObject<TextInput | null>;
     onVoiceMessageRecorded?: (uri: string, durationMillis: number) => void;
+    onAttachmentSheetHeightChange?: (height: number) => void;
+    attachmentSheetAnimatedIndex: SharedValue<number>;
 }
 
 const POLL_INTERVAL_MS = 80;
@@ -110,7 +117,7 @@ function ReplyPhotoThumbnail({ url, isDark }: { url?: string | null; isDark: boo
     );
 }
 
-const ChatInputContainer = ({ chatId, isReply, handleClearReply, replyMessage, replyToUser, replyMediaType, replyMediaUrl, inputRef, onVoiceMessageRecorded }: Props) => {
+const ChatInputContainer = ({ chatId, isReply, handleClearReply, replyMessage, replyToUser, replyMediaType, replyMediaUrl, inputRef, onVoiceMessageRecorded, onAttachmentSheetHeightChange, attachmentSheetAnimatedIndex }: Props) => {
     const { data: session } = authClient.useSession();
     const insets = useSafeAreaInsets();
     const scheme = useColorScheme();
@@ -136,6 +143,7 @@ const ChatInputContainer = ({ chatId, isReply, handleClearReply, replyMessage, r
     const draftFirstUrl = useMemo(() => findFirstUrl(draftValue), [draftValue]);
 
     const [attachmentVisible, setAttachmentVisible] = useState(false);
+    const [attachmentOpenRequestKey, setAttachmentOpenRequestKey] = useState(0);
     const [isRecording, setIsRecording] = useState(false);
     const [isSendingText, setIsSendingText] = useState(false);
     const [isSendingVoice, setIsSendingVoice] = useState(false);
@@ -152,6 +160,44 @@ const ChatInputContainer = ({ chatId, isReply, handleClearReply, replyMessage, r
     const canSendText = draftValue.trim().length > 0;
 
     const recorderState = useAudioRecorderState(audioRecorder, POLL_INTERVAL_MS);
+    const attachmentSheetHeight = ATTACHMENT_SHEET_BASE_HEIGHT + insets.bottom;
+    const keyboardVisibleRef = useRef(false);
+    const attachmentSheetOpenRef = useRef(false);
+    const pendingAttachmentOpenRef = useRef(false);
+    const pendingOpenTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+    const pendingOpenFrameRef = useRef<number | null>(null);
+    const plusIconStyle = useAnimatedStyle(() => {
+        const rotation = interpolate(
+            attachmentSheetAnimatedIndex.value,
+            [-1, 0],
+            [0, 45],
+            Extrapolation.CLAMP
+        );
+
+        return {
+            transform: [{ rotate: `${rotation}deg` }],
+        };
+    });
+    const mainContainerStyle = useAnimatedStyle(() => {
+        const sheetProgress = interpolate(
+            attachmentSheetAnimatedIndex.value,
+            [-1, 0],
+            [0, 1],
+            Extrapolation.CLAMP
+        );
+
+        return {
+            paddingBottom: 10 + insets.bottom * (1 - sheetProgress),
+        };
+    });
+    const renderAttachmentPlusIcon = useCallback(
+        ({ color, size }: { color: string; size: number }) => (
+            <Animated.View style={plusIconStyle}>
+                <Icon source="plus" color={color} size={size} />
+            </Animated.View>
+        ),
+        [plusIconStyle]
+    );
 
     debugChatInput('render', {
         propChatId: chatId,
@@ -203,6 +249,8 @@ const ChatInputContainer = ({ chatId, isReply, handleClearReply, replyMessage, r
 
     const startRecording = async () => {
         debugChatInput('record-start-request', { activeChatId });
+        closeAttachmentSheet();
+
         const { granted } = await AudioModule.requestRecordingPermissionsAsync();
         debugChatInput('record-permission-result', { activeChatId, granted });
         if (!granted) return;
@@ -367,12 +415,93 @@ const ChatInputContainer = ({ chatId, isReply, handleClearReply, replyMessage, r
         };
     }, [activeChatId, draftFirstUrl, linkPreviewDisabled]);
 
+    const clearPendingOpenTimeout = useCallback(() => {
+        if (pendingOpenTimeoutRef.current) {
+            clearTimeout(pendingOpenTimeoutRef.current);
+            pendingOpenTimeoutRef.current = null;
+        }
+
+        if (pendingOpenFrameRef.current !== null) {
+            cancelAnimationFrame(pendingOpenFrameRef.current);
+            pendingOpenFrameRef.current = null;
+        }
+    }, []);
+
+    const openAttachmentSheet = useCallback(() => {
+        clearPendingOpenTimeout();
+        pendingAttachmentOpenRef.current = false;
+        pendingOpenFrameRef.current = requestAnimationFrame(() => {
+            pendingOpenFrameRef.current = null;
+            setAttachmentVisible(true);
+            setAttachmentOpenRequestKey((current) => current + 1);
+        });
+    }, [clearPendingOpenTimeout]);
+
+    const closeAttachmentSheet = useCallback(() => {
+        clearPendingOpenTimeout();
+        attachmentSheetOpenRef.current = false;
+        pendingAttachmentOpenRef.current = false;
+        setAttachmentVisible(false);
+    }, [clearPendingOpenTimeout]);
+
+    const handleAttachmentSheetStateChange = useCallback((isOpen: boolean) => {
+        attachmentSheetOpenRef.current = isOpen;
+    }, []);
+
+    useEffect(() => {
+        const keyboardDidShowListener = Keyboard.addListener('keyboardDidShow', () => {
+            keyboardVisibleRef.current = true;
+        });
+
+        const keyboardDidHideListener = Keyboard.addListener('keyboardDidHide', () => {
+            keyboardVisibleRef.current = false;
+
+            if (pendingAttachmentOpenRef.current) {
+                openAttachmentSheet();
+            }
+        });
+
+        return () => {
+            clearPendingOpenTimeout();
+            keyboardDidShowListener.remove();
+            keyboardDidHideListener.remove();
+        };
+    }, [clearPendingOpenTimeout, openAttachmentSheet]);
+
+    useEffect(() => {
+        onAttachmentSheetHeightChange?.(attachmentSheetHeight);
+    }, [attachmentSheetHeight, onAttachmentSheetHeightChange]);
+
+    useEffect(() => {
+        return () => {
+            onAttachmentSheetHeightChange?.(0);
+        };
+    }, [onAttachmentSheetHeightChange]);
+
     const handleToggleAttachment = () => {
         debugChatInput('attachment-toggle', {
             activeChatId,
             nextVisible: !attachmentVisible,
         });
-        setAttachmentVisible(prev => !prev);
+
+        if (attachmentSheetOpenRef.current) {
+            closeAttachmentSheet();
+            return;
+        }
+
+        if (keyboardVisibleRef.current || inputRef.current?.isFocused()) {
+            pendingAttachmentOpenRef.current = true;
+            Keyboard.dismiss();
+            clearPendingOpenTimeout();
+            pendingOpenTimeoutRef.current = setTimeout(() => {
+                if (pendingAttachmentOpenRef.current) {
+                    openAttachmentSheet();
+                }
+            }, Platform.OS === 'android' ? 420 : 320);
+            return;
+        }
+
+        openAttachmentSheet();
     };
 
     const handleSend = async () => {
@@ -393,7 +522,7 @@ const ChatInputContainer = ({ chatId, isReply, handleClearReply, replyMessage, r
             return;
         }
 
-        setAttachmentVisible(false);
+        closeAttachmentSheet();
         setIsSendingText(true);
         try {
             const openGraphData = await resolveOpenGraphPreviewForSend();
@@ -431,10 +560,16 @@ const ChatInputContainer = ({ chatId, isReply, handleClearReply, replyMessage, r
 
     return (
         <ThemedView style={styles.container}>
-            <AttachmentContainer
-                visible={attachmentVisible}
-                onRequestClose={() => setAttachmentVisible(false)}
-            />
+            {!isRecording ? (
+                <AttachmentContainer
+                    visible={attachmentVisible}
+                    openRequestKey={attachmentOpenRequestKey}
+                    sheetHeight={attachmentSheetHeight}
+                    animatedIndex={attachmentSheetAnimatedIndex}
+                    onRequestClose={closeAttachmentSheet}
+                    onSheetStateChange={handleAttachmentSheetStateChange}
+                />
+            ) : null}
             {isRecording ? (
                 <ThemedView style={[styles.recordingContainer, { paddingBottom: insets.bottom, borderTopColor: colors.indicator + '33' }]}>
                     <VoiceWaveform metering={recorderState.metering} />
@@ -465,7 +600,7 @@ const ChatInputContainer = ({ chatId, isReply, handleClearReply, replyMessage, r
                     </ThemedView>
                 </ThemedView>
             ) : (
-                <ThemedView style={[styles.main, { paddingBottom: insets.bottom + 10 }]}>
+                <Animated.View style={[styles.main, mainContainerStyle]}>
                     <ThemedView style={[styles.mainInputContainer, { backgroundColor: scheme === 'dark' ? "#1F272A" : colors.background, borderRadius: isReply ? 18 : 24 }]}>
                         {isReply && (
                             <ThemedView style={[styles.replyMainContainer, { backgroundColor: colors.indicator, }]}>
@@ -521,20 +656,20 @@ const ChatInputContainer = ({ chatId, isReply, handleClearReply, replyMessage, r
                                 placeholderTextColor={colors.textSecondary}
                                 enablesReturnKeyAutomatically={true}
                                 selectionColor='#25D366'
-                                onFocus={() => setAttachmentVisible(false)}
+                                onFocus={closeAttachmentSheet}
                             />
                             {canSendText ? (
-                                <Animated.View key={'attachment'} entering={ZoomIn.duration(150)} exiting={ZoomOut.duration(150)}>
+                                <View key={'attachment'}>
                                     <IconButton
-                                        icon={"plus"}
+                                        icon={renderAttachmentPlusIcon}
                                         iconColor={colors.text}
                                         size={28}
                                         style={{ margin: 0, marginBottom: 2 }}
                                         onPress={() => handleToggleAttachment()}
                                     />
-                                </Animated.View>
+                                </View>
                             ) : (
-                                <Animated.View key={'mic'} entering={ZoomIn.duration(150)} exiting={ZoomOut.duration(150)}>
+                                <View key={'mic'}>
                                     <IconButton
                                         icon={"microphone-outline"}
                                         iconColor={colors.text}
@@ -542,38 +677,38 @@ const ChatInputContainer = ({ chatId, isReply, handleClearReply, replyMessage, r
                                         style={{ margin: 0, marginBottom: 2 }}
                                         onPress={() => startRecording()}
                                     />
-                                </Animated.View>
+                                </View>
                             )}
                         </ThemedView>
                     </ThemedView>
                     {canSendText ? (
                         <ThemedView style={{ backgroundColor: '#25D366', padding: 2, borderRadius: 99, justifyContent: 'center', alignItems: 'center' }}>
-                            <Animated.View key={'send'} entering={ZoomIn.duration(150)} exiting={ZoomOut.duration(150)}>
+                            <View key={'send'}>
                                 <IconButton
                                     onPress={() => handleSend()}
                                     icon={"send"}
                                     disabled={isSendingText}
                                     iconColor={colors.background}
-                                    size={27}
-                                    style={{ margin: 0, marginBottom: 2 }}
+                                    size={26}
+                                    style={{ margin: 0 }}
                                 />
-                            </Animated.View>
+                            </View>
                         </ThemedView>
                     ) : (
                         <ThemedView style={{ backgroundColor: '#25D366', padding: 2, borderRadius: 99, justifyContent: 'center', alignItems: 'center' }}>
-                            <Animated.View key={'attachment-green'} entering={ZoomIn.duration(150)} exiting={ZoomOut.duration(150)}>
+                            <View key={'attachment-green'}>
                                 <IconButton
                                     onPress={() => handleToggleAttachment()}
-                                    icon={"plus"}
+                                    icon={renderAttachmentPlusIcon}
                                     disabled={isSendingText}
                                     iconColor={colors.background}
-                                    size={28}
+                                    size={26}
                                     style={{ margin: 0 }}
                                 />
-                            </Animated.View>
+                            </View>
                         </ThemedView>
                     )}
-                </ThemedView>
+                </Animated.View>
             )}
         </ThemedView>
     )
@@ -625,7 +760,6 @@ const styles = StyleSheet.create({
         flexDirection: 'column',
         overflow: 'hidden',
         paddingHorizontal: 3,
-        paddingTop: 3
     },
     inputContainer: {
         flexDirection: 'row',
@@ -637,7 +771,8 @@ const styles = StyleSheet.create({
     input: {
         flex: 1,
         maxHeight: 120,
-        marginBottom: 5
+        marginBottom: 5,
+        lineHeight: 15,
     },
     replyMainContainer: {
         overflow: 'hidden',

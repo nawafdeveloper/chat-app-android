@@ -17,21 +17,23 @@ import { syncMobileContacts } from '@/lib/contact-sync';
 import { retrieveSessionKeys } from '@/lib/crypto-storage';
 import { displayRemoteMessageNotification } from '@/lib/display-notifee-notification';
 import { getDbChat } from '@/lib/upsert-db-chats';
-import { useNotificationNavigationStore } from '@/store/notification-navigation-store';
 import { useAuthStore } from '@/store/auth-store';
+import { useNotificationNavigationStore } from '@/store/notification-navigation-store';
 import { useNotificationStore } from '@/store/notification-store';
 import { useActiveChatStore } from '@/store/use-active-chat-store';
 import { setRefreshKeysHandler } from '@/types/keys.module';
+import { BottomSheetModalProvider } from '@gorhom/bottom-sheet';
 import notifee, { EventType } from '@notifee/react-native';
 import { getMessaging, onMessage } from '@react-native-firebase/messaging';
 import { DarkTheme, DefaultTheme, ThemeProvider } from '@react-navigation/native';
 import { useMigrations } from 'drizzle-orm/expo-sqlite/migrator';
 import { useFonts } from 'expo-font';
+import * as NavigationBar from 'expo-navigation-bar';
 import { router, Stack } from 'expo-router';
 import * as ScreenOrientation from 'expo-screen-orientation';
 import * as SplashScreen from 'expo-splash-screen';
 import React, { useCallback, useEffect, useRef, useState } from 'react';
-import { AppState, InteractionManager, Linking, StatusBar, useColorScheme, View } from 'react-native';
+import { AppState, InteractionManager, Linking, Platform, StatusBar, useColorScheme, View } from 'react-native';
 import { GestureHandlerRootView } from 'react-native-gesture-handler';
 import { PaperProvider } from 'react-native-paper';
 import { install } from 'react-native-quick-crypto';
@@ -42,6 +44,7 @@ import { db, ensureLocalDbSchema } from '../db/client';
 install();
 const firebaseMessaging = getMessaging();
 const MAIN_CHATS_TAB_ROUTE = '/(tabs)/chats';
+const TRANSPARENT_NAVIGATION_BAR_COLOR = '#ffffff01';
 
 SplashScreen.preventAutoHideAsync();
 
@@ -195,6 +198,40 @@ const AppLayout = () => {
         'Noto-Regular': require('../../assets/fonts/NotoSansArabic-Regular.ttf'),
         'Noto-Bold': require('../../assets/fonts/NotoSansArabic-Bold.ttf'),
     });
+
+    useEffect(() => {
+        if (Platform.OS !== 'android') {
+            return;
+        }
+
+        const applyNavigationBarStyle = () => {
+            NavigationBar.setStyle('auto');
+
+            void NavigationBar.setVisibilityAsync('visible').catch((error) => {
+                console.log('Failed to show Android navigation bar:', error);
+            });
+
+            void NavigationBar.setPositionAsync('absolute').catch((error) => {
+                console.log('Failed to position Android navigation bar:', error);
+            });
+
+            void NavigationBar.setBackgroundColorAsync(TRANSPARENT_NAVIGATION_BAR_COLOR).catch((error) => {
+                console.log('Failed to make Android navigation bar transparent:', error);
+            });
+        };
+
+        applyNavigationBarStyle();
+
+        const subscription = AppState.addEventListener('change', (nextAppState) => {
+            if (nextAppState === 'active') {
+                applyNavigationBarStyle();
+            }
+        });
+
+        return () => {
+            subscription.remove();
+        };
+    }, [colorScheme]);
 
     useEffect(() => {
         void ScreenOrientation.unlockAsync().catch((error) => {
@@ -656,30 +693,32 @@ const AppLayout = () => {
     const hasNoPin = hasKeys === false;
 
     return (
-        <GestureHandlerRootView>
-            <TabletProvider>
-                <PaperProvider>
-                    <ThemeProvider value={colorScheme === 'dark' ? DarkTheme : DefaultTheme}>
-                        <CryptoProvider>
-                            {hasSession ? (
-                                <RealtimeBootstrap />
-                            ) : null}
-                            <AppStack
-                                hasSession={hasSession}
-                                hasSessionUser={hasSessionUser}
-                                isNewUser={isNewUser}
-                                hasPin={hasPin}
-                                hasNoPin={hasNoPin}
-                                hasName={hasName}
-                                onMainAppReadyChange={handleMainAppReadyChange}
+        <GestureHandlerRootView style={{ flex: 1 }}>
+            <BottomSheetModalProvider>
+                <TabletProvider>
+                    <PaperProvider>
+                        <ThemeProvider value={colorScheme === 'dark' ? DarkTheme : DefaultTheme}>
+                            <CryptoProvider>
+                                {hasSession ? (
+                                    <RealtimeBootstrap />
+                                ) : null}
+                                <AppStack
+                                    hasSession={hasSession}
+                                    hasSessionUser={hasSessionUser}
+                                    isNewUser={isNewUser}
+                                    hasPin={hasPin}
+                                    hasNoPin={hasNoPin}
+                                    hasName={hasName}
+                                    onMainAppReadyChange={handleMainAppReadyChange}
+                                />
+                            </CryptoProvider>
+                            <StatusBar
+                                barStyle={colorScheme === 'dark' ? 'light-content' : 'dark-content'}
                             />
-                        </CryptoProvider>
-                        <StatusBar
-                            barStyle={colorScheme === 'dark' ? 'light-content' : 'dark-content'}
-                        />
-                    </ThemeProvider>
-                </PaperProvider>
-            </TabletProvider>
+                        </ThemeProvider>
+                    </PaperProvider>
+                </TabletProvider>
+            </BottomSheetModalProvider>
         </GestureHandlerRootView>
     );
 };
