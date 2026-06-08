@@ -2,7 +2,7 @@ module.exports = {
   expo: {
     name: "YaHla",
     slug: "chat-app-android",
-    version: "1.0.2",
+    version: "1.0.4",
     orientation: "default",
     icon: "./assets/images/icon.png",
     scheme: "chatappandroid",
@@ -24,6 +24,7 @@ module.exports = {
       permissions: [
         "android.permission.RECORD_AUDIO",
         "android.permission.POST_NOTIFICATIONS",
+        "android.permission.READ_CONTACTS",
       ],
       googleServicesFile: "./google-services.json",
     },

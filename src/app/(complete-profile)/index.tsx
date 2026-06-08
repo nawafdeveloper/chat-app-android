@@ -1,6 +1,6 @@
 import { ThemedText } from '@/components/themed-text';
 import { ThemedView } from '@/components/themed-view';
-import { Colors, Fonts } from '@/constants/theme';
+import { Colors } from '@/constants/theme';
 import { db } from '@/db/client';
 import { currentUser } from '@/db/schema';
 import { authClient } from '@/lib/auth-client';
@@ -154,7 +154,7 @@ const CompleteProfilePage = () => {
                         cursorColor='#25D366'
                         underlineColor={colors.indicator}
                         activeUnderlineColor='#25D366'
-                        style={{ backgroundColor: colors.card, fontFamily: Fonts.regular }}
+                        style={{ backgroundColor: colors.card }}
                     />
                     <TextInput
                         label="Last name (optional)"
@@ -163,7 +163,7 @@ const CompleteProfilePage = () => {
                         cursorColor='#25D366'
                         underlineColor={colors.indicator}
                         activeUnderlineColor='#25D366'
-                        style={{ backgroundColor: colors.card, fontFamily: Fonts.regular }}
+                        style={{ backgroundColor: colors.card }}
                     />
                 </ThemedView>
                 <ThemedView style={styles.bottomContainer}>

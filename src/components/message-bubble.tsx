@@ -1,4 +1,4 @@
-import { Colors, Fonts } from "@/constants/theme";
+import { Colors } from "@/constants/theme";
 import { useIsTablet } from "@/context/screen-checking-context";
 import { findContactByPhone, findContactByUserId, getContactDisplayName } from "@/lib/contact-display";
 import { phoneValuesMatch } from "@/lib/contact-utils";
@@ -1732,7 +1732,6 @@ const styles = StyleSheet.create({
         minWidth: 0,
         fontSize: 12,
         lineHeight: 15,
-        fontFamily: Fonts.bold
     },
     groupSenderPhone: {
         flexShrink: 1,

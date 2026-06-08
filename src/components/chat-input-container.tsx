@@ -1,4 +1,4 @@
-import { Colors, Fonts } from '@/constants/theme'
+import { Colors } from '@/constants/theme'
 import { useChatTyping } from '@/hooks/use-chat-typing'
 import { useSendChatMessage } from '@/hooks/use-send-chat-message'
 import { authClient } from '@/lib/auth-client'
@@ -466,7 +466,7 @@ const ChatInputContainer = ({ chatId, isReply, handleClearReply, replyMessage, r
                 </ThemedView>
             ) : (
                 <ThemedView style={[styles.main, { paddingBottom: insets.bottom + 10 }]}>
-                    <ThemedView style={[styles.mainInputContainer, { backgroundColor: scheme === 'dark' ? colors.card : colors.background, borderRadius: isReply ? 18 : 24 }]}>
+                    <ThemedView style={[styles.mainInputContainer, { backgroundColor: scheme === 'dark' ? "#1F272A" : colors.background, borderRadius: isReply ? 18 : 24 }]}>
                         {isReply && (
                             <ThemedView style={[styles.replyMainContainer, { backgroundColor: colors.indicator, }]}>
                                 <ThemedView style={[styles.replyContextContainer, { borderLeftColor: '#25D366' }]}>
@@ -493,7 +493,7 @@ const ChatInputContainer = ({ chatId, isReply, handleClearReply, replyMessage, r
                                 )}
                             </ThemedView>
                         )}
-                        <ThemedView style={[styles.inputContainer, { backgroundColor: scheme === 'dark' ? colors.card : colors.background }]}>
+                        <ThemedView style={[styles.inputContainer, { backgroundColor: scheme === 'dark' ? "#1F272A" : colors.background }]}>
                             <TextInput
                                 ref={inputRef}
                                 value={draftValue}
@@ -637,9 +637,7 @@ const styles = StyleSheet.create({
     input: {
         flex: 1,
         maxHeight: 120,
-        fontFamily: Fonts.regular,
-        marginBottom: -4,
-        marginTop: -4
+        marginBottom: 5
     },
     replyMainContainer: {
         overflow: 'hidden',

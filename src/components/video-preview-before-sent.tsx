@@ -1,4 +1,4 @@
-import { Colors, Fonts } from '@/constants/theme';
+import { Colors } from '@/constants/theme';
 import { useSendChatMessage } from '@/hooks/use-send-chat-message';
 import { createUploadFileFromLocalUri } from '@/lib/local-upload-file';
 import { useVideoPreviewBeforeSentStore } from '@/store/video-preview-before-sent';
@@ -330,7 +330,6 @@ const styles = StyleSheet.create({
         paddingVertical: 6,
         flex: 1,
         borderRadius: 99,
-        fontFamily: Fonts.regular,
         marginBottom: -4,
         marginTop: -4
     },

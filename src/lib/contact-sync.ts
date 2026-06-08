@@ -93,12 +93,6 @@ export async function syncMobileContacts({
     const phoneNumbers = extractPhoneNumbers(deviceContacts);
     reportSyncProgress(onProgress, "Syncing your contacts", 20);
 
-    if (deviceContacts.length === 0 && phoneNumbers.length === 0) {
-        const contacts = await hydrateLocalContacts({ currentUserId, onContactsLoaded });
-        reportSyncProgress(onProgress, "Loading your contacts", 100);
-        return contacts;
-    }
-
     try {
         const payload = await requestJsonWithProgress<MobileContactsResponse>(`${API_BASE_URL}/api/mobile/contacts`, {
             method: "POST",

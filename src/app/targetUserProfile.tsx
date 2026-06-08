@@ -4,7 +4,7 @@ import { SmallVideoMessagePreview } from '@/components/small-decrypted-video-pre
 import { ThemedText } from '@/components/themed-text'
 import { ThemedView } from '@/components/themed-view'
 import { ChatOutlineIcon } from '@/components/ui/chat-icon'
-import { Colors, Fonts } from '@/constants/theme'
+import { Colors } from '@/constants/theme'
 import { useCryptoKeys } from '@/context/crypto'
 import { useIsTablet } from '@/context/screen-checking-context'
 import { formatPhoneNumber } from '@/helper/phone-formatter'
@@ -1923,7 +1923,7 @@ const TargetUserProfile = () => {
                     </ThemedView>
                     <List.Item
                         title="Media Videos, Photos and Docs"
-                        titleStyle={{ color: colors.textSecondary, fontFamily: Fonts.regular, lineHeight: 20 }}
+                        titleStyle={{ color: colors.textSecondary }}
                         right={() =>
                             isProfileMediaLoading ? (
                                 <ActivityIndicator color={colors.textSecondary} size="small" />
@@ -1968,11 +1968,9 @@ const TargetUserProfile = () => {
                                 title="Invite new contact"
                                 titleStyle={{
                                     color: isCurrentUserAdmin ? colors.text : colors.textSecondary,
-                                    fontFamily: Fonts.regular,
-                                    lineHeight: 20
                                 }}
                                 description={isCurrentUserAdmin ? "Add contact to this group" : "Only admins can invite members"}
-                                descriptionStyle={{ color: colors.textSecondary, fontFamily: Fonts.regular, lineHeight: 20 }}
+                                descriptionStyle={{ color: colors.textSecondary }}
                                 left={props => (
                                     <List.Icon
                                         {...props}
@@ -1992,9 +1990,9 @@ const TargetUserProfile = () => {
                                 <List.Item
                                     key={member.user_id}
                                     title={displayName}
-                                    titleStyle={{ color: colors.text, fontFamily: Fonts.regular, lineHeight: 20 }}
+                                    titleStyle={{ color: colors.text }}
                                     description={description}
-                                    descriptionStyle={{ color: colors.textSecondary, fontFamily: Fonts.regular, lineHeight: 20 }}
+                                    descriptionStyle={{ color: colors.textSecondary }}
                                     left={() => (
                                         <ChatAvatar
                                             userId={member.user_id}
@@ -2082,9 +2080,8 @@ const TargetUserProfile = () => {
                     )}
                     <List.Item
                         title="Mute notifications"
-                        titleStyle={{ fontFamily: Fonts.regular, lineHeight: 20 }}
                         description="Turn off notifications for this conversation"
-                        descriptionStyle={{ color: colors.textSecondary, fontFamily: Fonts.regular, lineHeight: 20 }}
+                        descriptionStyle={{ color: colors.textSecondary }}
                         right={props => (
                             <Switch
                                 onValueChange={handleToggleNotifications}
@@ -2099,7 +2096,6 @@ const TargetUserProfile = () => {
                         <>
                             <List.Item
                                 title={`${activeChat.is_blocked_chat ? 'Unblock' : 'Block'} ${chatTitle}`}
-                                titleStyle={{ color: 'red', fontFamily: Fonts.regular, lineHeight: 20 }}
                                 disabled={pendingAction !== null}
                                 onPress={handleToggleBlockUser}
                                 left={props => (
@@ -2117,7 +2113,7 @@ const TargetUserProfile = () => {
                             />
                             <List.Item
                                 title="Delete chat"
-                                titleStyle={{ color: 'red', fontFamily: Fonts.regular, lineHeight: 20 }}
+                                titleStyle={{ color: 'red' }}
                                 disabled={pendingAction !== null}
                                 onPress={() => setActiveDialog('delete-chat')}
                                 left={props => (
@@ -2130,7 +2126,7 @@ const TargetUserProfile = () => {
                     {activeChat?.chat_type === 'group' && (
                         <List.Item
                             title="Exit group"
-                            titleStyle={{ color: 'red', fontFamily: Fonts.regular, lineHeight: 20 }}
+                            titleStyle={{ color: 'red' }}
                             disabled={pendingAction !== null}
                             onPress={() => setActiveDialog('exit-group')}
                             left={props => (
@@ -2325,7 +2321,6 @@ const styles = StyleSheet.create({
     adminBadgeText: {
         fontSize: 12,
         lineHeight: 14,
-        fontFamily: Fonts.regular,
     },
     logoutDialogHost: {
         position: 'absolute',
