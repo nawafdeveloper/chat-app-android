@@ -1868,7 +1868,7 @@ const ChatId = () => {
                             styles.forwardHeader,
                             {
                                 backgroundColor: colors.background,
-                                borderBottomColor: colors.indicator + '33',
+                                borderBottomColor: colors.indicator + '60',
                             },
                         ]}
                     >

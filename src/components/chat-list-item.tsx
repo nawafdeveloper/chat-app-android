@@ -1,6 +1,7 @@
 import { ChatAvatar } from '@/components/decrypted-chat-avatar'
 import { ThemedText } from '@/components/themed-text'
 import { Colors } from '@/constants/theme'
+import { formatPhoneNumber } from '@/helper/phone-formatter'
 import type { ChatItemType } from '@/types/chats.type'
 import { MaterialIcons } from '@expo/vector-icons'
 import React, { useEffect, useMemo } from 'react'
@@ -120,7 +121,7 @@ const ChatListItem = ({
             : 'delivered'
         : 'received' as MessageStatus
 
-    const displayName = item.display_name ?? item.contact_phone ?? 'Unknown'
+    const displayName = item.display_name ?? formatPhoneNumber(item.contact_phone) ?? 'Unknown'
     const chatTime = useMemo(
         () => new Date(item.updated_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
         [item.updated_at]

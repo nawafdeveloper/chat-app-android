@@ -648,31 +648,9 @@ const ChatsPage = () => {
                             onPress={handlePinSelectedChats}
                         />
                     </>
-                ) : isSearchFocus ? (
-                    <Searchbar
-                        placeholder="Search"
-                        onChangeText={(text) => {
-                            debugChatsPage('search-change', { textLength: text.length });
-                            setSearchQuery(text);
-                        }}
-                        value={searchQuery}
-                        onIconPress={() => {
-                            debugChatsPage('search-close', { searchQueryLength: searchQuery.length })
-                            setIsSearchFocus(false)
-                            setSearchQuery('')
-                        }}
-                        icon="arrow-left"
-                        autoFocus
-                        style={{ backgroundColor: colors.card, flex: 1 }}
-                        cursorColor={APP_GREEN}
-                    />
                 ) : (
                     <>
                         <Appbar.Content title="YaHla" titleStyle={styles.appbarTitle} />
-                        <Appbar.Action icon="magnify" onPress={() => {
-                            debugChatsPage('search-open', { chatsCount: chats.length })
-                            setIsSearchFocus(true)
-                        }} />
                         <Menu
                             visible={visible}
                             onDismiss={closeMenu}
@@ -687,9 +665,19 @@ const ChatsPage = () => {
                     </>
                 )}
             </Appbar.Header>
-            {realtimeStatus === 'connecting' && (
-                <ActivityIndicator size={'small'} color={APP_GREEN} />
-            )}
+            <ThemedView style={{ paddingHorizontal: 16 }}>
+                <Searchbar
+                    placeholder="Search"
+                    onChangeText={(text) => {
+                        debugChatsPage('search-change', { textLength: text.length });
+                        setSearchQuery(text);
+                    }}
+                    value={searchQuery}
+                    icon="magnify"
+                    style={{ backgroundColor: colors.card }}
+                    cursorColor={APP_GREEN}
+                />
+            </ThemedView>
             <FlashList
                 data={recentChats}
                 keyExtractor={(item) => item.chat_id}
@@ -714,14 +702,17 @@ const ChatsPage = () => {
                     </View>
                 ) : null}
                 ListFooterComponent={
-                    <ThemedView style={{ backgroundColor: 'transparent', paddingHorizontal: 16, paddingVertical: 8 }}>
+                    <ThemedView style={{ backgroundColor: 'transparent', paddingHorizontal: 16, paddingVertical: 8, gap: 16, borderBottomWidth: 1, borderBottomColor: colors.indicator + '44' }}>
+                        {realtimeStatus === 'connecting' && (
+                            <ActivityIndicator size={'small'} color={APP_GREEN} />
+                        )}
                         <ThemedView style={{ flexDirection: 'row', alignItems: 'center', width: 'auto', marginHorizontal: 'auto', gap: 8, paddingHorizontal: 10, paddingVertical: 6, borderRadius: 10, backgroundColor: 'transparent' }}>
                             <Icon
                                 source="lock-check-outline"
                                 color={colors.textSecondary}
-                                size={20}
+                                size={13}
                             />
-                            <ThemedText style={{ fontSize: 14, fontWeight: '400', color: colors.textSecondary }}>
+                            <ThemedText style={{ fontSize: 12, fontWeight: '400', color: colors.textSecondary }}>
                                 All of your messages are end-to-end encrypted.
                             </ThemedText>
                         </ThemedView>

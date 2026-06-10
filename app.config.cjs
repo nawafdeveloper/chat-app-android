@@ -54,8 +54,13 @@ module.exports = {
       [
         "expo-navigation-bar",
         {
-          enforceContrast: true,
+          enforceContrast: false,
           hidden: false,
+        }
+      ],
+      [
+        "react-native-edge-to-edge", {
+          enforceNavigationBarContrast: false
         }
       ],
       "@react-native-firebase/app",

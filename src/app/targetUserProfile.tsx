@@ -39,6 +39,7 @@ import React, { useCallback, useEffect, useMemo, useState } from 'react'
 import { Alert, FlatList, Modal, Pressable, StyleSheet, useColorScheme, View } from 'react-native'
 import { ScrollView } from 'react-native-gesture-handler'
 import { ActivityIndicator, Appbar, Checkbox, HelperText, Icon, IconButton, List, Menu, Searchbar, Switch, TextInput, TouchableRipple } from 'react-native-paper'
+import { useSafeAreaInsets } from 'react-native-safe-area-context'
 
 function isVisualMediaMessage(message: Message) {
     return (
@@ -491,6 +492,7 @@ function InviteContactRow({
 const TargetUserProfile = () => {
     const { data: session } = authClient.useSession()
     const scheme = useColorScheme()
+    const insets = useSafeAreaInsets();
     const resolvedScheme = scheme === 'unspecified' ? 'light' : scheme ?? 'light'
     const colors = Colors[resolvedScheme]
     const isTablet = useIsTablet()
@@ -600,7 +602,7 @@ const TargetUserProfile = () => {
         activeChat?.display_name ??
         (profileContact ? getContactDisplayName(profileContact) : null) ??
         routeDisplayName ??
-        profilePhone ??
+        formatPhoneNumber(profilePhone) ??
         'Chat';
     const avatarTint = colors.text;
     const isGroupChat = profileChatType === "group";
@@ -630,19 +632,23 @@ const TargetUserProfile = () => {
     const groupMemberRows = useMemo(
         () =>
             groupMembers.map((member) => {
+                const isCurrentUser = member.user_id === currentUserId;
+
                 const savedContact =
                     findContactByUserId(contacts, member.user_id) ??
                     findContactByPhone(contacts, member.phone_number);
-                const displayName = savedContact
-                    ? getContactDisplayName(savedContact)
-                    : member.name?.trim() ||
-                    formatPhoneNumber(member.phone_number) ||
-                    "Unknown member";
-                const description = savedContact
-                    ? formatPhoneNumber(member.phone_number ?? savedContact.contact_number)
-                    : member.user_id === currentUserId
-                        ? "You"
-                        : null;
+
+                const displayName = isCurrentUser
+                    ? "You"
+                    : savedContact
+                        ? getContactDisplayName(savedContact)
+                        : member.name?.trim() ||
+                        formatPhoneNumber(member.phone_number) ||
+                        "Unknown member";
+
+                const description = formatPhoneNumber(
+                    member.phone_number ?? savedContact?.contact_number
+                ) ?? null;
 
                 return {
                     member,
@@ -1739,6 +1745,7 @@ const TargetUserProfile = () => {
                 animationType="slide"
                 visible={isInviteModalVisible}
                 onRequestClose={handleCloseInviteModal}
+                presentationStyle="formSheet"
             >
                 <ThemedView style={[styles.inviteModal, { backgroundColor: colors.background }]}>
                     <Appbar.Header
@@ -1766,7 +1773,8 @@ const TargetUserProfile = () => {
                             />
                         ) : (
                             <>
-                                <Appbar.BackAction
+                                <Appbar.Action
+                                    icon="close"
                                     disabled={isInviteSubmitting}
                                     onPress={handleCloseInviteModal}
                                 />
@@ -1811,7 +1819,7 @@ const TargetUserProfile = () => {
                             disabled={isInviteSubmitting}
                             style={({ pressed }) => [
                                 styles.inviteFab,
-                                { opacity: pressed || isInviteSubmitting ? 0.82 : 1 },
+                                { opacity: pressed || isInviteSubmitting ? 0.82 : 1, bottom: insets.bottom },
                             ]}
                             onPress={handleInviteSelectedContacts}
                         >
@@ -1904,7 +1912,7 @@ const TargetUserProfile = () => {
                                 {canMessageProfileContact ? (
                                     <Pressable onPress={handleMessageProfileContact} style={styles.buttonContainer} disabled={pendingAction !== null}>
                                         <ThemedView style={[styles.iconContainer, { backgroundColor: colors.card }]}>
-                                            <ChatOutlineIcon color={colors.text} size={26}/>
+                                            <ChatOutlineIcon color={colors.text} size={26} />
                                         </ThemedView>
                                         <ThemedText style={styles.buttonTitle}>
                                             Message
@@ -1998,7 +2006,7 @@ const TargetUserProfile = () => {
                                             userId={member.user_id}
                                             imageUrl={avatar}
                                             displayName={displayName}
-                                            contactPhone={member.phone_number}
+                                            contactPhone={formatPhoneNumber(member.phone_number)}
                                             style={styles.memberAvatar}
                                             iconColor={avatarTint}
                                             backgroundColor={colors.card}
@@ -2096,6 +2104,7 @@ const TargetUserProfile = () => {
                         <>
                             <List.Item
                                 title={`${activeChat.is_blocked_chat ? 'Unblock' : 'Block'} ${chatTitle}`}
+                                titleStyle={{ color: 'red' }}
                                 disabled={pendingAction !== null}
                                 onPress={handleToggleBlockUser}
                                 left={props => (
@@ -2269,7 +2278,6 @@ const styles = StyleSheet.create({
     inviteFab: {
         position: "absolute",
         right: 16,
-        bottom: 16,
         minWidth: 88,
         height: 52,
         borderRadius: 26,

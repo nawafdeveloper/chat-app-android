@@ -253,7 +253,7 @@ function ReplyPhotoThumbnail({ url, isDark }: { url?: string | null; isDark: boo
 
     if (!resolvedUri) {
         return (
-            <View style={{ width: 45, height: 45, backgroundColor: isDark ? '#182229' : '#edf2f7', justifyContent: 'center', alignItems: 'center' }}>
+            <View style={{ width: 45, height: 45, backgroundColor: isDark ? '#182229' : '#edf2f7', justifyContent: 'center', alignItems: 'center', borderTopRightRadius: 7, borderBottomRightRadius: 7 }}>
                 <ActivityIndicator size="small" color="#25D366" />
             </View>
         );
@@ -263,7 +263,7 @@ function ReplyPhotoThumbnail({ url, isDark }: { url?: string | null; isDark: boo
         <Image
             source={{ uri: resolvedUri }}
             contentFit="cover"
-            style={{ width: 55, height: 55 }}
+            style={{ overflow: 'hidden', width: 45, height: 45, borderTopRightRadius: 7, borderBottomRightRadius: 7 }}
         />
     );
 }
@@ -1346,7 +1346,7 @@ function Bubble({ message, currentUserId, currentPhone, isDark, showTail = true,
                                         <>
                                             <ThemedView style={[styles.replyContainer, { borderLeftColor: '#25D366', backgroundColor: 'transparent' }]}>
                                                 <ThemedText style={{ fontSize: 12, lineHeight: 16 }}>{replySenderDisplayName}</ThemedText>
-                                                <ThemedText numberOfLines={2} ellipsizeMode='tail' style={{ fontSize: 12, color: colors.textSecondary, minWidth: 0, lineHeight: 16 }}>
+                                                <ThemedText numberOfLines={1} ellipsizeMode='tail' style={{ fontSize: 12, color: colors.textSecondary, minWidth: 0, lineHeight: 16 }}>
                                                     {reply_message.original_message_text ? reply_message.original_message_text : (reply_message.original_attached_media === 'contact' ? '👤 Contact' : reply_message.original_attached_media === 'file' ? '📂 File' : reply_message.original_attached_media === 'photo' ? '🖼️ Photo' : reply_message.original_attached_media === 'video' ? '📽️ Video' : '🎤 Voice')}
                                                 </ThemedText>
                                             </ThemedView>

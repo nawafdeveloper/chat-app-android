@@ -17,9 +17,9 @@ import { IconSource } from 'react-native-paper/lib/typescript/components/Icon';
 import Animated, {
     useAnimatedStyle,
     useSharedValue,
-    type SharedValue,
     withDelay,
-    withTiming
+    withTiming,
+    type SharedValue
 } from 'react-native-reanimated';
 import { ThemedText } from './themed-text';
 
@@ -49,12 +49,14 @@ const AttachmentButton = ({
     item,
     scale,
     background,
-    border
+    border,
+    secondary
 }: {
     item: ItemButton;
     scale: any;
     background: string;
     border: string;
+    secondary: string;
 }) => {
     const buttonStyle = useAnimatedStyle(() => ({
         transform: [
@@ -72,7 +74,7 @@ const AttachmentButton = ({
                         size={18}
                     />
                 </View>
-                <ThemedText style={styles.labelButton}>{item.label}</ThemedText>
+                <ThemedText style={[styles.labelButton, { color: secondary }]}>{item.label}</ThemedText>
             </BottomSheetTouchableOpacity>
         </Animated.View>
     );
@@ -340,6 +342,7 @@ const AttachmentContainer = ({ visible, openRequestKey, onRequestClose, onSheetS
                                 scale={buttonScales[idx]}
                                 background={colors.background}
                                 border={colors.indicator}
+                                secondary={colors.textSecondary + '70'}
                             />
                         ))}
                     </View>
@@ -352,6 +355,7 @@ const AttachmentContainer = ({ visible, openRequestKey, onRequestClose, onSheetS
                                     scale={buttonScales[idx + 3]}
                                     background={colors.background}
                                     border={colors.indicator}
+                                    secondary={colors.textSecondary + '70'}
                                 />
                             ))}
                         </View>
